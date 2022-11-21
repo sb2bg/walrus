@@ -1,6 +1,6 @@
 use std::ops::Range;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum Node {
     Statement(Vec<Box<Node>>),
     Int(i64, Range<usize>),
@@ -20,7 +20,7 @@ pub enum Node {
     Block(Vec<Box<Node>>, Range<usize>),
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum Op {
     Mul,
     Div,
