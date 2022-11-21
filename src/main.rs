@@ -1,12 +1,12 @@
 mod ast;
 mod error;
 
-use crate::error::GlassError;
+use crate::error::{err_mapper, GlassError};
 use clap::Parser as ClapParser;
-use lalrpop_util::lexer::Token;
-use lalrpop_util::{lalrpop_mod, ParseError};
+use lalrpop_util::lalrpop_mod;
 use log::{debug, LevelFilter};
 use simplelog::SimpleLogger;
+use std::borrow::Borrow;
 use std::path::PathBuf;
 use std::{fs, panic};
 
@@ -53,62 +53,22 @@ fn try_main() -> Result<(), GlassError> {
 }
 
 fn run_script(file: PathBuf) -> Result<(), GlassError> {
-    let filename = file.to_string_lossy().to_string();
+    let filename = file.to_string_lossy();
+    let filename = filename.as_ref();
 
-    let src = match fs::read_to_string(&file) {
-        Ok(src) => src,
-        Err(_) => {
-            return Err(GlassError::FileNotFound { filename });
-        }
-    };
+    let src = fs::read_to_string(&file).map_err(|err| GlassError::FileNotFound {
+        filename: filename.into(),
+    })?;
 
     debug!("Read {} bytes from '{}'", &src.len(), &file.display());
 
     let ast = *grammar::ProgramParser::new()
         .parse(&src)
-        .map_err(|err| err_mapper(err, filename))?;
+        .map_err(|err| err_mapper(err, filename, &src))?;
 
     debug!("AST > {:?}", ast);
 
     Ok(())
-}
-
-fn err_mapper(err: ParseError<usize, Token<'_>, GlassError>, filename: String) -> GlassError {
-    match err {
-        ParseError::UnrecognizedEOF {
-            expected: _,
-            location: _,
-        } => GlassError::UnexpectedEndOfInput { filename },
-        ParseError::UnrecognizedToken {
-            token: (start, token, end),
-            expected: _,
-        } => GlassError::UnexpectedToken {
-            filename,
-            token: token.to_string(),
-            span: start..end,
-        },
-        ParseError::InvalidToken { location } => GlassError::InvalidToken {
-            filename,
-            index: location,
-        },
-        ParseError::ExtraToken {
-            token: (start, token, end),
-        } => GlassError::ExtraToken {
-            filename,
-            token: token.to_string(),
-            span: start..end,
-        },
-        ParseError::User { error } => match error {
-            GlassError::LalrpopNumberTooLarge { number, span } => GlassError::NumberTooLarge {
-                number,
-                span,
-                filename,
-            },
-            _ => GlassError::UnknownError {
-                message: error.to_string(),
-            },
-        },
-    }
 }
 
 fn setup_logger(debug: bool) -> Result<(), GlassError> {
@@ -124,4 +84,9 @@ fn setup_logger(debug: bool) -> Result<(), GlassError> {
             message: err.to_string(),
         }),
     }
+}
+
+#[cfg(test)]
+mod tests {
+    // TODO: Add tests
 }
