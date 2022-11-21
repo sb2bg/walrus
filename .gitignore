@@ -1,2 +1,4 @@
 /target/
 /.idea/
+/grammar.rs
+/test.walrus
