@@ -1,0 +1,84 @@
+use crate::ast::{Node, Op};
+use crate::GlassError;
+use std::ops::Range;
+use lalrpop_util::ParseError;
+
+grammar;
+
+extern {
+    type Error = GlassError;
+}
+
+pub Program = Statement;
+
+Statement: Box<Node> = {
+    StatementHelper => Box::new(Node::Statement(<>)),
+};
+
+StatementHelper = Delim<Expr, ";">;
+
+BinOp<Op,Next>: Box<Node> = {
+    BinOp<Op,Next> Op Next => Box::new(Node::BinOp(<>)),
+    Next
+};
+
+Expr: Box<Node> = BinOp<ExprOp, Factor>;
+
+Factor: Box<Node> = BinOp<FactorOp, Term>;
+
+ExprOp: Op = {
+    "+" => Op::Add,
+    "-" => Op::Sub,
+};
+
+FactorOp: Op = {
+    "*" => Op::Mul,
+    "/" => Op::Div,
+};
+
+Term: Box<Node> = {
+    Spanned<Int> => Box::new(Node::Int(<>.0, <>.1)),
+    Spanned<String> => Box::new(Node::String(<>.0, <>.1)),
+    Spanned<Float> => Box::new(Node::Float(<>.0, <>.1)),
+    Spanned<List> => Box::new(Node::List(<>.0, <>.1)),
+    Spanned<Ident> => Box::new(Node::Ident(<>.0, <>.1)),
+    Spanned<Brace<StatementHelper>> => Box::new(Node::Block(<>.0, <>.1)),
+    "(" <Expr> ")"
+};
+
+Int: i64 = {
+    <l: @L> <n: r"\d+"> <r: @R> =>? n.parse().map_err(|_| ParseError::User { error: GlassError::LalrpopNumberTooLarge { number: n.to_string(), span: l..r } }),
+    <l: @L> <n: r"0x[0-9A-Fa-f]+"> <r: @R> =>? i64::from_str_radix(&n.trim_start_matches("0x"), 16).map_err(|_| ParseError::User { error: GlassError::LalrpopNumberTooLarge { number: n.to_string(), span: l..r } }),
+    <l: @L> <n: r"0o[0-7]+"> <r: @R> =>? i64::from_str_radix(&n.trim_start_matches("0o"), 8).map_err(|_| ParseError::User { error: GlassError::LalrpopNumberTooLarge { number: n.to_string(), span: l..r } }),
+    <l: @L> <n: r"0b[01]+"> <r: @R> =>? i64::from_str_radix(&n.trim_start_matches("0b"), 2).map_err(|_| ParseError::User { error: GlassError::LalrpopNumberTooLarge { number: n.to_string(), span: l..r } }),
+};
+
+Float: f64 = {
+    <l: @L> <n: r"\d+\.\d+"> <r: @R> =>? n.parse().map_err(|_| ParseError::User { error: GlassError::LalrpopNumberTooLarge { number: n.to_string(), span: l..r } }),
+};
+
+String: String = {
+    r#""[^"]*""# => <>[1..<>.len() - 1].to_string(),
+};
+
+Ident: String = {
+   r"[a-zA-Z_][a-zA-Z0-9_]*" => <>.to_string(),
+};
+
+List = Bracket<Comma<Expr>>;
+
+Brace<T> = "{" <T> "}";
+Bracket<T> = "[" <T> "]";
+Paren<T> = "(" <T> ")";
+Comma<T> = Delim<T, ",">;
+Spanned<T>: (T, Range<usize>) = <l: @L> <t: T> <r: @R> => (t, l..r);
+
+Delim<T, D>: Vec<T> = {
+    <mut h: (<T> D)*> <t: T?> => match t {
+        Some(t) => {
+            h.push(t);
+            h
+        }
+        None => h
+    }
+};
