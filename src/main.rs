@@ -1,12 +1,16 @@
 mod ast;
 mod error;
+mod interpreter;
+mod scope;
+mod span;
 
 use crate::error::{err_mapper, GlassError};
+use crate::interpreter::Interpreter;
 use clap::Parser as ClapParser;
+use get_size::GetSize;
 use lalrpop_util::lalrpop_mod;
 use log::{debug, LevelFilter};
 use simplelog::SimpleLogger;
-use std::borrow::Borrow;
 use std::path::PathBuf;
 use std::{fs, panic};
 
@@ -56,17 +60,23 @@ fn run_script(file: PathBuf) -> Result<(), GlassError> {
     let filename = file.to_string_lossy();
     let filename = filename.as_ref();
 
-    let src = fs::read_to_string(&file).map_err(|err| GlassError::FileNotFound {
+    let src = fs::read_to_string(&file).map_err(|_| GlassError::FileNotFound {
         filename: filename.into(),
     })?;
 
     debug!("Read {} bytes from '{}'", &src.len(), &file.display());
 
-    let ast = *grammar::ProgramParser::new()
+    let ast = grammar::ProgramParser::new()
         .parse(&src)
         .map_err(|err| err_mapper(err, filename, &src))?;
 
+    debug!("AST size > {:.2} KB", ast.get_heap_size() as f64 / 1024.0);
     debug!("AST > {:?}", ast);
+
+    let interpreter = Interpreter::new();
+    let result = interpreter.interpret(*ast)?;
+
+    debug!("Interpreted > {:?}", result);
 
     Ok(())
 }
