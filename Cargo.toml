@@ -16,3 +16,5 @@ git-version = "0.3.5"
 lalrpop-util = { version= "0.19.8", features = ["lexer"] }
 regex = "1"
 line-span = "0.1.3"
+get-size = { version = "0.1.1", features = ["derive"] }
+snailquote = "0.3.1"
