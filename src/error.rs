@@ -1,10 +1,40 @@
+use crate::span::{Span, Spanned};
 use git_version::git_version;
 use lalrpop_util::lexer::Token;
 use lalrpop_util::ParseError;
 use line_span::{find_line_end, find_line_start};
 use std::cmp::min;
 use std::ops::Range;
+use std::str::FromStr;
 use thiserror::Error;
+
+pub enum RecoveredParseError {
+    NumberTooLarge(String, Span),
+}
+
+pub fn parse_int<T>(
+    Spanned { value, span }: Spanned<&str>,
+    base: u32,
+) -> Result<Spanned<i64>, ParseError<usize, T, RecoveredParseError>> {
+    let num =
+        i64::from_str_radix(if base == 10 { value } else { &value[2..] }, base).map_err(|_| {
+            ParseError::User {
+                error: RecoveredParseError::NumberTooLarge(value.to_string(), span),
+            }
+        })?;
+
+    Ok(Spanned { value: num, span })
+}
+
+pub fn parse_float<T>(
+    Spanned { value, span }: Spanned<&str>,
+) -> Result<Spanned<f64>, ParseError<usize, T, RecoveredParseError>> {
+    let num = f64::from_str(value).map_err(|_| ParseError::User {
+        error: RecoveredParseError::NumberTooLarge(value.to_string(), span),
+    })?;
+
+    Ok(Spanned { value: num, span })
+}
 
 #[derive(Error, Debug)]
 pub enum GlassError {
@@ -26,15 +56,12 @@ pub enum GlassError {
     #[error("Extra token '{token}' at {line}'")]
     ExtraToken { token: String, line: String },
 
-    #[error("")]
-    LalrpopNumberTooLarge { span: Range<usize>, number: String },
-
     #[error("Number '{number}' is too large at {line}")]
     NumberTooLarge { number: String, line: String },
 }
 
 pub fn err_mapper(
-    err: ParseError<usize, Token<'_>, GlassError>,
+    err: ParseError<usize, Token<'_>, RecoveredParseError>,
     filename: &str,
     source: &str,
 ) -> GlassError {
@@ -63,12 +90,9 @@ pub fn err_mapper(
             line: get_line(source, filename, start..end),
         },
         ParseError::User { error } => match error {
-            GlassError::LalrpopNumberTooLarge { number, span } => GlassError::NumberTooLarge {
+            RecoveredParseError::NumberTooLarge(number, span) => GlassError::NumberTooLarge {
                 number,
-                line: get_line(source, filename, span),
-            },
-            _ => GlassError::UnknownError {
-                message: error.to_string(),
+                line: get_line(source, filename, span.into()),
             },
         },
     }
@@ -77,12 +101,15 @@ pub fn err_mapper(
 fn get_line<'a>(src: &'a str, filename: &'a str, span: Range<usize>) -> String {
     let start = find_line_start(src, span.start);
     let end = find_line_end(src, span.start);
-    let line = &src[start..end].trim();
+    let line = &src[start..end];
+    let mut trimmed = line.trim_start();
+    let diff = line.len() - trimmed.len();
+    trimmed = trimmed.trim_end();
     let line_num = src[..span.start].lines().count();
-    let affected_range = span.start - start..span.end - start;
+    let affected_range = span.start - start - diff..span.end - start - diff;
 
     format!(
-        "\n\n\t{line}\n\t{}{}\n[{filename}(Ln:{line_num}, Col:{affected_range:?})]",
+        "\n\n\t{trimmed}\n\t{}{}\n[{filename}(Ln:{line_num}, Col:{affected_range:?})]",
         &" ".repeat(affected_range.start),
         &"^".repeat(min(affected_range.len(), line.len() - affected_range.start)),
     )

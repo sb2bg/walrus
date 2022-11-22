@@ -1,12 +1,11 @@
 use crate::ast::{Node, Op};
-use crate::GlassError;
-use std::ops::Range;
-use lalrpop_util::ParseError;
+use crate::span::{Span, Spanned};
+use crate::error::{RecoveredParseError, parse_int, parse_float};
 
 grammar;
 
 extern {
-    type Error = GlassError;
+    type Error = RecoveredParseError;
 }
 
 pub Program = Statement;
@@ -15,10 +14,10 @@ Statement: Box<Node> = {
     StatementHelper => Box::new(Node::Statement(<>)),
 };
 
-StatementHelper = Delim<Expr, ";">;
+StatementHelper = DelimTrailing<Expr, ";">;
 
-BinOp<Op,Next>: Box<Node> = {
-    BinOp<Op,Next> Op Next => Box::new(Node::BinOp(<>)),
+BinOp<Op, Next>: Box<Node> = {
+    <l: @L> <left: BinOp<Op, Next>> <o: Op> <right: Next> <r: @R> => Box::new(Node::BinOp(left, o, right, Span(l, r))),
     Next
 };
 
@@ -37,28 +36,33 @@ FactorOp: Op = {
 };
 
 Term: Box<Node> = {
-    Spanned<Int> => Box::new(Node::Int(<>.0, <>.1)),
-    Spanned<String> => Box::new(Node::String(<>.0, <>.1)),
-    Spanned<Float> => Box::new(Node::Float(<>.0, <>.1)),
-    Spanned<List> => Box::new(Node::List(<>.0, <>.1)),
-    Spanned<Ident> => Box::new(Node::Ident(<>.0, <>.1)),
-    Spanned<Brace<StatementHelper>> => Box::new(Node::Block(<>.0, <>.1)),
+    Int => Box::new(Node::Int(<>.value, <>.span)),
+    Float => Box::new(Node::Float(<>.value, <>.span)),
+    Sp<String> => Box::new(Node::String(<>.value, <>.span)),
+    Sp<List> => Box::new(Node::List(<>.value, <>.span)),
+    Sp<Ident> => Box::new(Node::Ident(<>.value, <>.span)),
+    Sp<Brace<StatementHelper>> => Box::new(Node::Block(<>.value, <>.span)),
     "(" <Expr> ")"
 };
 
-Int: i64 = {
-    <l: @L> <n: r"\d+"> <r: @R> =>? n.parse().map_err(|_| ParseError::User { error: GlassError::LalrpopNumberTooLarge { number: n.to_string(), span: l..r } }),
-    <l: @L> <n: r"0x[0-9A-Fa-f]+"> <r: @R> =>? i64::from_str_radix(&n.trim_start_matches("0x"), 16).map_err(|_| ParseError::User { error: GlassError::LalrpopNumberTooLarge { number: n.to_string(), span: l..r } }),
-    <l: @L> <n: r"0o[0-7]+"> <r: @R> =>? i64::from_str_radix(&n.trim_start_matches("0o"), 8).map_err(|_| ParseError::User { error: GlassError::LalrpopNumberTooLarge { number: n.to_string(), span: l..r } }),
-    <l: @L> <n: r"0b[01]+"> <r: @R> =>? i64::from_str_radix(&n.trim_start_matches("0b"), 2).map_err(|_| ParseError::User { error: GlassError::LalrpopNumberTooLarge { number: n.to_string(), span: l..r } }),
+Int: Spanned<i64> = {
+    Sp<r"\d+"> =>? parse_int(<>, 10),
+    Sp<r"0x[0-9A-Fa-f]+"> =>? parse_int(<>, 16),
+    Sp<r"0o[0-7]+"> =>? parse_int(<>, 8),
+    Sp<r"0b[01]+"> =>? parse_int(<>, 2),
 };
 
-Float: f64 = {
-    <l: @L> <n: r"\d+\.\d+"> <r: @R> =>? n.parse().map_err(|_| ParseError::User { error: GlassError::LalrpopNumberTooLarge { number: n.to_string(), span: l..r } }),
+Float: Spanned<f64> = {
+    Sp<r"\d+\.\d+"> =>? parse_float(<>),
 };
 
 String: String = {
     r#""[^"]*""# => <>[1..<>.len() - 1].to_string(),
+};
+
+Bool: bool = {
+    "true" => true,
+    "false" => false,
 };
 
 Ident: String = {
@@ -67,11 +71,18 @@ Ident: String = {
 
 List = Bracket<Comma<Expr>>;
 
+Keyword: Box<Node> = {
+    Sp<"true"> => Box::new(Node::Bool(true, <>.span)),
+    Sp<"false"> => Box::new(Node::Bool(false, <>.span)),
+    Sp<"void"> => Box::new(Node::Void(<>.span)),
+};
+
 Brace<T> = "{" <T> "}";
 Bracket<T> = "[" <T> "]";
 Paren<T> = "(" <T> ")";
 Comma<T> = Delim<T, ",">;
-Spanned<T>: (T, Range<usize>) = <l: @L> <t: T> <r: @R> => (t, l..r);
+
+Sp<Rule>: Spanned<Rule> = <l: @L> <rule: Rule> <r: @R> => Spanned { value: rule, span: Span(l, r) };
 
 Delim<T, D>: Vec<T> = {
     <mut h: (<T> D)*> <t: T?> => match t {
@@ -80,5 +91,12 @@ Delim<T, D>: Vec<T> = {
             h
         }
         None => h
+    }
+};
+
+DelimTrailing<T, D>: Vec<T> = {
+    <mut h: (<T> D)*> <t: T> D => {
+        h.push(t);
+        h
     }
 };
