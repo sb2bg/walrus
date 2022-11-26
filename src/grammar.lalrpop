@@ -11,17 +11,23 @@ extern {
 pub Program = Statement;
 
 Statement: Box<Node> = {
-    StatementHelper => Box::new(Node::Statement(<>)),
+    DelimTrailing<Expr, ";"> => Box::new(Node::Statement(<>)),
 };
 
-StatementHelper = DelimTrailing<Expr, ";">;
+Assignment: (String, Box<Node>) = {
+    <id: Ident> "=" <e: Expr> ";" => (id, e),
+};
+
+Return: Box<Node> = {
+    "return" <Expr> ";",
+};
 
 BinOp<Op, Next>: Box<Node> = {
     <l: @L> <left: BinOp<Op, Next>> <o: Op> <right: Next> <r: @R> => Box::new(Node::BinOp(left, o, right, Span(l, r))),
     Next
 };
 
-Expr: Box<Node> = BinOp<ExprOp, Factor>;
+pub Expr: Box<Node> = BinOp<ExprOp, Factor>;
 
 Factor: Box<Node> = BinOp<FactorOp, Term>;
 
@@ -41,7 +47,6 @@ Term: Box<Node> = {
     Sp<String> => Box::new(Node::String(<>.value, <>.span)),
     Sp<List> => Box::new(Node::List(<>.value, <>.span)),
     Sp<Ident> => Box::new(Node::Ident(<>.value, <>.span)),
-    Sp<Brace<StatementHelper>> => Box::new(Node::Block(<>.value, <>.span)),
     "(" <Expr> ")"
 };
 
