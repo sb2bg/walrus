@@ -15,11 +15,7 @@ pub struct Value<'a> {
 
 impl Debug for Value<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "Value {{ value: {:?}, span: {:?} }}",
-            self.value, self.span
-        )
+        write!(f, "Value({:?})", self.value)
     }
 }
 
@@ -36,54 +32,156 @@ impl<'a> Value<'a> {
         self.value
     }
 
+    fn create_error(
+        op: Op,
+        a: ValueKind,
+        b: ValueKind,
+        span: Span,
+        source_ref: &SourceRef,
+    ) -> InterpreterResult<'a> {
+        Err(GlassError::InvalidOperation {
+            op,
+            left: a.get_type().into(),
+            right: b.get_type().into(),
+            span,
+            src: source_ref.source.into(),
+            filename: source_ref.filename.into(),
+        })
+    }
+
+    // todo: consider implicit conversion from int to float
     pub fn add(self, other: Self) -> InterpreterResult<'a> {
         match (self.value, other.value) {
-            (ValueKind::Int(left), ValueKind::Int(right)) => Ok(Value::new(
+            (ValueKind::Int(a), ValueKind::Int(b)) => Ok(Value::new(
                 &self.source_ref,
                 self.span,
-                ValueKind::Int(left + right),
+                ValueKind::Int(a + b),
             )),
-            (ValueKind::Float(left), ValueKind::Float(right)) => Ok(Value::new(
+            (ValueKind::Float(a), ValueKind::Float(b)) => Ok(Value::new(
                 &self.source_ref,
                 self.span,
-                ValueKind::Float(FloatOrd(left.0 + right.0)),
+                ValueKind::Float(FloatOrd(a.0 + b.0)),
             )),
-            (ValueKind::String(left), ValueKind::String(right)) => {
-                let mut left = left.clone(); // fixme: clone
-                left.push_str(&right);
+            (ValueKind::String(a), ValueKind::String(b)) => {
+                let mut a = a;
+                a.push_str(&b);
 
                 Ok(Value::new(
                     &self.source_ref,
                     self.span,
-                    ValueKind::String(left),
+                    ValueKind::String(a),
                 ))
             }
-            (ValueKind::List(left), ValueKind::List(right)) => {
-                let mut left = left;
-                left.extend(right);
+            (ValueKind::List(a), ValueKind::List(b)) => {
+                let mut a = a;
+                a.extend(b);
 
-                Ok(Value::new(
-                    &self.source_ref,
-                    self.span,
-                    ValueKind::List(left),
-                ))
+                Ok(Value::new(&self.source_ref, self.span, ValueKind::List(a)))
             }
-            (ValueKind::Dict(left), ValueKind::Dict(right)) => {
-                let mut left = left;
-                left.extend(right);
+            (ValueKind::Dict(a), ValueKind::Dict(b)) => {
+                let mut a = a;
+                a.extend(b);
 
-                Ok(Value::new(
-                    &self.source_ref,
-                    self.span,
-                    ValueKind::Dict(left),
-                ))
+                Ok(Value::new(&self.source_ref, self.span, ValueKind::Dict(a)))
             }
-            (left, right) => Err(GlassError::InvalidOperation {
-                operation: Op::Add,
-                left: left.get_type().into(),
-                right: right.get_type().into(),
-                span: self.span.max(other.span),
-                src: self.source_ref.source.into(), // fixme: avoid into
+            (a, b) => Self::create_error(Op::Add, a, b, self.span, self.source_ref),
+        }
+    }
+
+    pub fn sub(self, other: Self) -> InterpreterResult<'a> {
+        match (self.value, other.value) {
+            (ValueKind::Int(a), ValueKind::Int(b)) => Ok(Value::new(
+                &self.source_ref,
+                self.span,
+                ValueKind::Int(a - b),
+            )),
+            (ValueKind::Float(a), ValueKind::Float(b)) => Ok(Value::new(
+                &self.source_ref,
+                self.span,
+                ValueKind::Float(FloatOrd(a.0 - b.0)),
+            )),
+            (a, b) => Self::create_error(Op::Sub, a, b, self.span, self.source_ref),
+        }
+    }
+
+    pub fn mul(self, other: Self) -> InterpreterResult<'a> {
+        match (self.value, other.value) {
+            (ValueKind::Int(a), ValueKind::Int(b)) => Ok(Value::new(
+                &self.source_ref,
+                self.span,
+                ValueKind::Int(a * b),
+            )),
+            (ValueKind::Float(a), ValueKind::Float(b)) => Ok(Value::new(
+                &self.source_ref,
+                self.span,
+                ValueKind::Float(FloatOrd(a.0 * b.0)),
+            )),
+            (a, b) => Self::create_error(Op::Mul, a, b, self.span, self.source_ref),
+        }
+    }
+
+    pub fn div(self, other: Self) -> InterpreterResult<'a> {
+        match (self.value, other.value) {
+            (ValueKind::Int(a), ValueKind::Int(b)) => Ok(Value::new(
+                &self.source_ref,
+                self.span,
+                ValueKind::Int(a / b),
+            )),
+            (ValueKind::Float(a), ValueKind::Float(b)) => Ok(Value::new(
+                &self.source_ref,
+                self.span,
+                ValueKind::Float(FloatOrd(a.0 / b.0)),
+            )),
+            (a, b) => Self::create_error(Op::Div, a, b, self.span, self.source_ref),
+        }
+    }
+
+    pub fn rem(self, other: Self) -> InterpreterResult<'a> {
+        match (self.value, other.value) {
+            (ValueKind::Int(a), ValueKind::Int(b)) => Ok(Value::new(
+                &self.source_ref,
+                self.span,
+                ValueKind::Int(a % b),
+            )),
+            (ValueKind::Float(a), ValueKind::Float(b)) => Ok(Value::new(
+                &self.source_ref,
+                self.span,
+                ValueKind::Float(FloatOrd(a.0 % b.0)),
+            )),
+            (a, b) => Self::create_error(Op::Mod, a, b, self.span, self.source_ref),
+        }
+    }
+
+    pub fn pow(self, other: Self) -> InterpreterResult<'a> {
+        match (self.value, other.value) {
+            (ValueKind::Int(a), ValueKind::Int(b)) => Ok(Value::new(
+                &self.source_ref,
+                self.span,
+                ValueKind::Int(a.pow(b as u32)),
+            )),
+            (ValueKind::Float(a), ValueKind::Float(b)) => Ok(Value::new(
+                &self.source_ref,
+                self.span,
+                ValueKind::Float(FloatOrd(a.0.powf(b.0))),
+            )),
+            (a, b) => Self::create_error(Op::Pow, a, b, self.span, self.source_ref),
+        }
+    }
+
+    pub fn neg(self) -> InterpreterResult<'a> {
+        match self.value {
+            ValueKind::Int(a) => Ok(Value::new(&self.source_ref, self.span, ValueKind::Int(-a))),
+            ValueKind::Float(a) => Ok(Value::new(
+                &self.source_ref,
+                self.span,
+                ValueKind::Float(FloatOrd(-a.0)),
+            )),
+            a => Err(GlassError::InvalidUnary {
+                op: Op::Sub,
+                operand: a.get_type().into(),
+                span: self.span,
+                src: self.source_ref.source.into(),
+                filename: self.source_ref.filename.into(),
             }),
         }
     }

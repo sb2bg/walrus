@@ -5,6 +5,7 @@ use crate::source_ref::SourceRef;
 use crate::span::Span;
 use crate::value::{Value, ValueKind};
 use float_ord::FloatOrd;
+use log::debug;
 use std::collections::BTreeMap;
 
 pub struct Interpreter<'a> {
@@ -49,7 +50,8 @@ impl<'a> Interpreter<'a> {
 
     fn visit_statements(&self, nodes: Vec<Box<Node>>) -> InterpreterResult {
         for node in nodes {
-            println!("{:?}", self.visit(*node)?);
+            let node = self.visit(*node)?;
+            debug!("{node:?}");
         }
 
         self.make_val(ValueKind::Void, Span(0, 0)) // todo: return real span (add span to statements)
@@ -61,6 +63,11 @@ impl<'a> Interpreter<'a> {
 
         match op {
             Op::Add => left.add(right),
+            Op::Sub => left.sub(right),
+            Op::Mul => left.mul(right),
+            Op::Div => left.div(right),
+            Op::Mod => left.rem(right),
+            Op::Pow => left.pow(right),
             _ => Err(GlassError::UnknownError {
                 message: "Unimplemented binary operation".into(),
             }),
