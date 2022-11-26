@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 
 pub struct Interpreter<'a> {
     scope: Scope<'a>,
-    source_ref: SourceRef<'a>,
+    pub source_ref: SourceRef<'a>,
 }
 
 pub type InterpreterResult<'a> = Result<Value<'a>, GlassError>;
@@ -60,7 +60,7 @@ impl<'a> Interpreter<'a> {
         let right = self.visit(right)?;
 
         match op {
-            // Op::Add => left.add(right),
+            Op::Add => left.add(right),
             _ => Err(GlassError::UnknownError {
                 message: "Unimplemented binary operation".into(),
             }),
@@ -75,22 +75,22 @@ impl<'a> Interpreter<'a> {
         let mut map = BTreeMap::new();
 
         for (key, value) in dict {
-            let key = self.visit(*key)?;
-            let value = self.visit(*value)?;
+            let key = self.visit(*key)?.into_value();
+            let value = self.visit(*value)?.into_value();
 
             map.insert(key, value);
         }
 
-        self.make_val(ValueKind::Dict(BTreeMap::new()), span) // fixme: return real map
+        self.make_val(ValueKind::Dict(map), span)
     }
 
     fn visit_list(&self, list: Vec<Box<Node>>, span: Span) -> InterpreterResult {
         let mut vec = vec![];
 
         for node in list {
-            vec.push(self.visit(*node)?);
+            vec.push(self.visit(*node)?.into_value());
         }
 
-        self.make_val(ValueKind::List(vec![]), span) // fixme: return real vec
+        self.make_val(ValueKind::List(vec), span)
     }
 }

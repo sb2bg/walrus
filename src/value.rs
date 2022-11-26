@@ -7,11 +7,20 @@ use float_ord::FloatOrd;
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 
-#[derive(Debug, PartialEq, Eq, Hash, PartialOrd, Ord)] // todo: remove PartialEq, Eq, Hash, PartialOrd, Ord
 pub struct Value<'a> {
     source_ref: &'a SourceRef<'a>,
     span: Span,
     value: ValueKind,
+}
+
+impl Debug for Value<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Value {{ value: {:?}, span: {:?} }}",
+            self.value, self.span
+        )
+    }
 }
 
 impl<'a> Value<'a> {
@@ -23,12 +32,12 @@ impl<'a> Value<'a> {
         }
     }
 
-    pub fn value(&self) -> &ValueKind {
-        &self.value
+    pub fn into_value(self) -> ValueKind {
+        self.value
     }
 
-    pub fn add(&self, other: Self) -> InterpreterResult {
-        match (&self.value, &other.value) {
+    pub fn add(self, other: Self) -> InterpreterResult<'a> {
+        match (self.value, other.value) {
             (ValueKind::Int(left), ValueKind::Int(right)) => Ok(Value::new(
                 &self.source_ref,
                 self.span,
@@ -41,7 +50,7 @@ impl<'a> Value<'a> {
             )),
             (ValueKind::String(left), ValueKind::String(right)) => {
                 let mut left = left.clone(); // fixme: clone
-                left.push_str(right);
+                left.push_str(&right);
 
                 Ok(Value::new(
                     &self.source_ref,
@@ -50,21 +59,23 @@ impl<'a> Value<'a> {
                 ))
             }
             (ValueKind::List(left), ValueKind::List(right)) => {
-                // left.extend(right);
+                let mut left = left;
+                left.extend(right);
 
                 Ok(Value::new(
                     &self.source_ref,
                     self.span,
-                    ValueKind::List(vec![]), // fixme: (return appended list)
+                    ValueKind::List(left),
                 ))
             }
             (ValueKind::Dict(left), ValueKind::Dict(right)) => {
-                // left.extend(right);
+                let mut left = left;
+                left.extend(right);
 
                 Ok(Value::new(
                     &self.source_ref,
                     self.span,
-                    ValueKind::Dict(BTreeMap::new()), // fixme (return appended dict)
+                    ValueKind::Dict(left),
                 ))
             }
             (left, right) => Err(GlassError::InvalidOperation {
