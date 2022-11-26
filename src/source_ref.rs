@@ -5,7 +5,7 @@ pub struct SourceRef<'a> {
 }
 
 impl<'a> SourceRef<'a> {
-    pub fn new(source: &'a str, filename: &'a str) -> Self {
+    pub fn new(filename: &'a str, source: &'a str) -> Self {
         Self { source, filename }
     }
 }
