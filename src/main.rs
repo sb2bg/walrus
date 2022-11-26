@@ -3,7 +3,9 @@ mod error;
 mod interpreter;
 mod program;
 mod scope;
+mod source_ref;
 mod span;
+mod type_checker;
 mod value;
 
 use crate::error::GlassError;
@@ -31,6 +33,8 @@ struct Args {
     verbose: bool,
 }
 
+type GlassResult = Result<(), GlassError>;
+
 fn main() {
     panic::set_hook(Box::new(|err| {
         eprintln!(
@@ -46,13 +50,13 @@ fn main() {
     }
 }
 
-fn try_main() -> Result<(), GlassError> {
+fn try_main() -> GlassResult {
     let args = Args::parse();
     setup_logger(args.debug)?;
     create_shell(args.file)
 }
 
-fn create_shell(file: Option<PathBuf>) -> Result<(), GlassError> {
+fn create_shell(file: Option<PathBuf>) -> GlassResult {
     match file {
         Some(file) => {
             let filename = file.to_string_lossy();
@@ -64,7 +68,7 @@ fn create_shell(file: Option<PathBuf>) -> Result<(), GlassError> {
                 })
             };
 
-            Program::new(filename.into()).run(src_feed, false)
+            Program::new(filename.into(), "").run(src_feed, false) // fixme: use the correct source
         }
         None => {
             let src_feed = || {
@@ -87,12 +91,13 @@ fn create_shell(file: Option<PathBuf>) -> Result<(), GlassError> {
                 Ok(input)
             };
 
-            Program::new("<REPL>".into()).run(src_feed, true)
+            // fixme: use the correct source (may have to change source feed functionality)
+            Program::new("<REPL>".into(), "").run(src_feed, true)
         }
     }
 }
 
-fn setup_logger(debug: bool) -> Result<(), GlassError> {
+fn setup_logger(debug: bool) -> GlassResult {
     let level = if debug {
         LevelFilter::Debug
     } else {
