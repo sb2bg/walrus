@@ -1,42 +1,42 @@
+use crate::value::Value;
 use std::collections::{HashMap, VecDeque};
 
-#[derive(Clone)]
-pub struct Scope {
-    name: String,
+pub struct Scope<'a> {
+    name: &'a str,
     // todo: add line and file name
-    vars: HashMap<String, ()>,
-    parent: Option<Box<Self>>,
+    vars: HashMap<&'a str, Value<'a>>,
+    parent: Option<&'a Scope<'a>>,
 }
 
-impl Scope {
+impl<'a> Scope<'a> {
     pub fn new() -> Self {
         Self {
-            name: "global".into(),
+            name: "global",
             vars: HashMap::new(),
             parent: None,
         }
     }
 
-    pub fn new_child(&self, name: String) -> Self {
+    pub fn new_child(&'a self, name: &'a str) -> Self {
         Self {
             name,
             vars: HashMap::new(),
-            parent: Some(Box::new(self.clone())),
+            parent: Some(self),
         }
     }
 
     pub fn get(&self, name: &str) -> bool {
         if self.vars.contains_key(name) {
             true
-        } else if let Some(parent) = &self.parent {
+        } else if let Some(parent) = self.parent {
             parent.get(name)
         } else {
             false
         }
     }
 
-    pub fn set(&mut self, name: &str) {
-        self.vars.insert(name.into(), ());
+    pub fn set(&mut self, name: &'a str, value: Value<'a>) {
+        self.vars.insert(name, value);
     }
 
     pub fn stack_trace(&self) -> String {
