@@ -1,10 +1,10 @@
+use crate::ast::Op;
 use crate::span::{Span, Spanned};
 use git_version::git_version;
 use lalrpop_util::lexer::Token;
 use lalrpop_util::ParseError;
 use line_span::{find_line_end, find_line_start};
 use std::cmp::min;
-use std::ops::Range;
 use std::str::FromStr;
 use thiserror::Error;
 
@@ -44,20 +44,32 @@ pub enum GlassError {
     #[error("Unable to locate file '{filename}'. Make sure the file exists and that you have permission to read it.")]
     FileNotFound { filename: String },
 
-    #[error("Unexpected EOF in source file '{filename}'.")]
+    #[error("Unexpected EOF in source '{filename}'.")]
     UnexpectedEndOfInput { filename: String },
 
     #[error("Unexpected token '{token}' at {line}")]
     UnexpectedToken { token: String, line: String },
 
-    #[error("Invalid token '{token}' at {line}'")]
+    #[error("Invalid token '{token}' at {line}")]
     InvalidToken { token: String, line: String },
 
-    #[error("Extra token '{token}' at {line}'")]
+    #[error("Extra token '{token}' at {line}")]
     ExtraToken { token: String, line: String },
 
     #[error("Number '{number}' is too large at {line}")]
     NumberTooLarge { number: String, line: String },
+
+    #[error(
+        "Invalid operation '{operation}' on operands '{left}' and '{right}' at {}",
+        get_line(src, "filename", *span) // fixme: get filename
+    )]
+    InvalidOperation {
+        operation: Op,
+        left: String,
+        right: String,
+        span: Span,
+        src: String,
+    },
 }
 
 pub fn err_mapper(
@@ -77,17 +89,17 @@ pub fn err_mapper(
             expected: _,
         } => GlassError::UnexpectedToken {
             token: token.to_string(),
-            line: get_line(source, filename, start..end),
+            line: get_line(source, filename, Span(start, end)),
         },
         ParseError::InvalidToken { location } => GlassError::InvalidToken {
             token: source[location..location + 1].to_string(),
-            line: get_line(source, filename, location..location + 1),
+            line: get_line(source, filename, Span(location, location + 1)),
         },
         ParseError::ExtraToken {
             token: (start, token, end),
         } => GlassError::ExtraToken {
             token: token.to_string(),
-            line: get_line(source, filename, start..end),
+            line: get_line(source, filename, Span(start, end)),
         },
         ParseError::User { error } => match error {
             RecoveredParseError::NumberTooLarge(number, span) => GlassError::NumberTooLarge {
@@ -98,15 +110,15 @@ pub fn err_mapper(
     }
 }
 
-fn get_line<'a>(src: &'a str, filename: &'a str, span: Range<usize>) -> String {
-    let start = find_line_start(src, span.start);
-    let end = find_line_end(src, span.start);
+fn get_line<'a>(src: &'a str, filename: &'a str, span: Span) -> String {
+    let start = find_line_start(src, span.0);
+    let end = find_line_end(src, span.0);
     let line = &src[start..end];
     let mut trimmed = line.trim_start();
     let diff = line.len() - trimmed.len();
     trimmed = trimmed.trim_end();
-    let line_num = src[..span.start].lines().count();
-    let affected_range = span.start - start - diff..span.end - start - diff;
+    let line_num = src[..span.0].lines().count();
+    let affected_range = span.0 - start - diff..span.1 - start - diff;
 
     format!(
         "\n\n\t{trimmed}\n\t{}{}\n[{filename}(Ln:{line_num}, Col:{affected_range:?})]",
