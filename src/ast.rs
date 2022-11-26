@@ -3,26 +3,50 @@ use get_size::GetSize;
 use std::fmt::Display;
 
 #[derive(Debug, PartialEq, GetSize)]
-pub enum Node {
+pub struct Node {
+    kind: NodeKind,
+    span: Span,
+}
+
+#[derive(Debug, PartialEq, GetSize)]
+pub enum NodeKind {
     Statement(Vec<Box<Node>>),
-    Int(i64, Span),
-    Float(f64, Span),
-    String(String, Span),
-    List(Vec<Box<Node>>, Span),
-    Bool(bool, Span),
-    Dict(Vec<(Box<Node>, Box<Node>)>, Span),
-    BinOp(Box<Node>, Op, Box<Node>, Span),
-    UnaryOp(Op, Box<Node>, Span),
-    Ident(String, Span),
-    Assign(String, Box<Node>, Span),
+    Int(i64),
+    Float(f64),
+    String(String),
+    List(Vec<Box<Node>>),
+    Bool(bool),
+    Dict(Vec<(Box<Node>, Box<Node>)>),
+    BinOp(Box<Node>, Op, Box<Node>),
+    UnaryOp(Op, Box<Node>),
+    Ident(String),
+    Assign(String, Box<Node>),
     FunctionCall(String, Vec<Box<Node>>),
     FunctionDefinition(String, Vec<String>, Box<Node>),
-    Return(Box<Node>, Span),
+    Return(Box<Node>),
     If(Box<Node>, Box<Node>, Option<Box<Node>>),
     While(Box<Node>, Box<Node>),
     For(String, Box<Node>, Box<Node>, Option<Box<Node>>, Box<Node>),
-    Block(Vec<Box<Node>>, Span),
-    Void(Span),
+    Block(Vec<Box<Node>>),
+    Void,
+}
+
+impl Node {
+    pub fn new(kind: NodeKind, span: Span) -> Self {
+        Self { kind, span }
+    }
+
+    pub fn kind(&self) -> &NodeKind {
+        &self.kind
+    }
+
+    pub fn into_kind(self) -> NodeKind {
+        self.kind
+    }
+
+    pub fn span(&self) -> &Span {
+        &self.span
+    }
 }
 
 #[derive(Debug, PartialEq, GetSize)]
