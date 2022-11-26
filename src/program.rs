@@ -1,13 +1,13 @@
 use crate::ast::Node;
-use crate::error::{err_mapper, GlassError};
+use crate::error::err_mapper;
 use crate::grammar::ProgramParser;
 use crate::interpreter::Interpreter;
 use crate::source_ref::SourceRef;
+use crate::GlassResult;
 use get_size::GetSize;
 use log::debug;
 
 pub struct Program<'a> {
-    filename: &'a str,
     parser: ProgramParser,
     global_interpreter: Interpreter<'a>,
 }
@@ -15,40 +15,33 @@ pub struct Program<'a> {
 impl<'a> Program<'a> {
     pub fn new(filename: &'a str, source: &'a str) -> Self {
         Self {
-            filename,
             parser: ProgramParser::new(),
             global_interpreter: Interpreter::new(SourceRef::new(filename, source)),
         }
     }
 
-    pub fn run<T: Fn() -> Result<String, GlassError>>(
-        &self,
-        src_feed: T,
-        repl: bool,
-    ) -> Result<(), GlassError> {
-        loop {
-            let src = src_feed()?;
-            debug!("Read {} bytes from '{}'", &src.len(), self.filename);
+    pub fn run(&mut self) -> GlassResult {
+        let filename = self.global_interpreter.source_ref.filename;
+        let src = self.global_interpreter.source_ref.source;
 
-            let ast = *self
-                .parser
-                .parse(&src)
-                .map_err(|err| err_mapper(err, &self.filename, &src))?;
+        debug!("Read {} bytes from '{}'", &src.len(), filename);
 
-            debug!("AST size > {:.2} KB", ast.get_heap_size() as f64 / 1024.0);
+        let ast = *self
+            .parser
+            .parse(src)
+            .map_err(|err| err_mapper(err, filename, src))?;
 
-            if let Node::Statement(stmts) = &ast {
-                for stmt in stmts {
-                    debug!("Statement > {:?}", stmt);
-                }
-            }
+        debug!("AST size > {:.2} KB", ast.get_heap_size() as f64 / 1024.0);
 
-            let res = self.global_interpreter.interpret(ast)?;
-            debug!("Interpreted > {:?}", res);
-
-            if !repl {
-                return Ok(());
+        if let Node::Statement(stmts) = &ast {
+            for stmt in stmts {
+                debug!("Statement > {:?}", stmt);
             }
         }
+
+        let res = self.global_interpreter.interpret(ast)?;
+        debug!("Interpreted > {:?}", res);
+
+        return Ok(());
     }
 }

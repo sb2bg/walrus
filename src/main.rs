@@ -60,41 +60,35 @@ fn create_shell(file: Option<PathBuf>) -> GlassResult {
     match file {
         Some(file) => {
             let filename = file.to_string_lossy();
-            let filename = filename.as_ref();
 
-            let src_feed = || {
-                fs::read_to_string(&file).map_err(|_| GlassError::FileNotFound {
-                    filename: filename.into(),
-                })
-            };
+            let src = fs::read_to_string(&file).map_err(|_| GlassError::FileNotFound {
+                filename: filename.to_string(),
+            })?;
 
-            Program::new(filename.into(), "").run(src_feed, false) // fixme: use the correct source
+            Program::new(&filename, &src).run()?;
         }
-        None => {
-            let src_feed = || {
-                let mut input = String::new();
+        None => loop {
+            let mut input = String::new();
 
-                print!("REPL > ");
+            print!("REPL > ");
 
-                std::io::stdout()
-                    .flush()
-                    .map_err(|_| GlassError::UnknownError {
-                        message: "REPL failed to flush stdout".into(),
-                    })?;
+            std::io::stdout()
+                .flush()
+                .map_err(|_| GlassError::UnknownError {
+                    message: "REPL failed to flush stdout".into(),
+                })?;
 
-                std::io::stdin()
-                    .read_line(&mut input)
-                    .map_err(|_| GlassError::UnknownError {
-                        message: "REPL failed to read from stdin".into(),
-                    })?;
+            std::io::stdin()
+                .read_line(&mut input)
+                .map_err(|_| GlassError::UnknownError {
+                    message: "REPL failed to read from stdin".into(),
+                })?;
 
-                Ok(input)
-            };
-
-            // fixme: use the correct source (may have to change source feed functionality)
-            Program::new("<REPL>".into(), "").run(src_feed, true)
-        }
+            Program::new("REPL", &input).run()?; // fixme: don't create a new program every time
+        },
     }
+
+    Ok(())
 }
 
 fn setup_logger(debug: bool) -> GlassResult {
