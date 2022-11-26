@@ -1,5 +1,7 @@
 use crate::ast::Op;
+use crate::source_ref::SourceRef;
 use crate::span::{Span, Spanned};
+use crate::value::ValueKind;
 use git_version::git_version;
 use lalrpop_util::lexer::Token;
 use lalrpop_util::ParseError;
@@ -10,6 +12,11 @@ use thiserror::Error;
 
 pub enum RecoveredParseError {
     NumberTooLarge(String, Span),
+}
+
+pub enum InterpreterError {
+    InvalidOperation { op: Op, a: ValueKind, b: ValueKind },
+    InvalidUnaryOperation { op: Op, value: ValueKind },
 }
 
 pub fn parse_int<T>(
@@ -36,6 +43,7 @@ pub fn parse_float<T>(
     Ok(Spanned { value: num, span })
 }
 
+// todo: accept &str instead of String
 #[derive(Error, Debug)]
 pub enum GlassError {
     #[error("Unknown error '{message}'. Please report this bug with the following information: Glass Version = '{}', Git Revision = '{}'", env!("CARGO_PKG_VERSION"), git_version!(fallback = "<unknown>"))]
@@ -85,7 +93,7 @@ pub enum GlassError {
     },
 }
 
-pub fn err_mapper(
+pub fn parser_err_mapper(
     err: ParseError<usize, Token<'_>, RecoveredParseError>,
     filename: &str,
     source: &str,
@@ -119,6 +127,30 @@ pub fn err_mapper(
                 number,
                 line: get_line(source, filename, span.into()),
             },
+        },
+    }
+}
+
+pub fn interpreter_err_mapper(
+    err: InterpreterError,
+    source_ref: &SourceRef,
+    span: Span,
+) -> GlassError {
+    match err {
+        InterpreterError::InvalidOperation { op, a, b } => GlassError::InvalidOperation {
+            op,
+            span,
+            left: a.get_type().into(),
+            right: b.get_type().into(),
+            src: source_ref.source().into(),
+            filename: source_ref.filename().into(),
+        },
+        InterpreterError::InvalidUnaryOperation { op, value } => GlassError::InvalidUnary {
+            op,
+            span,
+            operand: value.get_type().into(),
+            src: source_ref.source().into(),
+            filename: source_ref.filename().into(),
         },
     }
 }
