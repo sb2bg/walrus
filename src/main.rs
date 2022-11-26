@@ -12,7 +12,7 @@ use crate::error::GlassError;
 use crate::program::Program;
 use clap::Parser as ClapParser;
 use lalrpop_util::lalrpop_mod;
-use log::LevelFilter;
+use log::{error, LevelFilter};
 use simplelog::SimpleLogger;
 use std::io::Write;
 use std::path::PathBuf;
@@ -46,7 +46,7 @@ fn main() {
     }));
 
     if let Err(err) = try_main() {
-        eprintln!("Fatal exception during execution -> {}", err);
+        error!("Fatal exception during execution -> {}", err);
     }
 }
 
