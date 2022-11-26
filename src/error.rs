@@ -60,15 +60,28 @@ pub enum GlassError {
     NumberTooLarge { number: String, line: String },
 
     #[error(
-        "Invalid operation '{operation}' on operands '{left}' and '{right}' at {}",
-        get_line(src, "filename", *span) // fixme: get filename
+        "Invalid operation '{op}' on operands '{left}' and '{right}' at {}",
+        get_line(src, filename, *span)
     )]
     InvalidOperation {
-        operation: Op,
+        op: Op,
         left: String,
         right: String,
         span: Span,
         src: String,
+        filename: String,
+    },
+
+    #[error(
+        "Invalid unary operation '{op}' on operand {operand} at {}",
+        get_line(src, filename, *span)
+    )]
+    InvalidUnary {
+        op: Op,
+        operand: String,
+        span: Span,
+        src: String,
+        filename: String,
     },
 }
 
@@ -110,6 +123,9 @@ pub fn err_mapper(
     }
 }
 
+// i dont know if this is the best place to put this comment but:
+// fixme: if the error span starts on a different line than where the error is, the wrong line will be printed.
+// should probably fix this by printing all of the lines contained in the span
 fn get_line<'a>(src: &'a str, filename: &'a str, span: Span) -> String {
     let start = find_line_start(src, span.0);
     let end = find_line_end(src, span.0);
