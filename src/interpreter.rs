@@ -1,5 +1,5 @@
-use crate::ast::{Node, Op};
-use crate::error::GlassError;
+use crate::ast::{Node, NodeKind, Op};
+use crate::error::{interpreter_err_mapper, GlassError};
 use crate::scope::Scope;
 use crate::source_ref::SourceRef;
 use crate::span::Span;
@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 
 pub struct Interpreter<'a> {
     scope: Scope<'a>,
-    pub source_ref: SourceRef<'a>,
+    source_ref: SourceRef<'a>,
 }
 
 pub type InterpreterResult<'a> = Result<Value<'a>, GlassError>;
@@ -23,21 +23,28 @@ impl<'a> Interpreter<'a> {
         }
     }
 
+    pub fn source_ref(&self) -> &SourceRef<'a> {
+        &self.source_ref
+    }
+
     pub fn interpret(&self, ast: Node) -> InterpreterResult {
         self.visit(ast)
     }
 
     fn visit(&self, node: Node) -> InterpreterResult {
-        match node {
-            Node::Statement(nodes) => self.visit_statements(nodes),
-            Node::BinOp(left, op, right, span) => self.visit_bin_op(*left, op, *right, span),
-            Node::UnaryOp(op, right, span) => self.visit_unary_op(op, *right, span),
-            Node::Int(num, span) => self.make_val(ValueKind::Int(num), span),
-            Node::Float(num, span) => self.make_val(ValueKind::Float(FloatOrd(num)), span),
-            Node::Bool(boolean, span) => self.make_val(ValueKind::Bool(boolean), span),
-            Node::String(string, span) => self.make_val(ValueKind::String(string), span),
-            Node::Dict(dict, span) => self.visit_dict(dict, span),
-            Node::List(list, span) => self.visit_list(list, span),
+        // fixme: using copy to avoid borrow checker error, but this is probably not the best way to do this
+        let span = *node.span();
+
+        match node.into_kind() {
+            NodeKind::Statement(nodes) => self.visit_statements(nodes),
+            NodeKind::BinOp(left, op, right) => self.visit_bin_op(*left, op, *right, span),
+            NodeKind::UnaryOp(op, right) => self.visit_unary_op(op, *right, span),
+            NodeKind::Int(num) => self.make_val(ValueKind::Int(num), span),
+            NodeKind::Float(num) => self.make_val(ValueKind::Float(FloatOrd(num)), span),
+            NodeKind::Bool(boolean) => self.make_val(ValueKind::Bool(boolean), span),
+            NodeKind::String(string) => self.make_val(ValueKind::String(string), span),
+            NodeKind::Dict(dict) => self.visit_dict(dict, span),
+            NodeKind::List(list) => self.visit_list(list, span),
             node => Err(GlassError::UnknownError {
                 message: format!("Unknown node: {:?}", node),
             }),
@@ -58,20 +65,27 @@ impl<'a> Interpreter<'a> {
     }
 
     fn visit_bin_op(&self, left: Node, op: Op, right: Node, span: Span) -> InterpreterResult {
-        let left = self.visit(left)?;
-        let right = self.visit(right)?;
+        // fixme: using copy to avoid borrow checker error, but this is probably not the best way to do this
+        let left_span = *left.span();
+        let right_span = *right.span();
+
+        let left_res = self.visit(left)?;
+        let right_res = self.visit(right)?;
 
         match op {
-            Op::Add => left.add(right),
-            Op::Sub => left.sub(right),
-            Op::Mul => left.mul(right),
-            Op::Div => left.div(right),
-            Op::Mod => left.rem(right),
-            Op::Pow => left.pow(right),
+            Op::Add => left_res.add(right_res),
+            Op::Sub => left_res.sub(right_res),
+            Op::Mul => left_res.mul(right_res),
+            Op::Div => left_res.div(right_res),
+            Op::Mod => left_res.rem(right_res),
+            Op::Pow => left_res.pow(right_res),
             _ => Err(GlassError::UnknownError {
                 message: "Unimplemented binary operation".into(),
-            }),
+            })?,
         }
+        // fixme: extending the spans can cause the error span to sometimes be greater than the actual span of the
+        // operation taking place because the spans get extended to the left and right of the operation
+        .map_err(|err| interpreter_err_mapper(err, &self.source_ref, left_span.extend(right_span)))
     }
 
     fn visit_unary_op(&self, op: Op, right: Node, span: Span) -> InterpreterResult {
