@@ -5,7 +5,7 @@ use std::ops::Range;
 pub struct Span(pub usize, pub usize);
 
 impl Span {
-    pub fn max(self, other: Span) -> Span {
+    pub fn extend(self, other: Span) -> Span {
         Span(self.0.min(other.0), self.1.max(other.1))
     }
 }
