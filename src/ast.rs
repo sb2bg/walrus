@@ -1,18 +1,18 @@
 use crate::span::Span;
-use get_size::GetSize;
+use float_ord::FloatOrd;
 use std::fmt::Display;
 
-#[derive(Debug, PartialEq, GetSize)]
+#[derive(Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Node {
     kind: NodeKind,
     span: Span,
 }
 
-#[derive(Debug, PartialEq, GetSize)]
+#[derive(Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum NodeKind {
     Statement(Vec<Box<Node>>),
     Int(i64),
-    Float(f64),
+    Float(FloatOrd<f64>),
     String(String),
     List(Vec<Box<Node>>),
     Bool(bool),
@@ -49,7 +49,7 @@ impl Node {
     }
 }
 
-#[derive(Debug, PartialEq, GetSize)]
+#[derive(Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Op {
     Mul,
     Div,
