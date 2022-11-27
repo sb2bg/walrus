@@ -4,7 +4,7 @@ use std::collections::{HashMap, VecDeque};
 pub struct Scope<'a> {
     name: &'a str,
     // todo: add line and file name
-    vars: HashMap<&'a str, Value<'a>>,
+    vars: HashMap<String, Value>,
     parent: Option<&'a Scope<'a>>,
 }
 
@@ -35,7 +35,7 @@ impl<'a> Scope<'a> {
         }
     }
 
-    pub fn set(&mut self, name: &'a str, value: Value<'a>) {
+    pub fn set(&mut self, name: String, value: Value) {
         self.vars.insert(name, value);
     }
 

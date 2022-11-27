@@ -1,7 +1,7 @@
 use crate::ast::Op;
 use crate::source_ref::SourceRef;
 use crate::span::{Span, Spanned};
-use crate::value::ValueKind;
+use crate::value::Value;
 use git_version::git_version;
 use lalrpop_util::lexer::Token;
 use lalrpop_util::ParseError;
@@ -15,8 +15,8 @@ pub enum RecoveredParseError {
 }
 
 pub enum InterpreterError {
-    InvalidOperation { op: Op, a: ValueKind, b: ValueKind },
-    InvalidUnaryOperation { op: Op, value: ValueKind },
+    InvalidOperation { op: Op, a: Value, b: Value },
+    InvalidUnaryOperation { op: Op, value: Value },
 }
 
 pub fn parse_int<T>(
@@ -84,7 +84,7 @@ pub enum GlassError {
         "Invalid unary operation '{op}' on operand {operand} at {}",
         get_line(src, filename, *span)
     )]
-    InvalidUnary {
+    InvalidUnaryOperation {
         op: Op,
         operand: String,
         span: Span,
@@ -145,13 +145,15 @@ pub fn interpreter_err_mapper(
             src: source_ref.source().into(),
             filename: source_ref.filename().into(),
         },
-        InterpreterError::InvalidUnaryOperation { op, value } => GlassError::InvalidUnary {
-            op,
-            span,
-            operand: value.get_type().into(),
-            src: source_ref.source().into(),
-            filename: source_ref.filename().into(),
-        },
+        InterpreterError::InvalidUnaryOperation { op, value } => {
+            GlassError::InvalidUnaryOperation {
+                op,
+                span,
+                operand: value.get_type().into(),
+                src: source_ref.source().into(),
+                filename: source_ref.filename().into(),
+            }
+        }
     }
 }
 
