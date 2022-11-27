@@ -22,6 +22,7 @@ pub enum NodeKind {
     Ident(String),
     Assign(String, Box<Node>),
     FunctionCall(String, Vec<Box<Node>>),
+    AnonFunctionDefinition(Vec<String>, Box<Node>),
     FunctionDefinition(String, Vec<String>, Box<Node>),
     Return(Box<Node>),
     If(Box<Node>, Box<Node>, Option<Box<Node>>),
