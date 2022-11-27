@@ -1,4 +1,5 @@
 use crate::ast::{Node, NodeKind, Op};
+use crate::error::GlassError::UndefinedVariable;
 use crate::error::{interpreter_err_mapper, GlassError};
 use crate::scope::Scope;
 use crate::source_ref::SourceRef;
@@ -6,6 +7,8 @@ use crate::span::Span;
 use crate::value::Value;
 use log::debug;
 use std::collections::BTreeMap;
+use std::mem::discriminant;
+use uuid::Uuid;
 
 pub struct Interpreter<'a> {
     scope: Scope<'a>,
@@ -26,18 +29,18 @@ impl<'a> Interpreter<'a> {
         &self.source_ref
     }
 
-    pub fn interpret(&self, ast: Node) -> InterpreterResult {
+    pub fn interpret(&mut self, ast: Node) -> InterpreterResult {
         self.visit(ast)
     }
 
-    fn visit(&self, node: Node) -> InterpreterResult {
+    fn visit(&mut self, node: Node) -> InterpreterResult {
         // fixme: using copy to avoid borrow checker error, but this is probably not the best way to do this
         let span = *node.span();
 
         match node.into_kind() {
             NodeKind::Statement(nodes) => self.visit_statements(nodes),
             NodeKind::BinOp(left, op, right) => self.visit_bin_op(*left, op, *right, span),
-            NodeKind::UnaryOp(op, right) => self.visit_unary_op(op, *right, span),
+            NodeKind::UnaryOp(op, value) => self.visit_unary_op(op, *value, span),
             NodeKind::Int(num) => Ok(Value::Int(num)),
             NodeKind::Float(num) => Ok(Value::Float(num)),
             NodeKind::Bool(boolean) => Ok(Value::Bool(boolean)),
@@ -45,22 +48,35 @@ impl<'a> Interpreter<'a> {
             NodeKind::Dict(dict) => self.visit_dict(dict),
             NodeKind::List(list) => self.visit_list(list),
             NodeKind::FunctionDefinition(name, args, body) => self.visit_fn_def(name, args, *body),
+            NodeKind::AnonFunctionDefinition(args, body) => self.visit_anon_fn_def(args, *body),
+            NodeKind::Ident(ident) => self.visit_var(ident, span),
+            NodeKind::Void => Ok(Value::Void),
             node => Err(GlassError::UnknownError {
                 message: format!("Unknown node: {:?}", node),
             }),
         }
     }
 
-    fn visit_statements(&self, nodes: Vec<Box<Node>>) -> InterpreterResult {
+    fn visit_statements(&mut self, nodes: Vec<Box<Node>>) -> InterpreterResult {
         for node in nodes {
-            let node = self.visit(*node)?;
-            debug!("{node:?}");
+            let should_return = discriminant(node.kind())
+                == discriminant(&NodeKind::Return(Box::new(Node::new(
+                    NodeKind::Void,
+                    Span(0, 0),
+                )))); // fixme: this is such a hack
+
+            let res = self.visit(*node)?;
+            debug!("{}", res);
+
+            if should_return {
+                return Ok(res);
+            }
         }
 
         Ok(Value::Void)
     }
 
-    fn visit_bin_op(&self, left: Node, op: Op, right: Node, span: Span) -> InterpreterResult {
+    fn visit_bin_op(&mut self, left: Node, op: Op, right: Node, span: Span) -> InterpreterResult {
         let left_res = self.visit(left)?;
         let right_res = self.visit(right)?;
 
@@ -89,14 +105,8 @@ impl<'a> Interpreter<'a> {
         .map_err(|err| interpreter_err_mapper(err, &self.source_ref, span))
     }
 
-    fn visit_unary_op(&self, op: Op, right: Node, span: Span) -> InterpreterResult {
-        let NodeKind::UnaryOp(op, right) = right.into_kind() else {
-            Err(GlassError::UnknownError {
-                message: "Unimplemented unary operation".into(),
-            })?
-        };
-
-        let right_res = self.visit(*right)?;
+    fn visit_unary_op(&mut self, op: Op, value: Node, span: Span) -> InterpreterResult {
+        let right_res = self.visit(value)?;
 
         match op {
             Op::Sub => right_res.neg(),
@@ -108,7 +118,7 @@ impl<'a> Interpreter<'a> {
         .map_err(|err| interpreter_err_mapper(err, &self.source_ref, span))
     }
 
-    fn visit_dict(&self, dict: Vec<(Box<Node>, Box<Node>)>) -> InterpreterResult {
+    fn visit_dict(&mut self, dict: Vec<(Box<Node>, Box<Node>)>) -> InterpreterResult {
         let mut map = BTreeMap::new();
 
         for (key, value) in dict {
@@ -118,7 +128,7 @@ impl<'a> Interpreter<'a> {
         Ok(Value::Dict(map))
     }
 
-    fn visit_list(&self, list: Vec<Box<Node>>) -> InterpreterResult {
+    fn visit_list(&mut self, list: Vec<Box<Node>>) -> InterpreterResult {
         let mut vec = vec![];
 
         for node in list {
@@ -128,7 +138,24 @@ impl<'a> Interpreter<'a> {
         Ok(Value::List(vec))
     }
 
-    fn visit_fn_def(&self, name: String, args: Vec<String>, body: Node) -> InterpreterResult {
-        Ok(Value::Function(name, args, body))
+    fn visit_anon_fn_def(&self, args: Vec<String>, body: Node) -> InterpreterResult {
+        let fn_name = format!("anon_{}", Uuid::new_v4());
+        Ok(Value::Function(fn_name, args, body))
+    }
+
+    fn visit_fn_def(&mut self, name: String, args: Vec<String>, body: Node) -> InterpreterResult {
+        self.scope
+            .define(name.clone(), Value::Function(name.clone(), args, body)); // fixme: avoid clone
+
+        Ok(Value::Void)
+    }
+
+    fn visit_var(&mut self, name: String, span: Span) -> InterpreterResult {
+        self.scope.get(&name).ok_or(UndefinedVariable {
+            name,
+            span,
+            src: self.source_ref.source().into(),
+            filename: self.source_ref.filename().into(),
+        })
     }
 }

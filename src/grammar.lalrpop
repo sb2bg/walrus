@@ -15,14 +15,6 @@ Statement: Box<Node> = {
     Sp<DelimTrailing<Expr, ";">> => Box::new(Node::new(NodeKind::Statement(<>.value), <>.span)),
 };
 
-Assignment: (String, Box<Node>) = {
-    <id: Ident> "=" <e: Expr> ";" => (id, e),
-};
-
-Return: Box<Node> = {
-    "return" <Expr> ";",
-};
-
 BinOp<Op, Next>: Box<Node> = {
     <l: @L> <left: BinOp<Op, Next>> <o: Op> <right: Next> <r: @R> => Box::new(Node::new(NodeKind::BinOp(left, o, right), Span(l, r))),
     Next
@@ -47,7 +39,15 @@ Term: Box<Node> = {
     Float => Box::new(Node::new(NodeKind::Float(FloatOrd(<>.value)), <>.span)),
     Sp<String> => Box::new(Node::new(NodeKind::String(<>.value), <>.span)),
     Sp<List> => Box::new(Node::new(NodeKind::List(<>.value), <>.span)),
+    Sp<Dict> => Box::new(Node::new(NodeKind::Dict(<>.value), <>.span)),
     Sp<Ident> => Box::new(Node::new(NodeKind::Ident(<>.value), <>.span)),
+    Sp<Bool> => Box::new(Node::new(NodeKind::Bool(<>.value), <>.span)),
+    // todo: check if Function and AnonFunction should be an atomic expression
+    Sp<Function> => Box::new(Node::new(NodeKind::FunctionDefinition(<>.value.0, <>.value.1, <>.value.2), <>.span)),
+    Sp<AnonFunction> => Box::new(Node::new(NodeKind::AnonFunctionDefinition(<>.value.0, <>.value.1), <>.span)),
+//    Sp<Assignment> => Box::new(Node::new(NodeKind::Assign(<>.value.0, <>.value.1), <>.span)),
+//    Sp<Return> => Box::new(Node::new(NodeKind::Return(<>.value), <>.span)),
+    Sp<"void"> => Box::new(Node::new(NodeKind::Void, <>.span)),
     "(" <Expr> ")"
 };
 
@@ -77,16 +77,31 @@ Ident: String = {
 
 List = Bracket<Comma<Expr>>;
 
-Keyword: Box<Node> = {
-    Sp<"true"> => Box::new(Node::new(NodeKind::Bool(true), <>.span)),
-    Sp<"false"> => Box::new(Node::new(NodeKind::Bool(false), <>.span)),
-    Sp<"void"> => Box::new(Node::new(NodeKind::Void, <>.span)),
+Dict = Brace<Comma<InnerDict>>;
+InnerDict = <Expr> ":" <Expr>;
+
+AnonFunction: (Vec<String>, Box<Node>) = {
+//    "fn" <a: Paren<Comma<Ident>>> <b: Expr> => (a, b), this causes build step to fail but idk why
+    "fn" <a: Paren<Comma<Ident>>> <b: Block> => (a, b),
+};
+
+Function: (String, Vec<String>, Box<Node>) = {
+    "fn" <n: Ident> <a: Paren<Comma<Ident>>> <b: Block> => (n, a, b),
+};
+
+Assignment: (String, Box<Node>) = {
+    "let" <id: Ident> "=" <e: Expr> => (id, e),
+};
+
+Return: Box<Node> = {
+    "return" <Expr>,
 };
 
 Brace<T> = "{" <T> "}";
 Bracket<T> = "[" <T> "]";
 Paren<T> = "(" <T> ")";
 Comma<T> = Delim<T, ",">;
+Block = Brace<Statement>;
 
 Sp<Rule>: Spanned<Rule> = <l: @L> <rule: Rule> <r: @R> => Spanned { value: rule, span: Span(l, r) };
 
