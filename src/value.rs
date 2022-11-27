@@ -1,4 +1,4 @@
-use crate::ast::Op;
+use crate::ast::{Node, Op};
 use crate::error::InterpreterError;
 use float_ord::FloatOrd;
 use std::collections::BTreeMap;
@@ -12,6 +12,7 @@ pub enum Value {
     String(String),
     List(Vec<Value>),
     Dict(BTreeMap<Value, Value>),
+    Function(String, Vec<String>, Node),
     Void,
 }
 
@@ -186,6 +187,7 @@ impl Value {
             Value::String(_) => "string",
             Value::List(_) => "list",
             Value::Dict(_) => "dict",
+            Value::Function(..) => "function",
             Value::Void => "void",
         }
     }
