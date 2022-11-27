@@ -105,6 +105,79 @@ impl Value {
         }
     }
 
+    pub fn eq(self, other: Self) -> OperationResult {
+        Ok(Value::Bool(self == other))
+    }
+
+    pub fn ne(self, other: Self) -> OperationResult {
+        Ok(Value::Bool(self != other))
+    }
+
+    pub fn lt(self, other: Self) -> OperationResult {
+        match (self, other) {
+            (Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a < b)),
+            (Value::Float(FloatOrd(a)), Value::Float(FloatOrd(b))) => Ok(Value::Bool(a < b)),
+            (a, b) => Err(InterpreterError::InvalidOperation { op: Op::Less, a, b }),
+        }
+    }
+
+    pub fn le(self, other: Self) -> OperationResult {
+        match (self, other) {
+            (Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a <= b)),
+            (Value::Float(FloatOrd(a)), Value::Float(FloatOrd(b))) => Ok(Value::Bool(a <= b)),
+            (a, b) => Err(InterpreterError::InvalidOperation {
+                op: Op::LessEqual,
+                a,
+                b,
+            }),
+        }
+    }
+
+    pub fn gt(self, other: Self) -> OperationResult {
+        match (self, other) {
+            (Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a > b)),
+            (Value::Float(FloatOrd(a)), Value::Float(FloatOrd(b))) => Ok(Value::Bool(a > b)),
+            (a, b) => Err(InterpreterError::InvalidOperation {
+                op: Op::Greater,
+                a,
+                b,
+            }),
+        }
+    }
+
+    pub fn ge(self, other: Self) -> OperationResult {
+        match (self, other) {
+            (Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a >= b)),
+            (Value::Float(FloatOrd(a)), Value::Float(FloatOrd(b))) => Ok(Value::Bool(a >= b)),
+            (a, b) => Err(InterpreterError::InvalidOperation {
+                op: Op::GreaterEqual,
+                a,
+                b,
+            }),
+        }
+    }
+
+    pub fn and(self, other: Self) -> OperationResult {
+        match (self, other) {
+            (Value::Bool(a), Value::Bool(b)) => Ok(Value::Bool(a && b)),
+            (a, b) => Err(InterpreterError::InvalidOperation { op: Op::And, a, b }),
+        }
+    }
+
+    pub fn or(self, other: Self) -> OperationResult {
+        match (self, other) {
+            (Value::Bool(a), Value::Bool(b)) => Ok(Value::Bool(a || b)),
+            (a, b) => Err(InterpreterError::InvalidOperation { op: Op::Or, a, b }),
+        }
+    }
+
+    pub fn not(self) -> OperationResult {
+        match self {
+            Value::Bool(a) => Ok(Value::Bool(!a)),
+            value => Err(InterpreterError::InvalidUnaryOperation { op: Op::Not, value }),
+        }
+    }
+
     pub fn get_type(&self) -> &str {
         match self {
             Value::Int(_) => "int",

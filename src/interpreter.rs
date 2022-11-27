@@ -43,8 +43,8 @@ impl<'a> Interpreter<'a> {
             NodeKind::Float(num) => Ok(Value::Float(FloatOrd(num))),
             NodeKind::Bool(boolean) => Ok(Value::Bool(boolean)),
             NodeKind::String(string) => Ok(Value::String(string)),
-            NodeKind::Dict(dict) => self.visit_dict(dict, span),
-            NodeKind::List(list) => self.visit_list(list, span),
+            NodeKind::Dict(dict) => self.visit_dict(dict),
+            NodeKind::List(list) => self.visit_list(list),
             node => Err(GlassError::UnknownError {
                 message: format!("Unknown node: {:?}", node),
             }),
@@ -71,8 +71,16 @@ impl<'a> Interpreter<'a> {
             Op::Div => left_res.div(right_res),
             Op::Mod => left_res.rem(right_res),
             Op::Pow => left_res.pow(right_res),
-            _ => Err(GlassError::UnknownError {
-                message: "Unimplemented binary operation".into(),
+            Op::Equal => left_res.eq(right_res),
+            Op::NotEqual => left_res.ne(right_res),
+            Op::Less => left_res.lt(right_res),
+            Op::LessEqual => left_res.lt(right_res),
+            Op::Greater => left_res.gt(right_res),
+            Op::GreaterEqual => left_res.gt(right_res),
+            Op::And => left_res.and(right_res),
+            Op::Or => left_res.or(right_res),
+            Op::Not => Err(GlassError::UnknownError {
+                message: format!("Operator '{}' requires one operand", op),
             })?,
         }
         // fixme: the spans can cause the error span to sometimes be greater than the actual span of the
@@ -92,6 +100,7 @@ impl<'a> Interpreter<'a> {
 
         match op {
             Op::Sub => right_res.neg(),
+            Op::Not => right_res.not(),
             _ => Err(GlassError::UnknownError {
                 message: "Invalid unary operator".into(),
             })?,
@@ -99,20 +108,17 @@ impl<'a> Interpreter<'a> {
         .map_err(|err| interpreter_err_mapper(err, &self.source_ref, span))
     }
 
-    fn visit_dict(&self, dict: Vec<(Box<Node>, Box<Node>)>, span: Span) -> InterpreterResult {
+    fn visit_dict(&self, dict: Vec<(Box<Node>, Box<Node>)>) -> InterpreterResult {
         let mut map = BTreeMap::new();
 
         for (key, value) in dict {
-            let key = self.visit(*key)?;
-            let value = self.visit(*value)?;
-
-            map.insert(key, value);
+            map.insert(self.visit(*key)?, self.visit(*value)?);
         }
 
         Ok(Value::Dict(map))
     }
 
-    fn visit_list(&self, list: Vec<Box<Node>>, span: Span) -> InterpreterResult {
+    fn visit_list(&self, list: Vec<Box<Node>>) -> InterpreterResult {
         let mut vec = vec![];
 
         for node in list {
