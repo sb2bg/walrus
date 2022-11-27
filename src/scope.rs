@@ -1,8 +1,9 @@
 use crate::value::Value;
 use std::collections::{HashMap, VecDeque};
 
+#[derive(Debug)]
 pub struct Scope<'a> {
-    name: &'a str,
+    name: String,
     // todo: add line and file name
     vars: HashMap<String, Value>,
     parent: Option<&'a Scope<'a>>,
@@ -11,13 +12,13 @@ pub struct Scope<'a> {
 impl<'a> Scope<'a> {
     pub fn new() -> Self {
         Self {
-            name: "global",
+            name: "global".into(),
             vars: HashMap::new(),
             parent: None,
         }
     }
 
-    pub fn new_child(&'a self, name: &'a str) -> Self {
+    pub fn new_child(&'a self, name: String) -> Self {
         Self {
             name,
             vars: HashMap::new(),
@@ -25,17 +26,22 @@ impl<'a> Scope<'a> {
         }
     }
 
-    pub fn get(&self, name: &str) -> bool {
-        if self.vars.contains_key(name) {
-            true
-        } else if let Some(parent) = self.parent {
-            parent.get(name)
+    pub fn get(&self, name: &str) -> Option<Value> {
+        if let Some(value) = self.vars.get(name) {
+            // instead of cloning, we could return a reference but then
+            // we have to handle references in the interpreter and not
+            // owned values, and also this would make every value (in the lang)
+            // mutable, which i dont think we want so we should clone
+            Some(value.clone())
         } else {
-            false
+            match self.parent {
+                Some(parent) => parent.get(name),
+                _ => None,
+            }
         }
     }
 
-    pub fn set(&mut self, name: String, value: Value) {
+    pub fn define(&mut self, name: String, value: Value) {
         self.vars.insert(name, value);
     }
 
@@ -43,7 +49,7 @@ impl<'a> Scope<'a> {
         let mut stack = VecDeque::new();
         let mut current = self;
 
-        while let Some(parent) = &current.parent {
+        while let Some(parent) = current.parent {
             stack.push_front(current.name.clone());
             current = parent;
         }
