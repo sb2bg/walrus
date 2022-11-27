@@ -4,7 +4,6 @@ use crate::grammar::ProgramParser;
 use crate::interpreter::Interpreter;
 use crate::source_ref::SourceRef;
 use crate::GlassResult;
-use get_size::GetSize;
 use log::debug;
 
 pub struct Program<'a> {
@@ -31,7 +30,6 @@ impl<'a> Program<'a> {
             .parse(src)
             .map_err(|err| parser_err_mapper(err, filename, src))?;
 
-        debug!("AST size > {:.2} KB", ast.get_heap_size() as f64 / 1024.0);
         debug!("AST > {:?}", self.collect_ast(ast.kind()));
 
         let res = self.global_interpreter.interpret(ast)?;
