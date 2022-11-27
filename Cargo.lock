@@ -674,6 +674,7 @@ dependencies = [
  "clap",
  "float-ord",
  "git-version",
+ "itertools",
  "lalrpop",
  "lalrpop-util",
  "line-span",
