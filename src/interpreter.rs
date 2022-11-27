@@ -151,7 +151,7 @@ impl<'a> Interpreter<'a> {
     }
 
     fn visit_var(&mut self, name: String, span: Span) -> InterpreterResult {
-        self.scope.get(&name).ok_or(UndefinedVariable {
+        self.scope.get(&name).ok_or_else(|| UndefinedVariable {
             name,
             span,
             src: self.source_ref.source().into(),

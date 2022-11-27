@@ -2,13 +2,13 @@ use crate::span::Span;
 use float_ord::FloatOrd;
 use std::fmt::Display;
 
-#[derive(Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Clone)]
 pub struct Node {
     kind: NodeKind,
     span: Span,
 }
 
-#[derive(Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Clone)]
 pub enum NodeKind {
     Statement(Vec<Box<Node>>),
     Int(i64),
@@ -50,7 +50,7 @@ impl Node {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Clone)]
 pub enum Op {
     Mul,
     Div,
