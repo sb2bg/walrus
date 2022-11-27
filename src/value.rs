@@ -1,8 +1,10 @@
 use crate::ast::{Node, Op};
 use crate::error::InterpreterError;
 use float_ord::FloatOrd;
+use itertools::join;
 use std::collections::BTreeMap;
-use std::fmt::Debug;
+use std::fmt;
+use std::fmt::{Debug, Display, Formatter};
 
 #[derive(Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Value {
@@ -191,4 +193,27 @@ impl Value {
             Value::Void => "void",
         }
     }
+}
+
+impl Display for Value {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Value::Int(i) => write!(f, "{}", i),
+            Value::Float(FloatOrd(fl)) => write!(f, "{}", fl),
+            Value::Bool(b) => write!(f, "{}", b),
+            Value::String(s) => write!(f, "{}", s),
+            Value::List(l) => write!(f, "[{}]", vec_to_string(l)),
+            Value::Dict(d) => write!(f, "{{{}}}", map_to_string(d)),
+            Value::Function(name, args, _) => write!(f, "[{}({})]", name, vec_to_string(args)),
+            Value::Void => write!(f, "void"),
+        }
+    }
+}
+
+fn vec_to_string<T: Display>(vec: &Vec<T>) -> String {
+    join(vec.iter(), ", ")
+}
+
+fn map_to_string(map: &BTreeMap<Value, Value>) -> String {
+    join(map.iter().map(|(k, v)| format!("{}: {}", k, v)), ", ")
 }
