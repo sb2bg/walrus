@@ -1,5 +1,6 @@
 use crate::ast::{Node, NodeKind, Op};
 use crate::span::{Span, Spanned};
+use float_ord::FloatOrd;
 use crate::error::{RecoveredParseError, parse_int, parse_float};
 
 grammar;
@@ -43,7 +44,7 @@ FactorOp: Op = {
 
 Term: Box<Node> = {
     Int => Box::new(Node::new(NodeKind::Int(<>.value), <>.span)),
-    Float => Box::new(Node::new(NodeKind::Float(<>.value), <>.span)),
+    Float => Box::new(Node::new(NodeKind::Float(FloatOrd(<>.value)), <>.span)),
     Sp<String> => Box::new(Node::new(NodeKind::String(<>.value), <>.span)),
     Sp<List> => Box::new(Node::new(NodeKind::List(<>.value), <>.span)),
     Sp<Ident> => Box::new(Node::new(NodeKind::Ident(<>.value), <>.span)),
