@@ -27,7 +27,7 @@ BinOp<Op, Next>: Box<Node> = {
     Next
 };
 
-pub Expr: Box<Node> = BinOp<ExprOp, Factor>;
+Expr: Box<Node> = BinOp<ExprOp, Factor>;
 
 Factor: Box<Node> = BinOp<FactorOp, Term>;
 
