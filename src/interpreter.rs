@@ -4,7 +4,6 @@ use crate::scope::Scope;
 use crate::source_ref::SourceRef;
 use crate::span::Span;
 use crate::value::Value;
-use float_ord::FloatOrd;
 use log::debug;
 use std::collections::BTreeMap;
 
@@ -40,11 +39,12 @@ impl<'a> Interpreter<'a> {
             NodeKind::BinOp(left, op, right) => self.visit_bin_op(*left, op, *right, span),
             NodeKind::UnaryOp(op, right) => self.visit_unary_op(op, *right, span),
             NodeKind::Int(num) => Ok(Value::Int(num)),
-            NodeKind::Float(num) => Ok(Value::Float(FloatOrd(num))),
+            NodeKind::Float(num) => Ok(Value::Float(num)),
             NodeKind::Bool(boolean) => Ok(Value::Bool(boolean)),
             NodeKind::String(string) => Ok(Value::String(string)),
             NodeKind::Dict(dict) => self.visit_dict(dict),
             NodeKind::List(list) => self.visit_list(list),
+            NodeKind::FunctionDefinition(name, args, body) => self.visit_fn_def(name, args, *body),
             node => Err(GlassError::UnknownError {
                 message: format!("Unknown node: {:?}", node),
             }),
@@ -128,13 +128,7 @@ impl<'a> Interpreter<'a> {
         Ok(Value::List(vec))
     }
 
-    fn visit_fn_def(
-        &self,
-        name: String,
-        args: Vec<String>,
-        body: Box<Node>,
-        span: Span,
-    ) -> InterpreterResult {
-        todo!()
+    fn visit_fn_def(&self, name: String, args: Vec<String>, body: Node) -> InterpreterResult {
+        Ok(Value::Function(name, args, body))
     }
 }
