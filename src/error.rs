@@ -91,6 +91,16 @@ pub enum GlassError {
         src: String,
         filename: String,
     },
+
+    #[error("Undefined variable '{name}' at {}",
+        get_line(src, filename, *span)
+    )]
+    UndefinedVariable {
+        name: String,
+        span: Span,
+        src: String,
+        filename: String,
+    },
 }
 
 pub fn parser_err_mapper(
