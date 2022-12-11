@@ -1,3 +1,4 @@
+mod arenas;
 mod ast;
 mod error;
 mod interpreter;
@@ -8,7 +9,7 @@ mod span;
 mod type_checker;
 mod value;
 
-use crate::error::GlassError;
+use crate::error::WalrusError;
 use crate::program::Program;
 use clap::Parser as ClapParser;
 use lalrpop_util::lalrpop_mod;
@@ -33,13 +34,13 @@ struct Args {
     verbose: bool,
 }
 
-type GlassResult = Result<(), GlassError>;
+type WalrusResult = Result<(), WalrusError>;
 
 fn main() {
     panic::set_hook(Box::new(|err| {
         eprintln!(
             "{}",
-            GlassError::UnknownError {
+            WalrusError::UnknownError {
                 message: err.to_string(),
             }
         );
@@ -50,18 +51,18 @@ fn main() {
     }
 }
 
-fn try_main() -> GlassResult {
+fn try_main() -> WalrusResult {
     let args = Args::parse();
     setup_logger(args.debug)?;
     create_shell(args.file)
 }
 
-fn create_shell(file: Option<PathBuf>) -> GlassResult {
+fn create_shell(file: Option<PathBuf>) -> WalrusResult {
     match file {
         Some(file) => {
             let filename = file.to_string_lossy();
 
-            let src = fs::read_to_string(&file).map_err(|_| GlassError::FileNotFound {
+            let src = fs::read_to_string(&file).map_err(|_| WalrusError::FileNotFound {
                 filename: filename.to_string(),
             })?;
 
@@ -74,13 +75,13 @@ fn create_shell(file: Option<PathBuf>) -> GlassResult {
 
             std::io::stdout()
                 .flush()
-                .map_err(|_| GlassError::UnknownError {
+                .map_err(|_| WalrusError::UnknownError {
                     message: "REPL failed to flush stdout".into(),
                 })?;
 
             std::io::stdin()
                 .read_line(&mut input)
-                .map_err(|_| GlassError::UnknownError {
+                .map_err(|_| WalrusError::UnknownError {
                     message: "REPL failed to read from stdin".into(),
                 })?;
 
@@ -91,7 +92,7 @@ fn create_shell(file: Option<PathBuf>) -> GlassResult {
     Ok(())
 }
 
-fn setup_logger(debug: bool) -> GlassResult {
+fn setup_logger(debug: bool) -> WalrusResult {
     let level = if debug {
         LevelFilter::Debug
     } else {
@@ -100,7 +101,7 @@ fn setup_logger(debug: bool) -> GlassResult {
 
     match SimpleLogger::init(level, simplelog::Config::default()) {
         Ok(_) => Ok(()),
-        Err(err) => Err(GlassError::UnknownError {
+        Err(err) => Err(WalrusError::UnknownError {
             message: err.to_string(),
         }),
     }

@@ -3,7 +3,7 @@ use crate::error::parser_err_mapper;
 use crate::grammar::ProgramParser;
 use crate::interpreter::Interpreter;
 use crate::source_ref::SourceRef;
-use crate::GlassResult;
+use crate::WalrusResult;
 use log::debug;
 
 pub struct Program<'a> {
@@ -15,11 +15,11 @@ impl<'a> Program<'a> {
     pub fn new(filename: &'a str, source: &'a str) -> Self {
         Self {
             parser: ProgramParser::new(),
-            global_interpreter: Interpreter::new(SourceRef::new(filename, source)),
+            global_interpreter: Interpreter::new(SourceRef::new(filename, source), false),
         }
     }
 
-    pub fn run(&mut self) -> GlassResult {
+    pub fn run(&mut self) -> WalrusResult {
         let filename = self.global_interpreter.source_ref().filename();
         let src = self.global_interpreter.source_ref().source();
 

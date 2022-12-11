@@ -45,7 +45,7 @@ pub fn parse_float<T>(
 
 // todo: accept &str instead of String
 #[derive(Error, Debug)]
-pub enum GlassError {
+pub enum WalrusError {
     #[error("Unknown error '{message}'. Please report this bug with the following information: Glass Version = '{}', Git Revision = '{}'", env!("CARGO_PKG_VERSION"), git_version!(fallback = "<unknown>"))]
     UnknownError { message: String },
 
@@ -101,39 +101,48 @@ pub enum GlassError {
         src: String,
         filename: String,
     },
+
+    #[error("Return statement outside of function at {}",
+        get_line(src, filename, *span)
+    )]
+    ReturnOutsideFunction {
+        span: Span,
+        src: String,
+        filename: String,
+    },
 }
 
 pub fn parser_err_mapper(
     err: ParseError<usize, Token<'_>, RecoveredParseError>,
     filename: &str,
     source: &str,
-) -> GlassError {
+) -> WalrusError {
     match err {
         ParseError::UnrecognizedEOF {
             expected: _,
             location: _,
-        } => GlassError::UnexpectedEndOfInput {
+        } => WalrusError::UnexpectedEndOfInput {
             filename: filename.into(),
         },
         ParseError::UnrecognizedToken {
             token: (start, token, end),
             expected: _,
-        } => GlassError::UnexpectedToken {
+        } => WalrusError::UnexpectedToken {
             token: token.to_string(),
             line: get_line(source, filename, Span(start, end)),
         },
-        ParseError::InvalidToken { location } => GlassError::InvalidToken {
+        ParseError::InvalidToken { location } => WalrusError::InvalidToken {
             token: source[location..location + 1].to_string(),
             line: get_line(source, filename, Span(location, location + 1)),
         },
         ParseError::ExtraToken {
             token: (start, token, end),
-        } => GlassError::ExtraToken {
+        } => WalrusError::ExtraToken {
             token: token.to_string(),
             line: get_line(source, filename, Span(start, end)),
         },
         ParseError::User { error } => match error {
-            RecoveredParseError::NumberTooLarge(number, span) => GlassError::NumberTooLarge {
+            RecoveredParseError::NumberTooLarge(number, span) => WalrusError::NumberTooLarge {
                 number,
                 line: get_line(source, filename, span.into()),
             },
@@ -145,9 +154,9 @@ pub fn interpreter_err_mapper(
     err: InterpreterError,
     source_ref: &SourceRef,
     span: Span,
-) -> GlassError {
+) -> WalrusError {
     match err {
-        InterpreterError::InvalidOperation { op, a, b } => GlassError::InvalidOperation {
+        InterpreterError::InvalidOperation { op, a, b } => WalrusError::InvalidOperation {
             op,
             span,
             left: a.get_type().into(),
@@ -156,7 +165,7 @@ pub fn interpreter_err_mapper(
             filename: source_ref.filename().into(),
         },
         InterpreterError::InvalidUnaryOperation { op, value } => {
-            GlassError::InvalidUnaryOperation {
+            WalrusError::InvalidUnaryOperation {
                 op,
                 span,
                 operand: value.get_type().into(),
