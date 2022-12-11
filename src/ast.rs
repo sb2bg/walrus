@@ -4,7 +4,7 @@ use std::fmt::Display;
 
 #[derive(Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Clone)]
 pub struct Node {
-    kind: NodeKind,
+    pub kind: NodeKind,
     span: Span,
 }
 
