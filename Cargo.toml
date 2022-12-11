@@ -20,3 +20,4 @@ snailquote = "0.3.1"
 float-ord = "0.3.2"
 uuid = { version = "1.2.2", features = ["v4"] }
 itertools = "0.10.5"
+slotmap = "1.0.6"
