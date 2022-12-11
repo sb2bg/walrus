@@ -32,7 +32,7 @@ impl<'a> Scope<'a> {
             // we have to handle references in the interpreter and not
             // owned values, and also this would make every value (in the lang)
             // mutable, which i dont think we want so we should clone
-            Some(value.clone())
+            Some(*value)
         } else {
             match self.parent {
                 Some(parent) => parent.get(name),
