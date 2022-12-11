@@ -1,55 +1,31 @@
+use crate::arenas::{DictKey, FuncKey, ListKey, StringKey};
 use crate::ast::{Node, Op};
 use crate::error::InterpreterError;
 use float_ord::FloatOrd;
-use itertools::join;
-use std::collections::BTreeMap;
 use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
 
-#[derive(Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Clone)]
+#[derive(Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Copy, Clone)]
 pub enum Value {
     Int(i64),
     Float(FloatOrd<f64>),
     Bool(bool),
-    String(String),
-    List(Vec<Value>),
-    Dict(BTreeMap<Value, Value>),
-    Function(String, Vec<String>, Node),
+    String(StringKey),
+    List(ListKey),
+    Dict(DictKey),
+    Function(FuncKey),
     Void,
+}
+
+pub struct Function {
+    name: String,
+    args: Vec<String>,
+    body: Node,
 }
 
 type OperationResult = Result<Value, InterpreterError>;
 
 impl Value {
-    // todo: consider implicit conversion from int to float
-    pub fn add(self, other: Self) -> OperationResult {
-        match (self, other) {
-            (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a + b)),
-            (Value::Float(FloatOrd(a)), Value::Float(FloatOrd(b))) => {
-                Ok(Value::Float(FloatOrd(a + b)))
-            }
-            (Value::String(a), Value::String(b)) => {
-                let mut a = a;
-                a.push_str(&b);
-
-                Ok(Value::String(a))
-            }
-            (Value::List(a), Value::List(b)) => {
-                let mut a = a;
-                a.extend(b);
-
-                Ok(Value::List(a))
-            }
-            (Value::Dict(a), Value::Dict(b)) => {
-                let mut a = a;
-                a.extend(b);
-
-                Ok(Value::Dict(a))
-            }
-            (a, b) => Err(InterpreterError::InvalidOperation { op: Op::Add, a, b }),
-        }
-    }
-
     pub fn sub(self, other: Self) -> OperationResult {
         match (self, other) {
             (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a - b)),
@@ -201,19 +177,20 @@ impl Display for Value {
             Value::Int(i) => write!(f, "{}", i),
             Value::Float(FloatOrd(fl)) => write!(f, "{}", fl),
             Value::Bool(b) => write!(f, "{}", b),
-            Value::String(s) => write!(f, "{}", s),
-            Value::List(l) => write!(f, "[{}]", vec_to_string(l)),
-            Value::Dict(d) => write!(f, "{{{}}}", map_to_string(d)),
-            Value::Function(name, args, _) => write!(f, "[{}({})]", name, vec_to_string(args)),
+            // fixme: actually print the values, may need to take a context
+            Value::String(s) => write!(f, "[string({:?})]", s),
+            Value::List(key) => write!(f, "[list({:?})]", key),
+            Value::Dict(key) => write!(f, "[dict({:?})]", key),
+            Value::Function(key) => write!(f, "[func({:?})]", key),
             Value::Void => write!(f, "void"),
         }
     }
 }
 
-fn vec_to_string<T: Display>(vec: &Vec<T>) -> String {
-    join(vec.iter(), ", ")
-}
-
-fn map_to_string(map: &BTreeMap<Value, Value>) -> String {
-    join(map.iter().map(|(k, v)| format!("{}: {}", k, v)), ", ")
-}
+// fn vec_to_string<T: Display>(vec: &Vec<T>) -> String {
+//     join(vec.iter(), ", ")
+// }
+//
+// fn map_to_string(map: &BTreeMap<Value, Value>) -> String {
+//     join(map.iter().map(|(k, v)| format!("{}: {}", k, v)), ", ")
+// }
