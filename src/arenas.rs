@@ -2,7 +2,7 @@ use crate::ast::Node;
 use crate::error::WalrusError;
 use crate::value::Value;
 use slotmap::{new_key_type, DenseSlotMap};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 new_key_type! {
     pub struct ListKey;
@@ -18,7 +18,7 @@ type ArenaResult<T> = Result<T, WalrusError>;
 // types stored by value and the types stored by key
 #[derive(Debug)]
 pub struct ValueHolder {
-    dict_slotmap: DenseSlotMap<DictKey, BTreeMap<Value, Value>>,
+    dict_slotmap: DenseSlotMap<DictKey, HashMap<Value, Value>>,
     list_slotmap: DenseSlotMap<ListKey, Vec<Value>>,
     string_slotmap: DenseSlotMap<StringKey, String>,
     function_slotmap: DenseSlotMap<FuncKey, (String, Vec<String>, Node)>,
@@ -34,7 +34,7 @@ impl ValueHolder {
         }
     }
 
-    pub fn insert_dict(&mut self, dict: BTreeMap<Value, Value>) -> Value {
+    pub fn insert_dict(&mut self, dict: HashMap<Value, Value>) -> Value {
         Value::Dict(self.dict_slotmap.insert(dict))
     }
 
@@ -50,7 +50,7 @@ impl ValueHolder {
         Value::Function(self.function_slotmap.insert((name, args, body)))
     }
 
-    pub fn get_dict(&self, key: DictKey) -> ArenaResult<&BTreeMap<Value, Value>> {
+    pub fn get_dict(&self, key: DictKey) -> ArenaResult<&HashMap<Value, Value>> {
         Self::check(self.dict_slotmap.get(key))
     }
 

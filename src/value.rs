@@ -3,7 +3,7 @@ use float_ord::FloatOrd;
 use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Copy, Clone)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Copy, Clone, Hash)]
 pub enum Value {
     Int(i64),
     Float(FloatOrd<f64>),

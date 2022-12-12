@@ -7,7 +7,7 @@ use crate::source_ref::SourceRef;
 use crate::span::Span;
 use crate::value::Value;
 use float_ord::FloatOrd;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use uuid::Uuid;
 
 pub struct Interpreter<'a> {
@@ -122,7 +122,7 @@ impl<'a> Interpreter<'a> {
     }
 
     fn visit_dict(&mut self, dict: Vec<(Box<Node>, Box<Node>)>) -> InterpreterResult {
-        let mut map = BTreeMap::new();
+        let mut map = HashMap::new();
 
         for (key, value) in dict {
             map.insert(self.interpret(*key)?, self.interpret(*value)?);
