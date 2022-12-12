@@ -1,12 +1,11 @@
 use crate::arenas::ValueHolder;
 use crate::ast::{Node, NodeKind, Op};
+use crate::error::WalrusError;
 use crate::error::WalrusError::UndefinedVariable;
-use crate::error::{interpreter_err_mapper, WalrusError};
 use crate::scope::Scope;
 use crate::source_ref::SourceRef;
 use crate::span::Span;
 use crate::value::Value;
-use crate::value::Value::Function;
 use float_ord::FloatOrd;
 use std::collections::BTreeMap;
 use uuid::Uuid;
@@ -15,7 +14,7 @@ pub struct Interpreter<'a> {
     scope: Scope<'a>,
     source_ref: SourceRef<'a>,
     returnable: bool,
-    arenas: ValueHolder,
+    arena: ValueHolder,
 }
 
 pub type InterpreterResult<'a> = Result<Value, WalrusError>;
@@ -26,12 +25,12 @@ impl<'a> Interpreter<'a> {
             scope: Scope::new(),
             source_ref,
             returnable,
-            arenas: ValueHolder::new(),
+            arena: ValueHolder::new(),
         }
     }
 
-    pub fn source_ref(&self) -> &SourceRef<'a> {
-        &self.source_ref
+    pub fn source_ref(&self) -> SourceRef<'a> {
+        self.source_ref
     }
 
     pub fn interpret(&mut self, node: Node) -> InterpreterResult {
@@ -45,10 +44,7 @@ impl<'a> Interpreter<'a> {
             NodeKind::Int(num) => Ok(Value::Int(num)),
             NodeKind::Float(num) => Ok(Value::Float(num)),
             NodeKind::Bool(boolean) => Ok(Value::Bool(boolean)),
-            NodeKind::String(string) => {
-                let key = self.arenas.insert_string(string);
-                Ok(Value::String(key))
-            }
+            NodeKind::String(string) => Ok(self.arena.insert_string(string)),
             NodeKind::Dict(dict) => self.visit_dict(dict),
             NodeKind::List(list) => self.visit_list(list),
             NodeKind::FunctionDefinition(name, args, body) => self.visit_fn_def(name, args, *body),
@@ -86,32 +82,27 @@ impl<'a> Interpreter<'a> {
     }
 
     fn visit_bin_op(&mut self, left: Node, op: Op, right: Node, span: Span) -> InterpreterResult {
-        let left_res = self.interpret(left)?;
-        let right_res = self.interpret(right)?;
+        let left_val = self.interpret(left)?;
+        let right_val = self.interpret(right)?;
 
         match op {
-            Op::Add => self.add(left_res, right_res, span),
-            // Op::Sub => left_res.sub(right_res),
-            // Op::Mul => left_res.mul(right_res),
-            // Op::Div => left_res.div(right_res),
-            // Op::Mod => left_res.rem(right_res),
-            // Op::Pow => left_res.pow(right_res),
-            // Op::Equal => left_res.eq(right_res),
-            // Op::NotEqual => left_res.ne(right_res),
-            // Op::Less => left_res.lt(right_res),
-            // Op::LessEqual => left_res.lt(right_res),
-            // Op::Greater => left_res.gt(right_res),
-            // Op::GreaterEqual => left_res.gt(right_res),
-            // Op::And => left_res.and(right_res),
-            // Op::Or => left_res.or(right_res),
+            Op::Add => self.add(left_val, right_val, span),
+            Op::Sub => self.sub(left_val, right_val, span),
+            Op::Mul => self.mul(left_val, right_val, span),
+            Op::Div => self.div(left_val, right_val, span),
+            Op::Mod => self.rem(left_val, right_val, span),
+            Op::Pow => self.pow(left_val, right_val, span),
+            Op::Equal => self.equal(left_val, right_val),
+            Op::NotEqual => self.not_equal(left_val, right_val),
+            Op::Less => self.less(left_val, right_val, span),
+            Op::LessEqual => self.less_equal(left_val, right_val, span),
+            Op::Greater => self.greater(left_val, right_val, span),
+            Op::GreaterEqual => self.greater_equal(left_val, right_val, span),
+            Op::And => self.and(left_val, right_val, span),
+            Op::Or => self.or(left_val, right_val, span),
             Op::Not => Err(WalrusError::UnknownError {
                 message: format!("Operator '{}' requires one operand", op),
             })?,
-            _ => {
-                return Err(WalrusError::UnknownError {
-                    message: format!("Unknown operator: {}", op),
-                })
-            }
         }
         // fixme: the spans can cause the error span to sometimes be greater than the actual span of the
         // operation taking place because the spans get extended to the left and right of the operation
@@ -122,13 +113,12 @@ impl<'a> Interpreter<'a> {
         let right_res = self.interpret(value)?;
 
         match op {
-            Op::Sub => right_res.neg(),
-            Op::Not => right_res.not(),
+            Op::Sub => self.neg(right_res, span),
+            Op::Not => self.not(right_res, span),
             _ => Err(WalrusError::UnknownError {
                 message: "Invalid unary operator".into(),
             })?,
         }
-        .map_err(|err| interpreter_err_mapper(err, &self.source_ref, span))
     }
 
     fn visit_dict(&mut self, dict: Vec<(Box<Node>, Box<Node>)>) -> InterpreterResult {
@@ -138,8 +128,7 @@ impl<'a> Interpreter<'a> {
             map.insert(self.interpret(*key)?, self.interpret(*value)?);
         }
 
-        let key = self.arenas.insert_dict(map);
-        Ok(Value::Dict(key))
+        Ok(self.arena.insert_dict(map))
     }
 
     fn visit_list(&mut self, list: Vec<Box<Node>>) -> InterpreterResult {
@@ -149,24 +138,22 @@ impl<'a> Interpreter<'a> {
             vec.push(self.interpret(*node)?);
         }
 
-        let key = self.arenas.insert_list(vec);
-        Ok(Value::List(key))
+        Ok(self.arena.insert_list(vec))
     }
 
     fn visit_anon_fn_def(&mut self, args: Vec<String>, body: Node) -> InterpreterResult {
         let fn_name = format!("anon_{}", Uuid::new_v4());
-        let key = self.arenas.insert_function(fn_name, args, body);
-        Ok(Value::Function(key))
+        Ok(self.arena.insert_function(fn_name, args, body))
     }
 
     fn visit_fn_def(&mut self, name: String, args: Vec<String>, body: Node) -> InterpreterResult {
-        let key = self.arenas.insert_function(name.clone(), args, body);
-        self.scope.define(name, Value::Function(key));
+        let value = self.arena.insert_function(name.clone(), args, body);
+        self.scope.define(name, value);
 
         Ok(Value::Void)
     }
 
-    fn visit_var(&mut self, name: String, span: Span) -> InterpreterResult {
+    fn visit_var(&self, name: String, span: Span) -> InterpreterResult {
         self.scope.get(&name).ok_or_else(|| UndefinedVariable {
             name,
             span,
@@ -175,28 +162,160 @@ impl<'a> Interpreter<'a> {
         })
     }
 
-    fn add(&mut self, a: Value, b: Value, span: Span) -> InterpreterResult {
-        match (a, b) {
+    fn add(&mut self, left: Value, right: Value, span: Span) -> InterpreterResult<'a> {
+        match (left, right) {
             (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a + b)),
             (Value::Float(FloatOrd(a)), Value::Float(FloatOrd(b))) => {
                 Ok(Value::Float(FloatOrd(a + b)))
             }
             (Value::String(a), Value::String(b)) => {
-                let a_str = self.arenas.get_string(a)?;
-                let b_str = self.arenas.get_string(b)?;
-                let res = a_str.clone() + b_str.as_str();
-                let key = self.arenas.insert_string(res);
-
-                Ok(Value::String(key))
+                let a_str = self.arena.get_string(a)?;
+                let b_str = self.arena.get_string(b)?;
+                Ok(self.arena.insert_string(a_str.clone() + b_str.as_str()))
             }
-            (a, b) => Err(WalrusError::InvalidOperation {
-                op: Op::Add,
-                left: a.get_type().into(),
-                right: b.get_type().into(),
+            (a, b) => Err(self.construct_err(Op::Add, a, b, span)),
+        }
+    }
+
+    fn sub(&self, left: Value, right: Value, span: Span) -> InterpreterResult<'a> {
+        match (left, right) {
+            (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a - b)),
+            (Value::Float(FloatOrd(a)), Value::Float(FloatOrd(b))) => {
+                Ok(Value::Float(FloatOrd(a - b)))
+            }
+            (a, b) => Err(self.construct_err(Op::Sub, a, b, span)),
+        }
+    }
+
+    fn mul(&self, left: Value, right: Value, span: Span) -> InterpreterResult<'a> {
+        match (left, right) {
+            (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a * b)),
+            (Value::Float(FloatOrd(a)), Value::Float(FloatOrd(b))) => {
+                Ok(Value::Float(FloatOrd(a * b)))
+            }
+            (a, b) => Err(self.construct_err(Op::Mul, a, b, span)),
+        }
+    }
+
+    fn div(&self, left: Value, right: Value, span: Span) -> InterpreterResult<'a> {
+        match (left, right) {
+            (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a / b)),
+            (Value::Float(FloatOrd(a)), Value::Float(FloatOrd(b))) => {
+                Ok(Value::Float(FloatOrd(a / b)))
+            }
+            (a, b) => Err(self.construct_err(Op::Div, a, b, span)),
+        }
+    }
+
+    fn rem(&self, left: Value, right: Value, span: Span) -> InterpreterResult<'a> {
+        match (left, right) {
+            (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a % b)),
+            (Value::Float(FloatOrd(a)), Value::Float(FloatOrd(b))) => {
+                Ok(Value::Float(FloatOrd(a % b)))
+            }
+            (a, b) => Err(self.construct_err(Op::Mod, a, b, span)),
+        }
+    }
+
+    fn pow(&self, left: Value, right: Value, span: Span) -> InterpreterResult<'a> {
+        match (left, right) {
+            (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a.pow(b as u32))),
+            (Value::Float(FloatOrd(a)), Value::Float(FloatOrd(b))) => {
+                Ok(Value::Float(FloatOrd(a.powf(b))))
+            }
+            (a, b) => Err(self.construct_err(Op::Pow, a, b, span)),
+        }
+    }
+
+    fn neg(&self, value: Value, span: Span) -> InterpreterResult<'a> {
+        match value {
+            Value::Int(a) => Ok(Value::Int(-a)),
+            Value::Float(FloatOrd(a)) => Ok(Value::Float(FloatOrd(-a))),
+            value => Err(WalrusError::InvalidUnaryOperation {
+                op: Op::Sub,
+                operand: value.get_type().to_string(),
                 span,
-                src: self.source_ref.source().into(),
-                filename: self.source_ref.filename().into(),
-            })?,
+                src: self.source_ref.filename().to_string(),
+                filename: self.source_ref.filename().to_string(),
+            }),
+        }
+    }
+
+    fn equal(&self, left: Value, right: Value) -> InterpreterResult<'a> {
+        Ok(Value::Bool(left == right))
+    }
+
+    fn not_equal(&self, left: Value, right: Value) -> InterpreterResult<'a> {
+        Ok(Value::Bool(left != right))
+    }
+
+    fn less(&self, left: Value, right: Value, span: Span) -> InterpreterResult<'a> {
+        match (left, right) {
+            (Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a < b)),
+            (Value::Float(FloatOrd(a)), Value::Float(FloatOrd(b))) => Ok(Value::Bool(a < b)),
+            (a, b) => Err(self.construct_err(Op::Less, a, b, span)),
+        }
+    }
+
+    fn less_equal(&self, left: Value, right: Value, span: Span) -> InterpreterResult<'a> {
+        match (left, right) {
+            (Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a <= b)),
+            (Value::Float(FloatOrd(a)), Value::Float(FloatOrd(b))) => Ok(Value::Bool(a <= b)),
+            (a, b) => Err(self.construct_err(Op::LessEqual, a, b, span)),
+        }
+    }
+
+    fn greater(&self, left: Value, right: Value, span: Span) -> InterpreterResult<'a> {
+        match (left, right) {
+            (Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a > b)),
+            (Value::Float(FloatOrd(a)), Value::Float(FloatOrd(b))) => Ok(Value::Bool(a > b)),
+            (a, b) => Err(self.construct_err(Op::Greater, a, b, span)),
+        }
+    }
+
+    fn greater_equal(&self, left: Value, right: Value, span: Span) -> InterpreterResult<'a> {
+        match (left, right) {
+            (Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a >= b)),
+            (Value::Float(FloatOrd(a)), Value::Float(FloatOrd(b))) => Ok(Value::Bool(a >= b)),
+            (a, b) => Err(self.construct_err(Op::GreaterEqual, a, b, span)),
+        }
+    }
+
+    pub fn and(&self, left: Value, right: Value, span: Span) -> InterpreterResult<'a> {
+        match (left, right) {
+            (Value::Bool(a), Value::Bool(b)) => Ok(Value::Bool(a && b)),
+            (a, b) => Err(self.construct_err(Op::And, a, b, span)),
+        }
+    }
+
+    pub fn or(&self, left: Value, right: Value, span: Span) -> InterpreterResult<'a> {
+        match (left, right) {
+            (Value::Bool(a), Value::Bool(b)) => Ok(Value::Bool(a || b)),
+            (a, b) => Err(self.construct_err(Op::Or, a, b, span)),
+        }
+    }
+
+    pub fn not(&self, value: Value, span: Span) -> InterpreterResult<'a> {
+        match value {
+            Value::Bool(a) => Ok(Value::Bool(!a)),
+            value => Err(WalrusError::InvalidUnaryOperation {
+                op: Op::Not,
+                operand: value.get_type().to_string(),
+                span,
+                src: self.source_ref.filename().to_string(),
+                filename: self.source_ref.filename().to_string(),
+            }),
+        }
+    }
+
+    fn construct_err(&self, op: Op, left: Value, right: Value, span: Span) -> WalrusError {
+        WalrusError::InvalidOperation {
+            op,
+            left: left.get_type().to_string(),
+            right: right.get_type().to_string(),
+            span,
+            src: self.source_ref.source().to_string(),
+            filename: self.source_ref.filename().to_string(),
         }
     }
 }
