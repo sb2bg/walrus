@@ -1,7 +1,5 @@
 use crate::ast::Op;
-use crate::source_ref::SourceRef;
 use crate::span::{Span, Spanned};
-use crate::value::Value;
 use git_version::git_version;
 use lalrpop_util::lexer::Token;
 use lalrpop_util::ParseError;
@@ -12,11 +10,6 @@ use thiserror::Error;
 
 pub enum RecoveredParseError {
     NumberTooLarge(String, Span),
-}
-
-pub enum InterpreterError {
-    InvalidOperation { op: Op, a: Value, b: Value },
-    InvalidUnaryOperation { op: Op, value: Value },
 }
 
 pub fn parse_int<T>(
@@ -147,32 +140,6 @@ pub fn parser_err_mapper(
                 line: get_line(source, filename, span.into()),
             },
         },
-    }
-}
-
-pub fn interpreter_err_mapper(
-    err: InterpreterError,
-    source_ref: &SourceRef,
-    span: Span,
-) -> WalrusError {
-    match err {
-        InterpreterError::InvalidOperation { op, a, b } => WalrusError::InvalidOperation {
-            op,
-            span,
-            left: a.get_type().into(),
-            right: b.get_type().into(),
-            src: source_ref.source().into(),
-            filename: source_ref.filename().into(),
-        },
-        InterpreterError::InvalidUnaryOperation { op, value } => {
-            WalrusError::InvalidUnaryOperation {
-                op,
-                span,
-                operand: value.get_type().into(),
-                src: source_ref.source().into(),
-                filename: source_ref.filename().into(),
-            }
-        }
     }
 }
 
