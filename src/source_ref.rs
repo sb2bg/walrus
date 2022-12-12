@@ -1,4 +1,4 @@
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub struct SourceRef<'a> {
     source: &'a str,
     filename: &'a str,
