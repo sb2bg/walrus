@@ -16,6 +16,7 @@ type ArenaResult<T> = Result<T, WalrusError>;
 // todo: maybe instead of this, we can use a single slotmap
 // and use a different enum to differentiate between the
 // types stored by value and the types stored by key
+#[derive(Debug)]
 pub struct ValueHolder {
     dict_slotmap: DenseSlotMap<DictKey, BTreeMap<Value, Value>>,
     list_slotmap: DenseSlotMap<ListKey, Vec<Value>>,
@@ -33,20 +34,20 @@ impl ValueHolder {
         }
     }
 
-    pub fn insert_dict(&mut self, dict: BTreeMap<Value, Value>) -> DictKey {
-        self.dict_slotmap.insert(dict)
+    pub fn insert_dict(&mut self, dict: BTreeMap<Value, Value>) -> Value {
+        Value::Dict(self.dict_slotmap.insert(dict))
     }
 
-    pub fn insert_list(&mut self, list: Vec<Value>) -> ListKey {
-        self.list_slotmap.insert(list)
+    pub fn insert_list(&mut self, list: Vec<Value>) -> Value {
+        Value::List(self.list_slotmap.insert(list))
     }
 
-    pub fn insert_string(&mut self, string: String) -> StringKey {
-        self.string_slotmap.insert(string)
+    pub fn insert_string(&mut self, string: String) -> Value {
+        Value::String(self.string_slotmap.insert(string))
     }
 
-    pub fn insert_function(&mut self, name: String, args: Vec<String>, body: Node) -> FuncKey {
-        self.function_slotmap.insert((name, args, body))
+    pub fn insert_function(&mut self, name: String, args: Vec<String>, body: Node) -> Value {
+        Value::Function(self.function_slotmap.insert((name, args, body)))
     }
 
     pub fn get_dict(&self, key: DictKey) -> ArenaResult<&BTreeMap<Value, Value>> {
@@ -67,7 +68,7 @@ impl ValueHolder {
 
     fn check<T>(result: Option<T>) -> Result<T, WalrusError> {
         result.ok_or(WalrusError::UnknownError {
-            message: "Attempt to access already released reference value".into(),
+            message: "Attempt to access released reference".into(),
         })
     }
 }
