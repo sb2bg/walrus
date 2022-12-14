@@ -1,6 +1,6 @@
 use crate::span::Span;
 use float_ord::FloatOrd;
-use std::fmt::Display;
+use std::fmt::{Debug, Display, Formatter};
 
 #[derive(Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Clone)]
 pub struct Node {
@@ -21,14 +21,21 @@ pub enum NodeKind {
     UnaryOp(Op, Box<Node>),
     Ident(String),
     Assign(String, Box<Node>),
+    Reassign(Box<Node>, Box<Node>, Op),
     FunctionCall(String, Vec<Box<Node>>),
     AnonFunctionDefinition(Vec<String>, Box<Node>),
     FunctionDefinition(String, Vec<String>, Box<Node>),
+    ExternFunctionDefinition(String, Vec<String>),
     Return(Box<Node>),
     If(Box<Node>, Box<Node>, Option<Box<Node>>),
     While(Box<Node>, Box<Node>),
-    For(String, Box<Node>, Box<Node>, Option<Box<Node>>, Box<Node>),
+    For(Box<Node>, Box<Node>, Box<Node>),
     Block(Vec<Box<Node>>),
+    Import(String),
+    Print(Box<Node>),
+    Throw(Box<Node>),
+    Break,
+    Continue,
     Void,
 }
 
@@ -47,6 +54,40 @@ impl Node {
 
     pub fn span(&self) -> &Span {
         &self.span
+    }
+}
+
+impl Display for NodeKind {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        match self {
+            NodeKind::Statements(_) => write!(f, "Statements"),
+            NodeKind::Int(_) => write!(f, "Int"),
+            NodeKind::Float(_) => write!(f, "Float"),
+            NodeKind::String(_) => write!(f, "String"),
+            NodeKind::List(_) => write!(f, "List"),
+            NodeKind::Bool(_) => write!(f, "Bool"),
+            NodeKind::Dict(_) => write!(f, "Dict"),
+            NodeKind::BinOp(_, _, _) => write!(f, "BinOp"),
+            NodeKind::UnaryOp(_, _) => write!(f, "UnaryOp"),
+            NodeKind::Ident(_) => write!(f, "Ident"),
+            NodeKind::Assign(_, _) => write!(f, "Assign"),
+            NodeKind::Reassign(_, _, _) => write!(f, "Reassign"),
+            NodeKind::FunctionCall(_, _) => write!(f, "FunctionCall"),
+            NodeKind::AnonFunctionDefinition(_, _) => write!(f, "AnonFunctionDefinition"),
+            NodeKind::FunctionDefinition(_, _, _) => write!(f, "FunctionDefinition"),
+            NodeKind::ExternFunctionDefinition(_, _) => write!(f, "ExternFunctionDefinition"),
+            NodeKind::Return(_) => write!(f, "Return"),
+            NodeKind::If(_, _, _) => write!(f, "If"),
+            NodeKind::While(_, _) => write!(f, "While"),
+            NodeKind::For(_, _, _) => write!(f, "For"),
+            NodeKind::Block(_) => write!(f, "Block"),
+            NodeKind::Import(_) => write!(f, "Import"),
+            NodeKind::Break => write!(f, "Break"),
+            NodeKind::Continue => write!(f, "Continue"),
+            NodeKind::Print(_) => write!(f, "Print"),
+            NodeKind::Throw(_) => write!(f, "Throw"),
+            NodeKind::Void => write!(f, "Void"),
+        }
     }
 }
 
