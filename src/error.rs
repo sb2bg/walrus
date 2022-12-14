@@ -1,5 +1,6 @@
-use crate::ast::Op;
-use crate::span::{Span, Spanned};
+use crate::ast::{NodeKind, Op};
+use crate::span::Span;
+use float_ord::FloatOrd;
 use git_version::git_version;
 use lalrpop_util::lexer::Token;
 use lalrpop_util::ParseError;
@@ -13,27 +14,26 @@ pub enum RecoveredParseError {
 }
 
 pub fn parse_int<T>(
-    Spanned { value, span }: Spanned<&str>,
+    data: (String, Span),
     base: u32,
-) -> Result<Spanned<i64>, ParseError<usize, T, RecoveredParseError>> {
-    let num =
-        i64::from_str_radix(if base == 10 { value } else { &value[2..] }, base).map_err(|_| {
-            ParseError::User {
-                error: RecoveredParseError::NumberTooLarge(value.to_string(), span),
-            }
-        })?;
+) -> Result<NodeKind, ParseError<usize, T, RecoveredParseError>> {
+    let num = i64::from_str_radix(if base == 10 { &data.0 } else { &data.0[2..] }, base).map_err(
+        |_| ParseError::User {
+            error: RecoveredParseError::NumberTooLarge(data.0, data.1),
+        },
+    )?;
 
-    Ok(Spanned { value: num, span })
+    Ok(NodeKind::Int(num))
 }
 
 pub fn parse_float<T>(
-    Spanned { value, span }: Spanned<&str>,
-) -> Result<Spanned<f64>, ParseError<usize, T, RecoveredParseError>> {
-    let num = f64::from_str(value).map_err(|_| ParseError::User {
-        error: RecoveredParseError::NumberTooLarge(value.to_string(), span),
+    data: (String, Span),
+) -> Result<NodeKind, ParseError<usize, T, RecoveredParseError>> {
+    let num = f64::from_str(&data.0).map_err(|_| ParseError::User {
+        error: RecoveredParseError::NumberTooLarge(data.0, data.1),
     })?;
 
-    Ok(Spanned { value: num, span })
+    Ok(NodeKind::Float(FloatOrd(num)))
 }
 
 // todo: accept &str instead of String, and source_refs when possible
@@ -132,6 +132,16 @@ pub enum WalrusError {
         src: String,
         filename: String,
     },
+
+    #[error("Exception '{message}' thrown at {}",
+        get_line(src, filename, *span)
+    )]
+    Exception {
+        message: String,
+        span: Span,
+        src: String,
+        filename: String,
+    },
 }
 
 pub fn parser_err_mapper(
@@ -182,12 +192,13 @@ fn get_line<'a>(src: &'a str, filename: &'a str, span: Span) -> String {
     let mut trimmed = line.trim_start();
     let diff = line.len() - trimmed.len();
     trimmed = trimmed.trim_end();
-    let line_num = src[..span.0].lines().count();
+    let line_num = src[..span.0].lines().count(); // fixme: I have a sneaking suspicion this is wrong but only in some cases, also slow
     let affected_range = span.0 - start - diff..span.1 - start - diff;
 
     format!(
-        "\n\n\t{trimmed}\n\t{}{}\n[{filename}(Ln:{line_num}, Col:{affected_range:?})]",
+        "\n\n\t{trimmed}\n\t{}{}\n[{filename}:{line_num}:{}]",
         &" ".repeat(affected_range.start),
         &"^".repeat(min(affected_range.len(), line.len() - affected_range.start)),
+        span.0 - start + 1,
     )
 }
