@@ -20,13 +20,16 @@ pub struct Interpreter<'a> {
 
 pub type InterpreterResult<'a> = Result<Value, WalrusError>;
 
+// consider moving interpreter into scope instead of the other way around
 impl<'a> Interpreter<'a> {
     pub fn new(source_ref: SourceRef<'a>, returnable: bool) -> Self {
+        let mut arena = ValueHolder::new();
+
         Self {
-            scope: Scope::new(),
+            scope: Scope::new(&mut arena),
             source_ref,
             returnable,
-            arena: ValueHolder::new(),
+            arena,
         }
     }
 
@@ -39,7 +42,7 @@ impl<'a> Interpreter<'a> {
         let span = *node.span();
 
         let res = match node.into_kind() {
-            NodeKind::Statement(nodes) => self.visit_statements(nodes),
+            NodeKind::Statements(nodes) => self.visit_statements(nodes),
             NodeKind::BinOp(left, op, right) => self.visit_bin_op(*left, op, *right, span),
             NodeKind::UnaryOp(op, value) => self.visit_unary_op(op, *value, span),
             NodeKind::Int(num) => Ok(Value::Int(num)),

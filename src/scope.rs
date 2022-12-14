@@ -1,5 +1,5 @@
+use crate::arenas::ValueHolder;
 use crate::value::Value;
-use crate::value::Value::Function;
 use std::collections::{HashMap, VecDeque};
 
 #[derive(Debug)]
@@ -11,16 +11,26 @@ pub struct Scope<'a> {
 }
 
 impl<'a> Scope<'a> {
-    pub fn new() -> Self {
+    pub fn new(arena: &mut ValueHolder) -> Self {
         Self {
-            name: "global".into(),
-            vars: Self::global_vars(),
+            name: "global".to_string(),
+            vars: Self::global_vars(arena),
             parent: None,
         }
     }
 
-    fn global_vars() -> HashMap<String, Value> {
+    // todo: I want this to be behind an import but I'm not sure how to do that currently
+    fn global_vars(arena: &mut ValueHolder) -> HashMap<String, Value> {
         let mut vars = HashMap::new();
+
+        vars.insert(
+            "print".to_string(),
+            arena.insert_rust_function(|args| {
+                println!("{:?}", args); // todo: make this print what it should
+                Value::Void
+            }),
+        );
+
         vars
     }
 
@@ -34,10 +44,6 @@ impl<'a> Scope<'a> {
 
     pub fn get(&self, name: &str) -> Option<Value> {
         if let Some(value) = self.vars.get(name) {
-            // instead of cloning, we could return a reference but then
-            // we have to handle references in the interpreter and not
-            // owned values, and also this would make every value (in the lang)
-            // mutable, which i dont think we want so we should clone
             Some(*value)
         } else {
             match self.parent {
