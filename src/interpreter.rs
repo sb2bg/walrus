@@ -7,7 +7,8 @@ use crate::source_ref::SourceRef;
 use crate::span::Span;
 use crate::value::Value;
 use float_ord::FloatOrd;
-use std::collections::{BTreeMap, HashMap};
+use log::debug;
+use std::collections::HashMap;
 use uuid::Uuid;
 
 pub struct Interpreter<'a> {
@@ -37,7 +38,7 @@ impl<'a> Interpreter<'a> {
         // fixme: using copy to avoid borrow checker error, but this is probably not the best way to do this
         let span = *node.span();
 
-        match node.into_kind() {
+        let res = match node.into_kind() {
             NodeKind::Statement(nodes) => self.visit_statements(nodes),
             NodeKind::BinOp(left, op, right) => self.visit_bin_op(*left, op, *right, span),
             NodeKind::UnaryOp(op, value) => self.visit_unary_op(op, *value, span),
@@ -51,26 +52,33 @@ impl<'a> Interpreter<'a> {
             NodeKind::AnonFunctionDefinition(args, body) => self.visit_anon_fn_def(args, *body),
             NodeKind::Ident(ident) => self.visit_var(ident, span),
             NodeKind::Void => Ok(Value::Void),
+            NodeKind::If(condition, then, otherwise) => self.visit_if(*condition, *then, otherwise),
+            NodeKind::Assign(name, value) => self.visit_assign(name, *value),
             node => Err(WalrusError::UnknownError {
                 message: format!("Unknown node: {:?}", node),
             }),
-        }
+        };
+
+        debug!("{:?}", res);
+        res
     }
 
     fn visit_statements(&mut self, nodes: Vec<Box<Node>>) -> InterpreterResult {
         for node in nodes {
+            let span = *node.span();
+
             match *node {
                 Node {
                     kind: NodeKind::Return(ret),
                     ..
                 } => {
-                    // if !self.returnable {
-                    //     return Err(WalrusError::ReturnOutsideFunction {
-                    //         span: node.span(),
-                    //         src: self.source_ref.source().into(),
-                    //         filename: self.source_ref.filename().into(),
-                    //     });
-                    // }
+                    if !self.returnable {
+                        return Err(WalrusError::ReturnOutsideFunction {
+                            span,
+                            src: self.source_ref.source().into(),
+                            filename: self.source_ref.filename().into(),
+                        });
+                    }
 
                     return self.interpret(*ret);
                 }
@@ -160,6 +168,31 @@ impl<'a> Interpreter<'a> {
             src: self.source_ref.source().into(),
             filename: self.source_ref.filename().into(),
         })
+    }
+
+    fn visit_if(
+        &mut self,
+        condition: Node,
+        body: Node,
+        otherwise: Option<Box<Node>>,
+    ) -> InterpreterResult<'a> {
+        let cond_span = *condition.span();
+        let condition = self.interpret(condition)?;
+
+        if self.is_truthy(condition, cond_span)? {
+            self.interpret(body)?;
+        } else if let Some(otherwise) = otherwise {
+            self.interpret(*otherwise)?;
+        }
+
+        Ok(Value::Void)
+    }
+
+    fn visit_assign(&mut self, name: String, value: Node) -> InterpreterResult {
+        let value = self.interpret(value)?;
+        self.scope.define(name, value);
+
+        Ok(Value::Void)
     }
 
     fn add(&mut self, left: Value, right: Value, span: Span) -> InterpreterResult<'a> {
@@ -281,21 +314,21 @@ impl<'a> Interpreter<'a> {
         }
     }
 
-    pub fn and(&self, left: Value, right: Value, span: Span) -> InterpreterResult<'a> {
+    fn and(&self, left: Value, right: Value, span: Span) -> InterpreterResult<'a> {
         match (left, right) {
             (Value::Bool(a), Value::Bool(b)) => Ok(Value::Bool(a && b)),
             (a, b) => Err(self.construct_err(Op::And, a, b, span)),
         }
     }
 
-    pub fn or(&self, left: Value, right: Value, span: Span) -> InterpreterResult<'a> {
+    fn or(&self, left: Value, right: Value, span: Span) -> InterpreterResult<'a> {
         match (left, right) {
             (Value::Bool(a), Value::Bool(b)) => Ok(Value::Bool(a || b)),
             (a, b) => Err(self.construct_err(Op::Or, a, b, span)),
         }
     }
 
-    pub fn not(&self, value: Value, span: Span) -> InterpreterResult<'a> {
+    fn not(&self, value: Value, span: Span) -> InterpreterResult<'a> {
         match value {
             Value::Bool(a) => Ok(Value::Bool(!a)),
             value => Err(WalrusError::InvalidUnaryOperation {
@@ -303,6 +336,19 @@ impl<'a> Interpreter<'a> {
                 operand: value.get_type().to_string(),
                 span,
                 src: self.source_ref.filename().to_string(),
+                filename: self.source_ref.filename().to_string(),
+            }),
+        }
+    }
+
+    fn is_truthy(&self, value: Value, span: Span) -> Result<bool, WalrusError> {
+        match value {
+            Value::Bool(b) => Ok(b),
+            value => Err(WalrusError::TypeMismatch {
+                expected: "bool".to_string(),
+                found: value.get_type().to_string(),
+                span,
+                src: self.source_ref.source().to_string(),
                 filename: self.source_ref.filename().to_string(),
             }),
         }
