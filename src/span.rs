@@ -9,6 +9,12 @@ impl Span {
     }
 }
 
+impl Default for Span {
+    fn default() -> Self {
+        Span(0, 0)
+    }
+}
+
 impl From<Span> for Range<usize> {
     fn from(Span(l, r): Span) -> Self {
         l..r
