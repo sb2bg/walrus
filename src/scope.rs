@@ -1,4 +1,5 @@
 use crate::value::Value;
+use crate::value::Value::Function;
 use std::collections::{HashMap, VecDeque};
 
 #[derive(Debug)]
@@ -13,9 +14,14 @@ impl<'a> Scope<'a> {
     pub fn new() -> Self {
         Self {
             name: "global".into(),
-            vars: HashMap::new(),
+            vars: Self::global_vars(),
             parent: None,
         }
+    }
+
+    fn global_vars() -> HashMap<String, Value> {
+        let mut vars = HashMap::new();
+        vars
     }
 
     pub fn new_child(&'a self, name: String) -> Self {
