@@ -1,4 +1,4 @@
-use crate::arenas::{DictKey, FuncKey, ListKey, StringKey};
+use crate::arenas::{DictKey, FuncKey, ListKey, RustFuncKey, StringKey};
 use float_ord::FloatOrd;
 use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
@@ -12,6 +12,7 @@ pub enum Value {
     List(ListKey),
     Dict(DictKey),
     Function(FuncKey),
+    RustFunc(RustFuncKey),
     Void,
 }
 
@@ -25,6 +26,7 @@ impl Value {
             Value::List(_) => "list",
             Value::Dict(_) => "dict",
             Value::Function(..) => "function",
+            Value::RustFunc(..) => "builtin_function",
             Value::Void => "void",
         }
     }
@@ -41,6 +43,7 @@ impl Display for Value {
             Value::List(l) => write!(f, "{:?}", l),
             Value::Dict(d) => write!(f, "{:?}", d),
             Value::Function(fk) => write!(f, "{:?}", fk),
+            Value::RustFunc(fk) => write!(f, "{:?}", fk),
             Value::Void => write!(f, "void"),
         }
     }

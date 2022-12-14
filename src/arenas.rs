@@ -9,9 +9,11 @@ new_key_type! {
     pub struct DictKey;
     pub struct StringKey;
     pub struct FuncKey;
+    pub struct RustFuncKey;
 }
 
 type ArenaResult<T> = Result<T, WalrusError>;
+type RustFunction = fn(Vec<Value>) -> Value;
 
 // todo: maybe instead of this, we can use a single slotmap
 // and use a different enum to differentiate between the
@@ -22,6 +24,7 @@ pub struct ValueHolder {
     list_slotmap: DenseSlotMap<ListKey, Vec<Value>>,
     string_slotmap: DenseSlotMap<StringKey, String>,
     function_slotmap: DenseSlotMap<FuncKey, (String, Vec<String>, Node)>,
+    rust_function_slotmap: DenseSlotMap<RustFuncKey, RustFunction>,
 }
 
 impl ValueHolder {
@@ -31,6 +34,7 @@ impl ValueHolder {
             list_slotmap: DenseSlotMap::with_key(),
             string_slotmap: DenseSlotMap::with_key(),
             function_slotmap: DenseSlotMap::with_key(),
+            rust_function_slotmap: DenseSlotMap::with_key(),
         }
     }
 
@@ -66,9 +70,17 @@ impl ValueHolder {
         Self::check(self.function_slotmap.get(key))
     }
 
+    pub fn insert_rust_function(&mut self, func: RustFunction) -> Value {
+        Value::RustFunc(self.rust_function_slotmap.insert(func))
+    }
+
+    pub fn get_rust_function(&self, key: RustFuncKey) -> ArenaResult<&RustFunction> {
+        Self::check(self.rust_function_slotmap.get(key))
+    }
+
     fn check<T>(result: Option<T>) -> Result<T, WalrusError> {
         result.ok_or(WalrusError::UnknownError {
-            message: "Attempt to access released reference".into(),
+            message: "Attempt to access released memory".into(),
         })
     }
 }
