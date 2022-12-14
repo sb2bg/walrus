@@ -36,7 +36,7 @@ pub fn parse_float<T>(
     Ok(Spanned { value: num, span })
 }
 
-// todo: accept &str instead of String
+// todo: accept &str instead of String, and source_refs when possible
 #[derive(Error, Debug)]
 pub enum WalrusError {
     #[error("Unknown error '{message}'. Please report this bug with the following information: Glass Version = '{}', Git Revision = '{}'", env!("CARGO_PKG_VERSION"), git_version!(fallback = "<unknown>"))]
@@ -99,6 +99,35 @@ pub enum WalrusError {
         get_line(src, filename, *span)
     )]
     ReturnOutsideFunction {
+        span: Span,
+        src: String,
+        filename: String,
+    },
+
+    #[error("Break statement outside of loop at {}",
+        get_line(src, filename, *span)
+    )]
+    BreakOutsideLoop {
+        span: Span,
+        src: String,
+        filename: String,
+    },
+
+    #[error("Continue statement outside of loop at {}",
+        get_line(src, filename, *span)
+    )]
+    ContinueOutsideLoop {
+        span: Span,
+        src: String,
+        filename: String,
+    },
+
+    #[error("Expected type '{expected}', but found type '{found}' at {}",
+        get_line(src, filename, *span)
+    )]
+    TypeMismatch {
+        expected: String,
+        found: String,
         span: Span,
         src: String,
         filename: String,
