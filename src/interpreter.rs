@@ -56,7 +56,10 @@ impl<'a> Interpreter<'a> {
             NodeKind::Ident(ident) => self.visit_var(ident, span),
             NodeKind::Void => Ok(Value::Void),
             NodeKind::If(condition, then, otherwise) => self.visit_if(*condition, *then, otherwise),
+            NodeKind::While(condition, body) => self.visit_while(*condition, *body),
             NodeKind::Assign(name, value) => self.visit_assign(name, *value),
+            NodeKind::Reassign(ident, value, op) => self.visit_reassign(*ident, *value, op),
+            NodeKind::Throw(value) => self.visit_throw(*value, span),
             node => Err(WalrusError::UnknownError {
                 message: format!("Unknown node: {:?}", node),
             }),
@@ -191,11 +194,68 @@ impl<'a> Interpreter<'a> {
         Ok(Value::Void)
     }
 
+    fn visit_while(&mut self, condition: Node, body: Node) -> InterpreterResult<'a> {
+        // this is more complicated because we need to be able to repeatedly
+        // evaluate the condition and body, which involves a lot of cloning
+        // that we should avoid if possible. we could store our nodes in an
+        // arena and copy the arena index instead of the node itself, but
+        // that would require a lot of refactoring and would be a lot of work
+        // for a small optimization, so for now, we'll just clone and revisit
+        // this later
+        let cond_span = *condition.span();
+
+        loop {
+            let condition = self.interpret(condition.clone())?;
+
+            if self.is_truthy(condition, cond_span)? {
+                self.interpret(body.clone())?;
+            } else {
+                break;
+            }
+        }
+
+        Ok(Value::Void)
+    }
+
     fn visit_assign(&mut self, name: String, value: Node) -> InterpreterResult {
         let value = self.interpret(value)?;
         self.scope.define(name, value);
 
         Ok(Value::Void)
+    }
+
+    fn visit_reassign(&mut self, ident: Node, value: Node, op: Op) -> InterpreterResult {
+        let NodeKind::Ident(name) = ident.kind() else {
+            return Err(WalrusError::UnknownError {
+                message: format!("{} is an invalid identifier", ident.kind())
+            });
+        };
+
+        let value = self.interpret(value)?;
+
+        // fixme: clone
+        // fixme: operator such as +=, -=, etc should be handled here
+        if !self.scope.reassign(name.clone(), value) {
+            return Err(UndefinedVariable {
+                name: name.clone(), // fixme: clone
+                span: *ident.span(),
+                src: self.source_ref.source().into(),
+                filename: self.source_ref.filename().into(),
+            });
+        }
+
+        Ok(Value::Void)
+    }
+
+    fn visit_throw(&mut self, value: Node, span: Span) -> InterpreterResult {
+        let value = self.interpret(value)?;
+
+        Err(WalrusError::Exception {
+            message: value.to_string(),
+            span,
+            src: self.source_ref.source().into(),
+            filename: self.source_ref.filename().into(),
+        })
     }
 
     fn add(&mut self, left: Value, right: Value, span: Span) -> InterpreterResult<'a> {
