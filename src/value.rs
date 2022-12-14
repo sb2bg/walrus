@@ -30,6 +30,7 @@ impl Value {
     }
 }
 
+// fixme: maybe replace with a to_string method, not impl
 impl Display for Value {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
@@ -44,11 +45,3 @@ impl Display for Value {
         }
     }
 }
-
-// fn vec_to_string<T: Display>(vec: &Vec<T>) -> String {
-//     join(vec.iter(), ", ")
-// }
-//
-// fn map_to_string(map: &BTreeMap<Value, Value>) -> String {
-//     join(map.iter().map(|(k, v)| format!("{}: {}", k, v)), ", ")
-// }
