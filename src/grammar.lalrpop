@@ -13,6 +13,9 @@ pub Program = Statement;
 
 Statement: Box<Node> = {
     Sp<DelimTrailing<Expr, ";">> => Box::new(Node::new(NodeKind::Statement(<>.value), <>.span)),
+//    <SpIf>, // todo: do I want to allow trailing semicolons or enforce them or forbid them?
+//    <Sp<Assignment>> ";" => Box::new(Node::new(NodeKind::Assign(<>.value.0, <>.value.1), <>.span)), // todo: right precedence?
+    => Box::new(Node::new(NodeKind::Void, Span::default())),
 };
 
 BinOp<Op, Next>: Box<Node> = {
@@ -20,7 +23,9 @@ BinOp<Op, Next>: Box<Node> = {
     Next
 };
 
-Expr: Box<Node> = BinOp<ExprOp, Factor>;
+Expr: Box<Node> = {
+    BinOp<ExprOp, Factor>,
+}
 
 Factor: Box<Node> = BinOp<FactorOp, Term>;
 
@@ -87,6 +92,20 @@ AnonFunction: (Vec<String>, Box<Node>) = {
 
 Function: (String, Vec<String>, Box<Node>) = {
     "fn" <n: Ident> <a: Paren<Comma<Ident>>> <b: Block> => (n, a, b),
+};
+
+SpIf: Box<Node> = {
+    Sp<If> => Box::new(Node::new(NodeKind::If(<>.value.0, <>.value.1, <>.value.2), <>.span)),
+};
+
+If: (Box<Node>, Box<Node>, Option<Box<Node>>) = {
+    "if" <Expr> <Block> <Else>,
+};
+
+Else: Option<Box<Node>> = {
+    "else" <Block> => Some(<>),
+    "else" <SpIf> => Some(<>),
+    => None,
 };
 
 Assignment: (String, Box<Node>) = {
