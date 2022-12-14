@@ -57,6 +57,19 @@ impl<'a> Scope<'a> {
         self.vars.insert(name, value);
     }
 
+    pub fn reassign(&mut self, name: String, value: Value) -> bool {
+        if self.vars.contains_key(&name) {
+            self.define(name, value);
+            true
+        } else {
+            match self.parent {
+                // fixme: mut borrow of self.parent is not allowed
+                // Some(parent) => parent.reassign(name, value),
+                _ => false,
+            }
+        }
+    }
+
     pub fn stack_trace(&self) -> String {
         let mut stack = VecDeque::new();
         let mut current = self;
