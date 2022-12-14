@@ -10,7 +10,7 @@ pub struct Node {
 
 #[derive(Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Clone)]
 pub enum NodeKind {
-    Statement(Vec<Box<Node>>),
+    Statements(Vec<Box<Node>>),
     Int(i64),
     Float(FloatOrd<f64>),
     String(String),

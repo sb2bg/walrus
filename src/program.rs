@@ -41,7 +41,7 @@ impl<'a> Program<'a> {
     fn collect_ast(&'a self, ast: &'a NodeKind) -> Vec<&Box<Node>> {
         let mut nodes = vec![];
 
-        if let NodeKind::Statement(stmts) = ast {
+        if let NodeKind::Statements(stmts) = ast {
             for stmt in stmts {
                 nodes.push(stmt);
             }
