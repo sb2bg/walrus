@@ -1,7 +1,6 @@
 use crate::ast::{Node, NodeKind, Op};
-use crate::span::{Span, Spanned};
-use float_ord::FloatOrd;
-use crate::error::{RecoveredParseError, parse_int, parse_float};
+use crate::span::Span;
+use crate::error::RecoveredParseError;
 
 grammar;
 
@@ -9,25 +8,25 @@ extern {
     type Error = RecoveredParseError;
 }
 
-pub Program = Statement;
+pub Program = Sp<Statements>;
+
+Statements: NodeKind = TrailingDelim<Statement, ";"> => NodeKind::Statements(<>);
 
 Statement: Box<Node> = {
-    Sp<DelimTrailing<Expr, ";">> => Box::new(Node::new(NodeKind::Statement(<>.value), <>.span)),
-//    <SpIf>, // todo: do I want to allow trailing semicolons or enforce them or forbid them?
-//    <Sp<Assignment>> ";" => Box::new(Node::new(NodeKind::Assign(<>.value.0, <>.value.1), <>.span)), // todo: right precedence?
+    Sp<If>,
+    Sp<While>,
+    Sp<Expr>,
+    Sp<Func>,
     => Box::new(Node::new(NodeKind::Void, Span::default())),
 };
 
-BinOp<Op, Next>: Box<Node> = {
-    <l: @L> <left: BinOp<Op, Next>> <o: Op> <right: Next> <r: @R> => Box::new(Node::new(NodeKind::BinOp(left, o, right), Span(l, r))),
-    Next
+BinOp<Op, Next>: NodeKind = {
+    <left: Sp<BinOp<Op, Next>>> <o: Op> <right: Sp<Next>> => NodeKind::BinOp(left, o, right),
+    Next,
 };
 
-Expr: Box<Node> = {
-    BinOp<ExprOp, Factor>,
-}
-
-Factor: Box<Node> = BinOp<FactorOp, Term>;
+Expr: NodeKind = BinOp<ExprOp, Factor>;
+Factor: NodeKind = BinOp<FactorOp, Term>;
 
 ExprOp: Op = {
     "+" => Op::Add,
@@ -39,90 +38,50 @@ FactorOp: Op = {
     "/" => Op::Div,
 };
 
-Term: Box<Node> = {
-    Int => Box::new(Node::new(NodeKind::Int(<>.value), <>.span)),
-    Float => Box::new(Node::new(NodeKind::Float(FloatOrd(<>.value)), <>.span)),
-    Sp<String> => Box::new(Node::new(NodeKind::String(<>.value), <>.span)),
-    Sp<List> => Box::new(Node::new(NodeKind::List(<>.value), <>.span)),
-    Sp<Dict> => Box::new(Node::new(NodeKind::Dict(<>.value), <>.span)),
-    Sp<Ident> => Box::new(Node::new(NodeKind::Ident(<>.value), <>.span)),
-    Sp<Bool> => Box::new(Node::new(NodeKind::Bool(<>.value), <>.span)),
-    // todo: check if Function and AnonFunction should be an atomic expression
-    Sp<Function> => Box::new(Node::new(NodeKind::FunctionDefinition(<>.value.0, <>.value.1, <>.value.2), <>.span)),
-    Sp<AnonFunction> => Box::new(Node::new(NodeKind::AnonFunctionDefinition(<>.value.0, <>.value.1), <>.span)),
-//    Sp<Assignment> => Box::new(Node::new(NodeKind::Assign(<>.value.0, <>.value.1), <>.span)),
-//    Sp<Return> => Box::new(Node::new(NodeKind::Return(<>.value), <>.span)),
-    Sp<"void"> => Box::new(Node::new(NodeKind::Void, <>.span)),
-    "(" <Expr> ")"
+Term: NodeKind = {
+	String,
+	Bool,
+	Ident,
 };
 
-Int: Spanned<i64> = {
-    Sp<r"\d+"> =>? parse_int(<>, 10),
-    Sp<r"0x[0-9A-Fa-f]+"> =>? parse_int(<>, 16),
-    Sp<r"0o[0-7]+"> =>? parse_int(<>, 8),
-    Sp<r"0b[01]+"> =>? parse_int(<>, 2),
+String: NodeKind = {
+	r#""[^"]*""# => NodeKind::String(<>[1..<>.len() - 1].to_string()),
 };
 
-Float: Spanned<f64> = {
-    Sp<r"\d+\.\d+"> =>? parse_float(<>),
+Bool: NodeKind = {
+	"true" => NodeKind::Bool(true),
+	"false" => NodeKind::Bool(false),
 };
 
-String: String = {
-    r#""[^"]*""# => <>[1..<>.len() - 1].to_string(),
+Ident: NodeKind = {
+	IdentStr => NodeKind::Ident(<>),
 };
 
-Bool: bool = {
-    "true" => true,
-    "false" => false,
-};
+IdentStr: String = r"[a-zA-Z_][a-zA-Z0-9_]*" => <>.to_string();
 
-Ident: String = {
-   r"[a-zA-Z_][a-zA-Z0-9_]*" => <>.to_string(),
-};
-
-List = Bracket<Comma<Expr>>;
-
-Dict = Brace<Comma<InnerDict>>;
-InnerDict = <Expr> ":" <Expr>;
-
-AnonFunction: (Vec<String>, Box<Node>) = {
-//    "fn" <a: Paren<Comma<Ident>>> <b: Expr> => (a, b), this causes build step to fail but idk why
-    "fn" <a: Paren<Comma<Ident>>> <b: Block> => (a, b),
-};
-
-Function: (String, Vec<String>, Box<Node>) = {
-    "fn" <n: Ident> <a: Paren<Comma<Ident>>> <b: Block> => (n, a, b),
-};
-
-SpIf: Box<Node> = {
-    Sp<If> => Box::new(Node::new(NodeKind::If(<>.value.0, <>.value.1, <>.value.2), <>.span)),
-};
-
-If: (Box<Node>, Box<Node>, Option<Box<Node>>) = {
-    "if" <Expr> <Block> <Else>,
+If: NodeKind = {
+	"if" <c: Sp<Expr>> <b: Sp<Block>> <e: Else> => NodeKind::If(c, b, e),
 };
 
 Else: Option<Box<Node>> = {
-    "else" <Block> => Some(<>),
-    "else" <SpIf> => Some(<>),
-    => None,
+	"else" <Sp<Block>> => Some(<>),
+	"else" <Sp<If>> => Some(<>),
 };
 
-Assignment: (String, Box<Node>) = {
-    "let" <id: Ident> "=" <e: Expr> => (id, e),
+While: NodeKind = {
+    "while" <c: Sp<Expr>> <b: Sp<Block>> => NodeKind::While(c, b),
 };
 
-Return: Box<Node> = {
-    "return" <Expr>,
+Func: NodeKind = {
+    "fn" <n: IdentStr> <a: Paren<Comma<IdentStr>>> <b: Sp<Block>> => NodeKind::FunctionDefinition(n, a, b),
+    "fn" <a: Paren<Comma<IdentStr>>> <b: Sp<Block>> => NodeKind::AnonFunctionDefinition(a, b),
 };
 
-Brace<T> = "{" <T> "}";
-Bracket<T> = "[" <T> "]";
-Paren<T> = "(" <T> ")";
+Block = Brace<Statements>;
+Brace<T>: T = "{" <T> "}";
+Paren<T>: T = "(" <T> ")";
+Bracket<T>: T = "[" <T> "]";
 Comma<T> = Delim<T, ",">;
-Block = Brace<Statement>;
-
-Sp<Rule>: Spanned<Rule> = <l: @L> <rule: Rule> <r: @R> => Spanned { value: rule, span: Span(l, r) };
 
 Delim<T, D>: Vec<T> = {
     <mut h: (<T> D)*> <t: T?> => match t {
@@ -134,9 +93,11 @@ Delim<T, D>: Vec<T> = {
     }
 };
 
-DelimTrailing<T, D>: Vec<T> = {
+TrailingDelim<T, D>: Vec<T> = {
     <mut h: (<T> D)*> <t: T> D => {
         h.push(t);
         h
     }
 };
+
+Sp<Rule>: Box<Node> = <l: @L> <rule: Rule> <r: @R> => Box::new(Node::new(rule, Span(l, r)));
