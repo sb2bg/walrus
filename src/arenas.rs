@@ -2,7 +2,7 @@ use crate::ast::Node;
 use crate::error::WalrusError;
 use crate::value::Value;
 use slotmap::{new_key_type, DenseSlotMap};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 
 new_key_type! {
     pub struct ListKey;
