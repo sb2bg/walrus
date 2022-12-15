@@ -1,14 +1,14 @@
-use crate::span::Span;
+use crate::span::{Span, Spanned};
 use float_ord::FloatOrd;
 use std::fmt::{Debug, Display, Formatter};
 
-#[derive(Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Clone)]
+#[derive(Debug, Clone)]
 pub struct Node {
     pub kind: NodeKind,
     span: Span,
 }
 
-#[derive(Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Clone)]
+#[derive(Debug, Clone)]
 pub enum NodeKind {
     Statements(Vec<Box<Node>>),
     Int(i64),
@@ -21,7 +21,7 @@ pub enum NodeKind {
     UnaryOp(Op, Box<Node>),
     Ident(String),
     Assign(String, Box<Node>),
-    Reassign(Box<Node>, Box<Node>, Op),
+    Reassign(Spanned<String>, Box<Node>, Op),
     FunctionCall(String, Vec<Box<Node>>),
     AnonFunctionDefinition(Vec<String>, Box<Node>),
     FunctionDefinition(String, Vec<String>, Box<Node>),
@@ -34,7 +34,7 @@ pub enum NodeKind {
     Import(String),
     Print(Box<Node>),
     Throw(Box<Node>),
-    Try(Box<Node>, Box<Node>, Box<Node>),
+    Try(Box<Node>, String, Box<Node>),
     Break,
     Continue,
     Void,
@@ -113,7 +113,7 @@ pub enum Op {
 }
 
 impl Display for Op {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Op::Mul => write!(f, "*"),
             Op::Div => write!(f, "/"),
