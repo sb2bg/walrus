@@ -1,5 +1,5 @@
 use crate::ast::{NodeKind, Op};
-use crate::span::Span;
+use crate::span::{Span, Spanned};
 use float_ord::FloatOrd;
 use git_version::git_version;
 use lalrpop_util::lexer::Token;
@@ -14,23 +14,37 @@ pub enum RecoveredParseError {
 }
 
 pub fn parse_int<T>(
-    data: (String, Span),
+    spanned: Spanned<String>,
     base: u32,
 ) -> Result<NodeKind, ParseError<usize, T, RecoveredParseError>> {
-    let num = i64::from_str_radix(if base == 10 { &data.0 } else { &data.0[2..] }, base).map_err(
-        |_| ParseError::User {
-            error: RecoveredParseError::NumberTooLarge(data.0, data.1),
+    let num = i64::from_str_radix(
+        if base == 10 {
+            &spanned.value()
+        } else {
+            &spanned.value()[2..]
         },
-    )?;
+        base,
+    )
+    .map_err(|_| {
+        let span = spanned.span();
+
+        ParseError::User {
+            error: RecoveredParseError::NumberTooLarge(spanned.into_value(), span),
+        }
+    })?;
 
     Ok(NodeKind::Int(num))
 }
 
 pub fn parse_float<T>(
-    data: (String, Span),
+    spanned: Spanned<String>,
 ) -> Result<NodeKind, ParseError<usize, T, RecoveredParseError>> {
-    let num = f64::from_str(&data.0).map_err(|_| ParseError::User {
-        error: RecoveredParseError::NumberTooLarge(data.0, data.1),
+    let num = f64::from_str(&spanned.value()).map_err(|_| {
+        let span = spanned.span();
+
+        ParseError::User {
+            error: RecoveredParseError::NumberTooLarge(spanned.into_value(), span),
+        }
     })?;
 
     Ok(NodeKind::Float(FloatOrd(num)))
