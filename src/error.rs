@@ -160,8 +160,8 @@ pub enum WalrusError {
 
 pub fn parser_err_mapper(
     err: ParseError<usize, Token<'_>, RecoveredParseError>,
-    filename: &str,
     source: &str,
+    filename: &str,
 ) -> WalrusError {
     match err {
         ParseError::UnrecognizedEOF {
