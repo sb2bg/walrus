@@ -4,7 +4,7 @@ use crate::error::WalrusError;
 use crate::error::WalrusError::UndefinedVariable;
 use crate::scope::Scope;
 use crate::source_ref::SourceRef;
-use crate::span::Span;
+use crate::span::{Span, Spanned};
 use crate::value::Value;
 use float_ord::FloatOrd;
 use log::debug;
@@ -58,7 +58,7 @@ impl<'a> Interpreter<'a> {
             NodeKind::If(condition, then, otherwise) => self.visit_if(*condition, *then, otherwise),
             NodeKind::While(condition, body) => self.visit_while(*condition, *body),
             NodeKind::Assign(name, value) => self.visit_assign(name, *value),
-            NodeKind::Reassign(ident, value, op) => self.visit_reassign(*ident, *value, op),
+            NodeKind::Reassign(ident, value, op) => self.visit_reassign(ident, *value, op),
             NodeKind::Print(value) => self.visit_print(*value),
             NodeKind::Throw(value) => self.visit_throw(*value, span),
             node => Err(WalrusError::UnknownError {
@@ -225,21 +225,15 @@ impl<'a> Interpreter<'a> {
         Ok(Value::Void)
     }
 
-    fn visit_reassign(&mut self, ident: Node, value: Node, op: Op) -> InterpreterResult {
-        let NodeKind::Ident(name) = ident.kind() else {
-            return Err(WalrusError::UnknownError {
-                message: format!("{} is an invalid identifier", ident.kind())
-            });
-        };
-
+    fn visit_reassign(&mut self, ident: Spanned<String>, value: Node, op: Op) -> InterpreterResult {
         let value = self.interpret(value)?;
 
         // fixme: clone
         // fixme: operator such as +=, -=, etc should be handled here
-        if !self.scope.reassign(name.clone(), value) {
+        if !self.scope.reassign(ident.value().clone(), value) {
             return Err(UndefinedVariable {
-                name: name.clone(), // fixme: clone
-                span: *ident.span(),
+                name: ident.value().clone(), // fixme: clone
+                span: ident.span(),
                 src: self.source_ref.source().into(),
                 filename: self.source_ref.filename().into(),
             });
