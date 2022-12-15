@@ -4,9 +4,8 @@ pub struct SourceRef<'a> {
     filename: &'a str,
 }
 
-// todo: spanned source ref?
 impl<'a> SourceRef<'a> {
-    pub fn new(filename: &'a str, source: &'a str) -> Self {
+    pub fn new(source: &'a str, filename: &'a str) -> Self {
         Self { source, filename }
     }
 
