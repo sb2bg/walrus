@@ -10,7 +10,7 @@ mod type_checker;
 mod value;
 
 use crate::error::WalrusError;
-use crate::program::Program;
+use crate::program::{Program, Repl};
 use clap::Parser as ClapParser;
 use lalrpop_util::lalrpop_mod;
 use log::{error, LevelFilter};
@@ -66,27 +66,11 @@ fn create_shell(file: Option<PathBuf>) -> WalrusResult {
                 filename: filename.to_string(),
             })?;
 
-            Program::new(&filename, &src).run()?;
+            Program::new(&src, &filename).run()?;
         }
-        None => loop {
-            let mut input = String::new();
-
-            print!("REPL > ");
-
-            std::io::stdout()
-                .flush()
-                .map_err(|_| WalrusError::UnknownError {
-                    message: "REPL failed to flush stdout".into(),
-                })?;
-
-            std::io::stdin()
-                .read_line(&mut input)
-                .map_err(|_| WalrusError::UnknownError {
-                    message: "REPL failed to read from stdin".into(),
-                })?;
-
-            Program::new("REPL", &input).run()?; // fixme: don't create a new program every time
-        },
+        None => {
+            Repl::new().run()?;
+        }
     }
 
     Ok(())
