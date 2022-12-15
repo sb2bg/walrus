@@ -29,6 +29,7 @@ Statement: Box<Node> = {
     Sp<Import>,
     Sp<Print>,
     Sp<Throw>,
+    Sp<Try>,
 };
 
 BinOp<Op, Next>: NodeKind = {
@@ -121,7 +122,7 @@ Func: NodeKind = {
     "fn" <a: Paren<Comma<IdentStr>>> <b: Sp<Block>> => NodeKind::AnonFunctionDefinition(a, b),
 };
 
-Extern: NodeKind = {
+Extern: NodeKind = { // todo: make it so externs have to define a path to the function
     "extern" <n: IdentStr> <a: Paren<Comma<IdentStr>>> => NodeKind::ExternFunctionDefinition(n, a),
 };
 
@@ -158,6 +159,10 @@ Print: NodeKind = {
 
 Throw: NodeKind = {
     "throw" <e: Sp<Expr>> => NodeKind::Throw(e),
+};
+
+Try: NodeKind = {
+    "try" <b: Sp<Block>> "catch" <c: Sp<Ident>> <e: Sp<Block>> => NodeKind::Try(b, c, e),
 };
 
 Block = Brace<Statements>;

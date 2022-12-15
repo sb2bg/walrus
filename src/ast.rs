@@ -34,6 +34,7 @@ pub enum NodeKind {
     Import(String),
     Print(Box<Node>),
     Throw(Box<Node>),
+    Try(Box<Node>, Box<Node>, Box<Node>),
     Break,
     Continue,
     Void,
@@ -86,6 +87,7 @@ impl Display for NodeKind {
             NodeKind::Continue => write!(f, "Continue"),
             NodeKind::Print(_) => write!(f, "Print"),
             NodeKind::Throw(_) => write!(f, "Throw"),
+            NodeKind::Try(_, _, _) => write!(f, "Try"),
             NodeKind::Void => write!(f, "Void"),
         }
     }
