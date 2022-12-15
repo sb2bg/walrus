@@ -1,5 +1,5 @@
 use crate::ast::{Node, NodeKind, Op};
-use crate::span::Span;
+use crate::span::{Span, Spanned};
 use crate::error::{RecoveredParseError, parse_int, parse_float};
 
 grammar;
@@ -19,7 +19,7 @@ Statement: Box<Node> = {
     Sp<If>,
     Sp<For>,
     Sp<While>,
-    Sp<Expr>,
+    SpExpr,
     Sp<Func>,
     Sp<Extern>,
     Sp<Assign>,
@@ -84,14 +84,14 @@ Bool: NodeKind = {
 };
 
 List: NodeKind = {
-    Bracket<Comma<Sp<Expr>>> => NodeKind::List(<>),
+    Bracket<Comma<SpExpr>> => NodeKind::List(<>),
 };
 
 Dict: NodeKind = {
     Brace<Comma<DictEntry>> => NodeKind::Dict(<>),
 };
 
-DictEntry = <Sp<Expr>> ":" <Sp<Expr>>;
+DictEntry = <SpExpr> ":" <SpExpr>;
 
 Ident: NodeKind = {
 	IdentStr => NodeKind::Ident(<>),
@@ -99,7 +99,7 @@ Ident: NodeKind = {
 
 IdentStr: String = r"[a-zA-Z_][a-zA-Z0-9_]*" => <>.to_string();
 
-If: NodeKind = "if" <c: Sp<Expr>> <b: Sp<Block>> <e: Else> => NodeKind::If(c, b, e);
+If: NodeKind = "if" <c: SpExpr> <b: Sp<Block>> <e: Else> => NodeKind::If(c, b, e);
 
 Else: Option<Box<Node>> = {
 	"else" <Sp<Block>> => Some(<>),
@@ -108,13 +108,11 @@ Else: Option<Box<Node>> = {
 };
 
 While: NodeKind = {
-    "while" <c: Sp<Expr>> <b: Sp<Block>> => NodeKind::While(c, b),
+    "while" <c: SpExpr> <b: Sp<Block>> => NodeKind::While(c, b),
 };
 
 For: NodeKind = {
-    // var, iter, body
-    // for var in iter { body }
-    "for" <v: Sp<Ident>> "in" <i: Sp<Expr>> <b: Sp<Block>> => NodeKind::For(v, i, b),
+    "for" <v: Sp<Ident>> "in" <i: SpExpr> <b: Sp<Block>> => NodeKind::For(v, i, b),
 };
 
 Func: NodeKind = {
@@ -127,18 +125,18 @@ Extern: NodeKind = { // todo: make it so externs have to define a path to the fu
 };
 
 Assign: NodeKind = {
-    "let" <n: IdentStr> "=" <e: Sp<Expr>> => NodeKind::Assign(n, e),
-    <n: Sp<Ident>> "=" <e: Sp<Expr>> => NodeKind::Reassign(n, e, Op::Equal),
-    <n: Sp<Ident>> "+=" <e: Sp<Expr>> => NodeKind::Reassign(n, e, Op::Add),
-    <n: Sp<Ident>> "-=" <e: Sp<Expr>> => NodeKind::Reassign(n, e, Op::Sub),
-    <n: Sp<Ident>> "*=" <e: Sp<Expr>> => NodeKind::Reassign(n, e, Op::Mul),
-    <n: Sp<Ident>> "/=" <e: Sp<Expr>> => NodeKind::Reassign(n, e, Op::Div),
-    <n: Sp<Ident>> "%=" <e: Sp<Expr>> => NodeKind::Reassign(n, e, Op::Mod),
-    <n: Sp<Ident>> "**=" <e: Sp<Expr>> => NodeKind::Reassign(n, e, Op::Pow),
+    "let" <n: IdentStr> "=" <e: SpExpr> => NodeKind::Assign(n, e),
+    <n: StrSp<IdentStr>> "=" <e: SpExpr> => NodeKind::Reassign(n, e, Op::Equal),
+    <n: StrSp<IdentStr>> "+=" <e: SpExpr> => NodeKind::Reassign(n, e, Op::Add),
+    <n: StrSp<IdentStr>> "-=" <e: SpExpr> => NodeKind::Reassign(n, e, Op::Sub),
+    <n: StrSp<IdentStr>> "*=" <e: SpExpr> => NodeKind::Reassign(n, e, Op::Mul),
+    <n: StrSp<IdentStr>> "/=" <e: SpExpr> => NodeKind::Reassign(n, e, Op::Div),
+    <n: StrSp<IdentStr>> "%=" <e: SpExpr> => NodeKind::Reassign(n, e, Op::Mod),
+    <n: StrSp<IdentStr>> "**=" <e: SpExpr> => NodeKind::Reassign(n, e, Op::Pow),
 };
 
 Return: NodeKind = {
-    "return" <e: Sp<Expr>> => NodeKind::Return(e),
+    "return" <SpExpr> => NodeKind::Return(<>),
 };
 
 Break: NodeKind = {
@@ -154,15 +152,15 @@ Import: NodeKind = {
 };
 
 Print: NodeKind = {
-    "print" <e: Sp<Expr>> => NodeKind::Print(e),
+    "print" <SpExpr> => NodeKind::Print(<>),
 };
 
 Throw: NodeKind = {
-    "throw" <e: Sp<Expr>> => NodeKind::Throw(e),
+    "throw" <SpExpr> => NodeKind::Throw(<>),
 };
 
 Try: NodeKind = {
-    "try" <b: Sp<Block>> "catch" <c: Sp<Ident>> <e: Sp<Block>> => NodeKind::Try(b, c, e),
+    "try" <b: SpBlock> "catch" <c: IdentStr> <e: SpBlock> => NodeKind::Try(b, c, e),
 };
 
 Block = Brace<Statements>;
@@ -170,6 +168,9 @@ Brace<T>: T = "{" <T> "}";
 Paren<T>: T = "(" <T> ")";
 Bracket<T>: T = "[" <T> "]";
 Comma<T> = Delim<T, ",">;
+
+SpBlock = Sp<Block>;
+SpExpr = Sp<Expr>;
 
 Delim<T, D>: Vec<T> = {
     <mut h: (<T> D)*> <t: T?> => match t {
@@ -189,4 +190,4 @@ TrailingDelim<T, D>: Vec<T> = {
 };
 
 Sp<Rule>: Box<Node> = <l: @L> <rule: Rule> <r: @R> => Box::new(Node::new(rule, Span(l, r)));
-StrSp<Rule>: (String, Span) = <l: @L> <rule: Rule> <r: @R> => (rule.to_string(), Span(l, r));
+StrSp<Rule>: Spanned<String> = <l: @L> <rule: Rule> <r: @R> => Spanned::new(rule.to_string(), Span(l, r));
