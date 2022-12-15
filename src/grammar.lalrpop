@@ -10,6 +10,11 @@ extern {
 
 pub Program = Sp<Statements>;
 
+pub Repl = {
+    Statement,
+    <Statement> ";",
+};
+
 Statements: NodeKind = {
     TrailingDelim<Statement, ";"> => NodeKind::Statements(<>),
     => NodeKind::Void
