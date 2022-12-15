@@ -1,6 +1,7 @@
 use crate::ast::Node;
 use crate::error::WalrusError;
 use crate::value::Value;
+use log::debug;
 use slotmap::{new_key_type, DenseSlotMap};
 use std::collections::HashMap;
 
@@ -18,7 +19,7 @@ type RustFunction = fn(Vec<Value>) -> Value;
 // todo: maybe instead of this, we can use a single slotmap
 // and use a different enum to differentiate between the
 // types stored by value and the types stored by key
-#[derive(Debug)]
+#[derive(Clone)]
 pub struct ValueHolder {
     dict_slotmap: DenseSlotMap<DictKey, HashMap<Value, Value>>,
     list_slotmap: DenseSlotMap<ListKey, Vec<Value>>,
@@ -36,6 +37,16 @@ impl ValueHolder {
             function_slotmap: DenseSlotMap::with_key(),
             rust_function_slotmap: DenseSlotMap::with_key(),
         }
+    }
+
+    pub fn dump(&self) {
+        debug!("Arena dump");
+
+        debug!("Dictionaries: {:?}", self.dict_slotmap);
+        debug!("Lists: {:?}", self.list_slotmap);
+        debug!("Strings: {:?}", self.string_slotmap);
+        debug!("Functions: {:?}", self.function_slotmap);
+        debug!("Rust Functions: {:?}", self.rust_function_slotmap);
     }
 
     pub fn insert_dict(&mut self, dict: HashMap<Value, Value>) -> Value {

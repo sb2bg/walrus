@@ -1,5 +1,6 @@
 use crate::arenas::ValueHolder;
 use crate::value::Value;
+use log::debug;
 use std::collections::{HashMap, VecDeque};
 
 #[derive(Debug)]
@@ -16,6 +17,18 @@ impl<'a> Scope<'a> {
             name: "global".to_string(),
             vars: Self::global_vars(arena),
             parent: None,
+        }
+    }
+
+    pub fn dump(&self) {
+        debug!("Scope dump: {}", self.name);
+
+        for (k, v) in self.vars.iter() {
+            debug!("{}: {}", k, v);
+        }
+
+        if let Some(parent) = self.parent {
+            parent.dump();
         }
     }
 

@@ -18,23 +18,43 @@ pub struct Interpreter<'a> {
     arena: ValueHolder,
 }
 
-pub type InterpreterResult<'a> = Result<Value, WalrusError>;
+pub type InterpreterResult = Result<Value, WalrusError>;
 
 // consider moving interpreter into scope instead of the other way around
 impl<'a> Interpreter<'a> {
-    pub fn new(source_ref: SourceRef<'a>, returnable: bool) -> Self {
+    pub fn new(source_ref: SourceRef<'a>) -> Self {
         let mut arena = ValueHolder::new();
 
         Self {
             scope: Scope::new(&mut arena),
             source_ref,
-            returnable,
+            returnable: false,
             arena,
         }
     }
 
+    pub fn dump(&self) {
+        debug!("Interpreter dump");
+        debug!("Returnable: {}", self.returnable);
+        self.scope.dump();
+        self.arena.dump();
+    }
+
     pub fn source_ref(&self) -> SourceRef<'a> {
         self.source_ref
+    }
+
+    pub fn set_source_ref(&mut self, source_ref: SourceRef<'a>) {
+        self.source_ref = source_ref;
+    }
+
+    pub fn create_child(&'a self, name: String) -> Interpreter {
+        Self {
+            scope: self.scope.new_child(name),
+            source_ref: self.source_ref,
+            returnable: true,
+            arena: self.arena.clone(), // todo: is this correct?
+        }
     }
 
     pub fn interpret(&mut self, node: Node) -> InterpreterResult {
@@ -182,7 +202,7 @@ impl<'a> Interpreter<'a> {
         condition: Node,
         body: Node,
         otherwise: Option<Box<Node>>,
-    ) -> InterpreterResult<'a> {
+    ) -> InterpreterResult {
         let cond_span = *condition.span();
         let condition = self.interpret(condition)?;
 
@@ -195,7 +215,7 @@ impl<'a> Interpreter<'a> {
         Ok(Value::Void)
     }
 
-    fn visit_while(&mut self, condition: Node, body: Node) -> InterpreterResult<'a> {
+    fn visit_while(&mut self, condition: Node, body: Node) -> InterpreterResult {
         // this is more complicated because we need to be able to repeatedly
         // evaluate the condition and body, which involves a lot of cloning
         // that we should avoid if possible. we could store our nodes in an
@@ -260,7 +280,7 @@ impl<'a> Interpreter<'a> {
         Ok(Value::Void)
     }
 
-    fn add(&mut self, left: Value, right: Value, span: Span) -> InterpreterResult<'a> {
+    fn add(&mut self, left: Value, right: Value, span: Span) -> InterpreterResult {
         match (left, right) {
             (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a + b)),
             (Value::Float(FloatOrd(a)), Value::Float(FloatOrd(b))) => {
@@ -275,7 +295,7 @@ impl<'a> Interpreter<'a> {
         }
     }
 
-    fn sub(&self, left: Value, right: Value, span: Span) -> InterpreterResult<'a> {
+    fn sub(&self, left: Value, right: Value, span: Span) -> InterpreterResult {
         match (left, right) {
             (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a - b)),
             (Value::Float(FloatOrd(a)), Value::Float(FloatOrd(b))) => {
@@ -285,7 +305,7 @@ impl<'a> Interpreter<'a> {
         }
     }
 
-    fn mul(&self, left: Value, right: Value, span: Span) -> InterpreterResult<'a> {
+    fn mul(&self, left: Value, right: Value, span: Span) -> InterpreterResult {
         match (left, right) {
             (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a * b)),
             (Value::Float(FloatOrd(a)), Value::Float(FloatOrd(b))) => {
@@ -295,7 +315,7 @@ impl<'a> Interpreter<'a> {
         }
     }
 
-    fn div(&self, left: Value, right: Value, span: Span) -> InterpreterResult<'a> {
+    fn div(&self, left: Value, right: Value, span: Span) -> InterpreterResult {
         match (left, right) {
             (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a / b)),
             (Value::Float(FloatOrd(a)), Value::Float(FloatOrd(b))) => {
@@ -305,7 +325,7 @@ impl<'a> Interpreter<'a> {
         }
     }
 
-    fn rem(&self, left: Value, right: Value, span: Span) -> InterpreterResult<'a> {
+    fn rem(&self, left: Value, right: Value, span: Span) -> InterpreterResult {
         match (left, right) {
             (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a % b)),
             (Value::Float(FloatOrd(a)), Value::Float(FloatOrd(b))) => {
@@ -315,7 +335,7 @@ impl<'a> Interpreter<'a> {
         }
     }
 
-    fn pow(&self, left: Value, right: Value, span: Span) -> InterpreterResult<'a> {
+    fn pow(&self, left: Value, right: Value, span: Span) -> InterpreterResult {
         match (left, right) {
             (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a.pow(b as u32))),
             (Value::Float(FloatOrd(a)), Value::Float(FloatOrd(b))) => {
@@ -325,7 +345,7 @@ impl<'a> Interpreter<'a> {
         }
     }
 
-    fn neg(&self, value: Value, span: Span) -> InterpreterResult<'a> {
+    fn neg(&self, value: Value, span: Span) -> InterpreterResult {
         match value {
             Value::Int(a) => Ok(Value::Int(-a)),
             Value::Float(FloatOrd(a)) => Ok(Value::Float(FloatOrd(-a))),
@@ -339,15 +359,15 @@ impl<'a> Interpreter<'a> {
         }
     }
 
-    fn equal(&self, left: Value, right: Value) -> InterpreterResult<'a> {
+    fn equal(&self, left: Value, right: Value) -> InterpreterResult {
         Ok(Value::Bool(left == right))
     }
 
-    fn not_equal(&self, left: Value, right: Value) -> InterpreterResult<'a> {
+    fn not_equal(&self, left: Value, right: Value) -> InterpreterResult {
         Ok(Value::Bool(left != right))
     }
 
-    fn less(&self, left: Value, right: Value, span: Span) -> InterpreterResult<'a> {
+    fn less(&self, left: Value, right: Value, span: Span) -> InterpreterResult {
         match (left, right) {
             (Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a < b)),
             (Value::Float(FloatOrd(a)), Value::Float(FloatOrd(b))) => Ok(Value::Bool(a < b)),
@@ -355,7 +375,7 @@ impl<'a> Interpreter<'a> {
         }
     }
 
-    fn less_equal(&self, left: Value, right: Value, span: Span) -> InterpreterResult<'a> {
+    fn less_equal(&self, left: Value, right: Value, span: Span) -> InterpreterResult {
         match (left, right) {
             (Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a <= b)),
             (Value::Float(FloatOrd(a)), Value::Float(FloatOrd(b))) => Ok(Value::Bool(a <= b)),
@@ -363,7 +383,7 @@ impl<'a> Interpreter<'a> {
         }
     }
 
-    fn greater(&self, left: Value, right: Value, span: Span) -> InterpreterResult<'a> {
+    fn greater(&self, left: Value, right: Value, span: Span) -> InterpreterResult {
         match (left, right) {
             (Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a > b)),
             (Value::Float(FloatOrd(a)), Value::Float(FloatOrd(b))) => Ok(Value::Bool(a > b)),
@@ -371,7 +391,7 @@ impl<'a> Interpreter<'a> {
         }
     }
 
-    fn greater_equal(&self, left: Value, right: Value, span: Span) -> InterpreterResult<'a> {
+    fn greater_equal(&self, left: Value, right: Value, span: Span) -> InterpreterResult {
         match (left, right) {
             (Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a >= b)),
             (Value::Float(FloatOrd(a)), Value::Float(FloatOrd(b))) => Ok(Value::Bool(a >= b)),
@@ -379,21 +399,21 @@ impl<'a> Interpreter<'a> {
         }
     }
 
-    fn and(&self, left: Value, right: Value, span: Span) -> InterpreterResult<'a> {
+    fn and(&self, left: Value, right: Value, span: Span) -> InterpreterResult {
         match (left, right) {
             (Value::Bool(a), Value::Bool(b)) => Ok(Value::Bool(a && b)),
             (a, b) => Err(self.construct_err(Op::And, a, b, span)),
         }
     }
 
-    fn or(&self, left: Value, right: Value, span: Span) -> InterpreterResult<'a> {
+    fn or(&self, left: Value, right: Value, span: Span) -> InterpreterResult {
         match (left, right) {
             (Value::Bool(a), Value::Bool(b)) => Ok(Value::Bool(a || b)),
             (a, b) => Err(self.construct_err(Op::Or, a, b, span)),
         }
     }
 
-    fn not(&self, value: Value, span: Span) -> InterpreterResult<'a> {
+    fn not(&self, value: Value, span: Span) -> InterpreterResult {
         match value {
             Value::Bool(a) => Ok(Value::Bool(!a)),
             value => Err(WalrusError::InvalidUnaryOperation {
