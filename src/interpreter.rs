@@ -59,6 +59,7 @@ impl<'a> Interpreter<'a> {
             NodeKind::While(condition, body) => self.visit_while(*condition, *body),
             NodeKind::Assign(name, value) => self.visit_assign(name, *value),
             NodeKind::Reassign(ident, value, op) => self.visit_reassign(*ident, *value, op),
+            NodeKind::Print(value) => self.visit_print(*value),
             NodeKind::Throw(value) => self.visit_throw(*value, span),
             node => Err(WalrusError::UnknownError {
                 message: format!("Unknown node: {:?}", node),
@@ -256,6 +257,13 @@ impl<'a> Interpreter<'a> {
             src: self.source_ref.source().into(),
             filename: self.source_ref.filename().into(),
         })
+    }
+
+    fn visit_print(&mut self, value: Node) -> InterpreterResult {
+        let value = self.interpret(value)?;
+        println!("{}", value);
+
+        Ok(Value::Void)
     }
 
     fn add(&mut self, left: Value, right: Value, span: Span) -> InterpreterResult<'a> {

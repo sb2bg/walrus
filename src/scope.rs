@@ -43,6 +43,11 @@ impl<'a> Scope<'a> {
     }
 
     pub fn get(&self, name: &str) -> Option<Value> {
+        // todo: should this be the behavior? maybe be more explicit
+        if name == "_" {
+            return Some(Value::Void);
+        }
+
         if let Some(value) = self.vars.get(name) {
             Some(*value)
         } else {
@@ -54,6 +59,10 @@ impl<'a> Scope<'a> {
     }
 
     pub fn define(&mut self, name: String, value: Value) {
+        if name == "_" {
+            return;
+        }
+
         self.vars.insert(name, value);
     }
 
