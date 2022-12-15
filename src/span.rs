@@ -27,7 +27,26 @@ impl From<Range<usize>> for Span {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct Spanned<T> {
-    pub value: T,
-    pub span: Span,
+    value: T,
+    span: Span,
+}
+
+impl<T> Spanned<T> {
+    pub fn new(value: T, span: Span) -> Self {
+        Self { value, span }
+    }
+
+    pub fn value(&self) -> &T {
+        &self.value
+    }
+
+    pub fn into_value(self) -> T {
+        self.value
+    }
+
+    pub fn span(&self) -> Span {
+        self.span
+    }
 }
