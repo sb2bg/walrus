@@ -44,7 +44,8 @@ BinOp<Op, Next>: NodeKind = {
 };
 
 Expr = BinOp<OrOp, And>;
-And = BinOp<AndOp, MathExpr>;
+And = BinOp<AndOp, Comparison>;
+Comparison = BinOp<ComparisonOp, MathExpr>;
 MathExpr = BinOp<ExprOp, MathFactor>;
 MathFactor = BinOp<FactorOp, Unary>;
 
@@ -56,7 +57,8 @@ Unary = {
 Pow = BinOp<PowOp, Call>;
 
 Call = {
-    <e: IdentStr> <args: Paren<Comma<SpExpr>>> => NodeKind::FunctionCall(e, args),
+    <e: Sp<Ident>> <args: Paren<Comma<SpExpr>>> => NodeKind::FunctionCall(e, args), // fixme: expr
+    <e: Sp<Ident>> <args: Bracket<SpExpr>> => NodeKind::Index(e, args), // fixme: expr
     Term,
 };
 
@@ -167,7 +169,7 @@ Lambda: NodeKind = {
 };
 
 Extern: NodeKind = { // todo: make it so externs have to define a path to the function
-    "extern" <n: IdentStr> <a: Paren<Comma<IdentStr>>> => NodeKind::ExternFunctionDefinition(n, a),
+    "extern fn" <n: IdentStr> ":" <a: Comma<IdentStr>> => NodeKind::ExternFunctionDefinition(n, a),
 };
 
 Assign: NodeKind = {
