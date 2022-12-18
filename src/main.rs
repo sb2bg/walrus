@@ -15,7 +15,6 @@ use clap::Parser as ClapParser;
 use lalrpop_util::lalrpop_mod;
 use log::{error, LevelFilter};
 use simplelog::SimpleLogger;
-use std::io::Write;
 use std::path::PathBuf;
 use std::{fs, panic};
 
@@ -66,7 +65,7 @@ fn create_shell(file: Option<PathBuf>) -> WalrusResult {
                 filename: filename.to_string(),
             })?;
 
-            Program::new(&src, &filename).run()?;
+            Program::new(src, filename.into_owned()).run()?;
         }
         None => {
             Repl::new().run()?;
