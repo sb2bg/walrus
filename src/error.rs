@@ -194,6 +194,16 @@ pub enum WalrusError {
         src: String,
         filename: String,
     },
+
+    #[error("Cannot call non-function '{name}' at {}",
+        get_line(src, filename, *span)
+    )]
+    NotCallable {
+        name: String,
+        span: Span,
+        src: String,
+        filename: String,
+    },
 }
 
 pub fn parser_err_mapper(
