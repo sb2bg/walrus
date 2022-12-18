@@ -75,7 +75,7 @@ impl<'a> Interpreter<'a> {
             NodeKind::Print(value) => self.visit_print(*value),
             NodeKind::Throw(value) => self.visit_throw(*value, span),
             NodeKind::Free(value) => self.visit_free(*value),
-            NodeKind::FunctionCall(name, args) => self.visit_fn_call(name, args),
+            NodeKind::FunctionCall(name, args) => self.visit_fn_call(name, args, span),
             node => Err(WalrusError::UnknownError {
                 message: format!("Unknown node: {:?}", node),
             }),
@@ -350,7 +350,12 @@ impl<'a> Interpreter<'a> {
         Ok(ValueKind::Void)
     }
 
-    fn visit_fn_call(&mut self, name: String, args: Vec<Box<Node>>) -> InterpreterResult {
+    fn visit_fn_call(
+        &mut self,
+        name: String,
+        args: Vec<Box<Node>>,
+        span: Span,
+    ) -> InterpreterResult {
         let args = args
             .into_iter()
             .map(|arg| self.interpret(*arg))
@@ -358,7 +363,7 @@ impl<'a> Interpreter<'a> {
 
         let value = self.scope.get(&name).ok_or_else(|| UndefinedVariable {
             name: name.clone(), // todo: clone
-            span: Span::default(),
+            span,
             src: self.source_ref.source().into(),
             filename: self.source_ref.filename().into(),
         })?;
@@ -388,7 +393,7 @@ impl<'a> Interpreter<'a> {
             }
             _ => Err(WalrusError::NotCallable {
                 name,
-                span: Span::default(),
+                span,
                 src: self.source_ref.source().into(),
                 filename: self.source_ref.filename().into(),
             }),
