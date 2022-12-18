@@ -185,6 +185,15 @@ pub enum WalrusError {
 
     #[error("Invalid unicode escape sequence at {line}")]
     InvalidUnicodeEscapeSequence { line: String },
+
+    #[error("Cannot free memory not in the heap at {}",
+        get_line(src, filename, *span)
+    )]
+    FailedFree {
+        span: Span,
+        src: String,
+        filename: String,
+    },
 }
 
 pub fn parser_err_mapper(
