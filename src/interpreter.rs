@@ -20,10 +20,10 @@ pub type InterpreterResult<'a> = Result<ValueKind, WalrusError>;
 
 // consider moving interpreter into scope instead of the other way around
 impl<'a> Interpreter<'a> {
-    pub fn new(source_ref: SourceRef<'a>) -> Self {
+    pub fn new(src: &'a str, filename: &'a str) -> Self {
         Self {
             scope: Scope::new(),
-            source_ref,
+            source_ref: SourceRef::new(src, filename),
             returnable: false,
         }
     }
@@ -38,8 +38,9 @@ impl<'a> Interpreter<'a> {
         self.source_ref
     }
 
-    pub fn set_source_ref(&mut self, source_ref: SourceRef<'a>) {
-        self.source_ref = source_ref;
+    // for REPL to use
+    pub fn set_source_ref(&mut self, src: &'a str) {
+        self.source_ref = SourceRef::new(src, self.source_ref.filename());
     }
 
     pub fn create_child(&'a self, name: String) -> Interpreter {
@@ -74,6 +75,7 @@ impl<'a> Interpreter<'a> {
             NodeKind::Reassign(ident, value, op) => self.visit_reassign(ident, *value, op),
             NodeKind::Print(value) => self.visit_print(*value),
             NodeKind::Throw(value) => self.visit_throw(*value, span),
+            NodeKind::Free(value) => self.visit_free(*value),
             node => Err(WalrusError::UnknownError {
                 message: format!("Unknown node: {:?}", node),
             }),
@@ -272,7 +274,7 @@ impl<'a> Interpreter<'a> {
 
     fn visit_print(&mut self, value: Node) -> InterpreterResult {
         let value = self.interpret(value)?;
-        println!("{}", self.stringify(value).unwrap()); // fixme: unwrap
+        println!("{}", self.stringify(value)?);
 
         Ok(ValueKind::Void)
     }
@@ -280,9 +282,9 @@ impl<'a> Interpreter<'a> {
     fn stringify(&self, value: ValueKind) -> Result<String, WalrusError> {
         match value {
             ValueKind::Void => Ok("void".into()),
-            ValueKind::String(s) => Ok(self.scope.arena().get_string(s).unwrap().clone()), // fixme: unwrap
+            ValueKind::String(s) => Ok(self.scope.arena().get_string(s)?.clone()),
             ValueKind::List(l) => {
-                let list = self.scope.arena().get_list(l).unwrap();
+                let list = self.scope.arena().get_list(l)?;
                 let mut string = String::new();
 
                 string.push('[');
@@ -300,7 +302,7 @@ impl<'a> Interpreter<'a> {
                 Ok(string)
             }
             ValueKind::Dict(d) => {
-                let dict = self.scope.arena().get_dict(d).unwrap();
+                let dict = self.scope.arena().get_dict(d)?;
                 let mut string = String::new();
 
                 string.push('{');
@@ -320,17 +322,32 @@ impl<'a> Interpreter<'a> {
                 Ok(string)
             }
             ValueKind::Function(f) => {
-                let function = self.scope.arena().get_function(f).unwrap();
+                let function = self.scope.arena().get_function(f)?;
                 Ok(format!("fn {}", function.0))
             }
             ValueKind::RustFunction(f) => {
-                let function = self.scope.arena().get_rust_function(f).unwrap();
+                let function = self.scope.arena().get_rust_function(f)?;
                 Ok(format!("rust fn {:?}", function)) // fixme
             }
             ValueKind::Int(n) => Ok(n.to_string()),
             ValueKind::Float(n) => Ok(n.0.to_string()),
             ValueKind::Bool(b) => Ok(b.to_string()),
         }
+    }
+
+    fn visit_free(&mut self, value: Node) -> InterpreterResult {
+        let span = *value.span();
+        let result = self.interpret(value)?;
+
+        if !self.scope.mut_arena().free(result) {
+            Err(WalrusError::FailedFree {
+                span,
+                src: self.source_ref.source().into(),
+                filename: self.source_ref.filename().into(),
+            })?
+        }
+
+        Ok(ValueKind::Void)
     }
 
     fn add(&mut self, left: ValueKind, right: ValueKind, span: Span) -> InterpreterResult {
