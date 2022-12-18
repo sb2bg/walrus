@@ -2,13 +2,13 @@ use crate::span::{Span, Spanned};
 use float_ord::FloatOrd;
 use std::fmt::{Debug, Display, Formatter};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Node {
     pub kind: NodeKind,
     span: Span,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NodeKind {
     Statements(Vec<Box<Node>>),
     Int(i64),
@@ -22,7 +22,8 @@ pub enum NodeKind {
     Ident(String),
     Assign(String, Box<Node>),
     Reassign(Spanned<String>, Box<Node>, Op),
-    FunctionCall(String, Vec<Box<Node>>),
+    FunctionCall(Box<Node>, Vec<Box<Node>>),
+    Index(Box<Node>, Box<Node>),
     AnonFunctionDefinition(Vec<String>, Box<Node>),
     FunctionDefinition(String, Vec<String>, Box<Node>),
     ExternFunctionDefinition(String, Vec<String>),
@@ -90,6 +91,7 @@ impl Display for NodeKind {
             NodeKind::Throw(_) => write!(f, "Throw"),
             NodeKind::Try(_, _, _) => write!(f, "Try"),
             NodeKind::Free(_) => write!(f, "Free"),
+            NodeKind::Index(_, _) => write!(f, "Index"),
             NodeKind::Void => write!(f, "Void"),
         }
     }
