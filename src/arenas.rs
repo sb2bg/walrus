@@ -50,6 +50,17 @@ impl ValueHolder {
         debug!("Rust Functions: {:?}", self.rust_function_slotmap);
     }
 
+    pub fn free(&mut self, key: ValueKind) -> bool {
+        match key {
+            ValueKind::Dict(key) => self.dict_slotmap.remove(key).is_some(),
+            ValueKind::List(key) => self.list_slotmap.remove(key).is_some(),
+            ValueKind::String(key) => self.string_slotmap.remove(key).is_some(),
+            ValueKind::Function(key) => self.function_slotmap.remove(key).is_some(),
+            ValueKind::RustFunction(key) => self.rust_function_slotmap.remove(key).is_some(),
+            _ => false,
+        }
+    }
+
     pub fn insert_dict(&mut self, dict: HashMap<ValueKind, ValueKind>) -> ValueKind {
         ValueKind::Dict(self.dict_slotmap.insert(dict))
     }
