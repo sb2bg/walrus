@@ -1,6 +1,6 @@
 use crate::ast::{Node, NodeKind, Op};
 use crate::span::{Span, Spanned};
-use crate::error::{RecoveredParseError, parse_int, parse_float};
+use crate::error::{RecoveredParseError, parse_int, parse_float, escape_string};
 
 grammar;
 
@@ -80,7 +80,7 @@ Float: NodeKind = {
 };
 
 String: NodeKind = {
-	r#""[^"]*""# => NodeKind::String(<>[1..<>.len() - 1].to_string()),
+	StrSp<r#""[^"]*""#> =>? escape_string(<>),
 };
 
 Bool: NodeKind = {

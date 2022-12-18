@@ -5,12 +5,15 @@ use git_version::git_version;
 use lalrpop_util::lexer::Token;
 use lalrpop_util::ParseError;
 use line_span::{find_line_end, find_line_start};
+use snailquote::{unescape, UnescapeError};
 use std::cmp::min;
 use std::str::FromStr;
 use thiserror::Error;
 
 pub enum RecoveredParseError {
     NumberTooLarge(String, Span),
+    InvalidEscapeSequence(String, Span),
+    InvalidUnicodeEscapeSequence(Span),
 }
 
 pub fn parse_int<T>(
@@ -48,6 +51,26 @@ pub fn parse_float<T>(
     })?;
 
     Ok(NodeKind::Float(FloatOrd(num)))
+}
+
+pub fn escape_string<T>(
+    spanned: Spanned<String>,
+) -> Result<NodeKind, ParseError<usize, T, RecoveredParseError>> {
+    match unescape(&spanned.value()) {
+        Ok(s) => Ok(NodeKind::String(s)),
+        Err(err) => {
+            let span = spanned.span();
+
+            match err {
+                UnescapeError::InvalidEscape { escape, .. } => Err(ParseError::User {
+                    error: RecoveredParseError::InvalidEscapeSequence(escape, span),
+                }),
+                UnescapeError::InvalidUnicode { .. } => Err(ParseError::User {
+                    error: RecoveredParseError::InvalidUnicodeEscapeSequence(span),
+                }),
+            }
+        }
+    }
 }
 
 // todo: accept &str instead of String, and source_refs when possible
@@ -156,6 +179,12 @@ pub enum WalrusError {
         src: String,
         filename: String,
     },
+
+    #[error("Invalid escape sequence '{sequence}' at {line}")]
+    InvalidEscapeSequence { sequence: String, line: String },
+
+    #[error("Invalid unicode escape sequence at {line}")]
+    InvalidUnicodeEscapeSequence { line: String },
 }
 
 pub fn parser_err_mapper(
@@ -190,8 +219,19 @@ pub fn parser_err_mapper(
         ParseError::User { error } => match error {
             RecoveredParseError::NumberTooLarge(number, span) => WalrusError::NumberTooLarge {
                 number,
-                line: get_line(source, filename, span.into()),
+                line: get_line(source, filename, span),
             },
+            RecoveredParseError::InvalidEscapeSequence(sequence, span) => {
+                WalrusError::InvalidEscapeSequence {
+                    sequence,
+                    line: get_line(source, filename, span),
+                }
+            }
+            RecoveredParseError::InvalidUnicodeEscapeSequence(span) => {
+                WalrusError::InvalidUnicodeEscapeSequence {
+                    line: get_line(source, filename, span),
+                }
+            }
         },
     }
 }
