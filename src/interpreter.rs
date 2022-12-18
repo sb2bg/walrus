@@ -16,9 +16,8 @@ pub struct Interpreter<'a> {
     returnable: bool,
 }
 
-pub type InterpreterResult<'a> = Result<ValueKind, WalrusError>;
+pub type InterpreterResult = Result<ValueKind, WalrusError>;
 
-// consider moving interpreter into scope instead of the other way around
 impl<'a> Interpreter<'a> {
     pub fn new(src: &'a str, filename: &'a str) -> Self {
         Self {
@@ -76,6 +75,7 @@ impl<'a> Interpreter<'a> {
             NodeKind::Print(value) => self.visit_print(*value),
             NodeKind::Throw(value) => self.visit_throw(*value, span),
             NodeKind::Free(value) => self.visit_free(*value),
+            NodeKind::FunctionCall(name, args) => self.visit_fn_call(name, args),
             node => Err(WalrusError::UnknownError {
                 message: format!("Unknown node: {:?}", node),
             }),
@@ -350,6 +350,51 @@ impl<'a> Interpreter<'a> {
         Ok(ValueKind::Void)
     }
 
+    fn visit_fn_call(&mut self, name: String, args: Vec<Box<Node>>) -> InterpreterResult {
+        let args = args
+            .into_iter()
+            .map(|arg| self.interpret(*arg))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let value = self.scope.get(&name).ok_or_else(|| UndefinedVariable {
+            name: name.clone(), // todo: clone
+            span: Span::default(),
+            src: self.source_ref.source().into(),
+            filename: self.source_ref.filename().into(),
+        })?;
+
+        match value {
+            ValueKind::Function(f) => {
+                let function = self.scope.arena().get_function(f)?;
+                // fixme: when sub_interpreter gets dropped, it frees values in the arena causing
+                // valid memory addresses to become invalid. maybe we only want one arena that is
+                // shared between all interpreters and owned by the top level interpreter using
+                // a cow, or maybe we want to use a reference counted arena.
+                let mut sub_interpreter = self.create_child(name.clone()); // todo: clone
+
+                for (name, value) in function.1.iter().zip(args) {
+                    sub_interpreter.scope.define(name.clone(), value); // todo: clone
+                }
+
+                // todo: I'm pretty sure this clone is required unless I want
+                // to do some crazy optimization stuff such as putting it in an
+                // arena but that's a lot of work for a small optimization
+                // this comment is very similar to the one in visit_while
+                sub_interpreter.interpret(function.2.clone())
+            }
+            ValueKind::RustFunction(f) => {
+                let function = self.scope.arena().get_rust_function(f)?;
+                function(args)
+            }
+            _ => Err(WalrusError::NotCallable {
+                name,
+                span: Span::default(),
+                src: self.source_ref.source().into(),
+                filename: self.source_ref.filename().into(),
+            }),
+        }
+    }
+
     fn add(&mut self, left: ValueKind, right: ValueKind, span: Span) -> InterpreterResult {
         match (left, right) {
             (ValueKind::Int(a), ValueKind::Int(b)) => Ok(ValueKind::Int(a + b)),
@@ -425,7 +470,7 @@ impl<'a> Interpreter<'a> {
                 op: Op::Sub,
                 operand: value.get_type().to_string(),
                 span,
-                src: self.source_ref.filename().to_string(),
+                src: self.source_ref.source().to_string(),
                 filename: self.source_ref.filename().to_string(),
             }),
         }
@@ -500,7 +545,7 @@ impl<'a> Interpreter<'a> {
                 op: Op::Not,
                 operand: value.get_type().to_string(),
                 span,
-                src: self.source_ref.filename().to_string(),
+                src: self.source_ref.source().to_string(),
                 filename: self.source_ref.filename().to_string(),
             }),
         }
