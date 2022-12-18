@@ -1,6 +1,6 @@
 use crate::ast::Node;
 use crate::error::WalrusError;
-use crate::value::Value;
+use crate::value::ValueKind;
 use log::debug;
 use slotmap::{new_key_type, DenseSlotMap};
 use std::collections::HashMap;
@@ -14,15 +14,16 @@ new_key_type! {
 }
 
 type ArenaResult<T> = Result<T, WalrusError>;
-type RustFunction = fn(Vec<Value>) -> Value;
+type RustFunction = fn(Vec<ValueKind>) -> ValueKind;
 
 // todo: maybe instead of this, we can use a single slotmap
 // and use a different enum to differentiate between the
 // types stored by value and the types stored by key
-#[derive(Clone)]
+// fixme: eventually this will have to be garbage collected
+#[derive(Debug, Clone)]
 pub struct ValueHolder {
-    dict_slotmap: DenseSlotMap<DictKey, HashMap<Value, Value>>,
-    list_slotmap: DenseSlotMap<ListKey, Vec<Value>>,
+    dict_slotmap: DenseSlotMap<DictKey, HashMap<ValueKind, ValueKind>>,
+    list_slotmap: DenseSlotMap<ListKey, Vec<ValueKind>>,
     string_slotmap: DenseSlotMap<StringKey, String>,
     function_slotmap: DenseSlotMap<FuncKey, (String, Vec<String>, Node)>,
     rust_function_slotmap: DenseSlotMap<RustFuncKey, RustFunction>,
@@ -49,27 +50,35 @@ impl ValueHolder {
         debug!("Rust Functions: {:?}", self.rust_function_slotmap);
     }
 
-    pub fn insert_dict(&mut self, dict: HashMap<Value, Value>) -> Value {
-        Value::Dict(self.dict_slotmap.insert(dict))
+    pub fn insert_dict(&mut self, dict: HashMap<ValueKind, ValueKind>) -> ValueKind {
+        ValueKind::Dict(self.dict_slotmap.insert(dict))
     }
 
-    pub fn insert_list(&mut self, list: Vec<Value>) -> Value {
-        Value::List(self.list_slotmap.insert(list))
+    pub fn insert_list(&mut self, list: Vec<ValueKind>) -> ValueKind {
+        ValueKind::List(self.list_slotmap.insert(list))
     }
 
-    pub fn insert_string(&mut self, string: String) -> Value {
-        Value::String(self.string_slotmap.insert(string))
+    pub fn insert_string(&mut self, string: String) -> ValueKind {
+        ValueKind::String(self.string_slotmap.insert(string))
     }
 
-    pub fn insert_function(&mut self, name: String, args: Vec<String>, body: Node) -> Value {
-        Value::Function(self.function_slotmap.insert((name, args, body)))
+    pub fn insert_function(&mut self, name: String, args: Vec<String>, body: Node) -> ValueKind {
+        ValueKind::Function(self.function_slotmap.insert((name, args, body)))
     }
 
-    pub fn get_dict(&self, key: DictKey) -> ArenaResult<&HashMap<Value, Value>> {
+    pub fn insert_rust_function(&mut self, func: RustFunction) -> ValueKind {
+        ValueKind::RustFunction(self.rust_function_slotmap.insert(func))
+    }
+
+    pub fn get_rust_function(&self, key: RustFuncKey) -> ArenaResult<&RustFunction> {
+        Self::check(self.rust_function_slotmap.get(key))
+    }
+
+    pub fn get_dict(&self, key: DictKey) -> ArenaResult<&HashMap<ValueKind, ValueKind>> {
         Self::check(self.dict_slotmap.get(key))
     }
 
-    pub fn get_list(&self, key: ListKey) -> ArenaResult<&Vec<Value>> {
+    pub fn get_list(&self, key: ListKey) -> ArenaResult<&Vec<ValueKind>> {
         Self::check(self.list_slotmap.get(key))
     }
 
@@ -79,14 +88,6 @@ impl ValueHolder {
 
     pub fn get_function(&self, key: FuncKey) -> ArenaResult<&(String, Vec<String>, Node)> {
         Self::check(self.function_slotmap.get(key))
-    }
-
-    pub fn insert_rust_function(&mut self, func: RustFunction) -> Value {
-        Value::RustFunc(self.rust_function_slotmap.insert(func))
-    }
-
-    pub fn get_rust_function(&self, key: RustFuncKey) -> ArenaResult<&RustFunction> {
-        Self::check(self.rust_function_slotmap.get(key))
     }
 
     fn check<T>(result: Option<T>) -> Result<T, WalrusError> {

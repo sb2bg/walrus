@@ -1,11 +1,10 @@
-use crate::arenas::ValueHolder;
 use crate::ast::{Node, NodeKind, Op};
 use crate::error::WalrusError;
 use crate::error::WalrusError::UndefinedVariable;
 use crate::scope::Scope;
 use crate::source_ref::SourceRef;
 use crate::span::{Span, Spanned};
-use crate::value::Value;
+use crate::value::ValueKind;
 use float_ord::FloatOrd;
 use log::debug;
 use std::collections::HashMap;
@@ -15,21 +14,17 @@ pub struct Interpreter<'a> {
     scope: Scope<'a>,
     source_ref: SourceRef<'a>,
     returnable: bool,
-    arena: ValueHolder,
 }
 
-pub type InterpreterResult = Result<Value, WalrusError>;
+pub type InterpreterResult<'a> = Result<ValueKind, WalrusError>;
 
 // consider moving interpreter into scope instead of the other way around
 impl<'a> Interpreter<'a> {
     pub fn new(source_ref: SourceRef<'a>) -> Self {
-        let mut arena = ValueHolder::new();
-
         Self {
-            scope: Scope::new(&mut arena),
+            scope: Scope::new(),
             source_ref,
             returnable: false,
-            arena,
         }
     }
 
@@ -37,7 +32,6 @@ impl<'a> Interpreter<'a> {
         debug!("Interpreter dump");
         debug!("Returnable: {}", self.returnable);
         self.scope.dump();
-        self.arena.dump();
     }
 
     pub fn source_ref(&self) -> SourceRef<'a> {
@@ -53,7 +47,6 @@ impl<'a> Interpreter<'a> {
             scope: self.scope.new_child(name),
             source_ref: self.source_ref,
             returnable: true,
-            arena: self.arena.clone(), // todo: is this correct?
         }
     }
 
@@ -65,16 +58,16 @@ impl<'a> Interpreter<'a> {
             NodeKind::Statements(nodes) => self.visit_statements(nodes),
             NodeKind::BinOp(left, op, right) => self.visit_bin_op(*left, op, *right, span),
             NodeKind::UnaryOp(op, value) => self.visit_unary_op(op, *value, span),
-            NodeKind::Int(num) => Ok(Value::Int(num)),
-            NodeKind::Float(num) => Ok(Value::Float(num)),
-            NodeKind::Bool(boolean) => Ok(Value::Bool(boolean)),
-            NodeKind::String(string) => Ok(self.arena.insert_string(string)),
+            NodeKind::Int(num) => Ok(ValueKind::Int(num)),
+            NodeKind::Float(num) => Ok(ValueKind::Float(num)),
+            NodeKind::Bool(boolean) => Ok(ValueKind::Bool(boolean)),
+            NodeKind::String(string) => Ok(self.scope.mut_arena().insert_string(string)),
             NodeKind::Dict(dict) => self.visit_dict(dict),
             NodeKind::List(list) => self.visit_list(list),
             NodeKind::FunctionDefinition(name, args, body) => self.visit_fn_def(name, args, *body),
             NodeKind::AnonFunctionDefinition(args, body) => self.visit_anon_fn_def(args, *body),
             NodeKind::Ident(ident) => self.visit_var(ident, span),
-            NodeKind::Void => Ok(Value::Void),
+            NodeKind::Void => Ok(ValueKind::Void),
             NodeKind::If(condition, then, otherwise) => self.visit_if(*condition, *then, otherwise),
             NodeKind::While(condition, body) => self.visit_while(*condition, *body),
             NodeKind::Assign(name, value) => self.visit_assign(name, *value),
@@ -113,7 +106,7 @@ impl<'a> Interpreter<'a> {
             };
         }
 
-        Ok(Value::Void)
+        Ok(ValueKind::Void)
     }
 
     fn visit_bin_op(&mut self, left: Node, op: Op, right: Node, span: Span) -> InterpreterResult {
@@ -163,7 +156,7 @@ impl<'a> Interpreter<'a> {
             map.insert(self.interpret(*key)?, self.interpret(*value)?);
         }
 
-        Ok(self.arena.insert_dict(map))
+        Ok(self.scope.mut_arena().insert_dict(map))
     }
 
     fn visit_list(&mut self, list: Vec<Box<Node>>) -> InterpreterResult {
@@ -173,19 +166,23 @@ impl<'a> Interpreter<'a> {
             vec.push(self.interpret(*node)?);
         }
 
-        Ok(self.arena.insert_list(vec))
+        Ok(self.scope.mut_arena().insert_list(vec))
     }
 
     fn visit_anon_fn_def(&mut self, args: Vec<String>, body: Node) -> InterpreterResult {
         let fn_name = format!("anon_{}", Uuid::new_v4());
-        Ok(self.arena.insert_function(fn_name, args, body))
+        Ok(self.scope.mut_arena().insert_function(fn_name, args, body))
     }
 
     fn visit_fn_def(&mut self, name: String, args: Vec<String>, body: Node) -> InterpreterResult {
-        let value = self.arena.insert_function(name.clone(), args, body);
+        let value = self
+            .scope
+            .mut_arena()
+            .insert_function(name.clone(), args, body);
+
         self.scope.define(name, value);
 
-        Ok(Value::Void)
+        Ok(ValueKind::Void)
     }
 
     fn visit_var(&self, name: String, span: Span) -> InterpreterResult {
@@ -212,7 +209,7 @@ impl<'a> Interpreter<'a> {
             self.interpret(*otherwise)?;
         }
 
-        Ok(Value::Void)
+        Ok(ValueKind::Void)
     }
 
     fn visit_while(&mut self, condition: Node, body: Node) -> InterpreterResult {
@@ -235,14 +232,14 @@ impl<'a> Interpreter<'a> {
             }
         }
 
-        Ok(Value::Void)
+        Ok(ValueKind::Void)
     }
 
     fn visit_assign(&mut self, name: String, value: Node) -> InterpreterResult {
         let value = self.interpret(value)?;
         self.scope.define(name, value);
 
-        Ok(Value::Void)
+        Ok(ValueKind::Void)
     }
 
     fn visit_reassign(&mut self, ident: Spanned<String>, value: Node, op: Op) -> InterpreterResult {
@@ -259,7 +256,7 @@ impl<'a> Interpreter<'a> {
             });
         }
 
-        Ok(Value::Void)
+        Ok(ValueKind::Void)
     }
 
     fn visit_throw(&mut self, value: Node, span: Span) -> InterpreterResult {
@@ -275,80 +272,138 @@ impl<'a> Interpreter<'a> {
 
     fn visit_print(&mut self, value: Node) -> InterpreterResult {
         let value = self.interpret(value)?;
-        println!("{}", value);
+        println!("{}", self.stringify(value).unwrap()); // fixme: unwrap
 
-        Ok(Value::Void)
+        Ok(ValueKind::Void)
     }
 
-    fn add(&mut self, left: Value, right: Value, span: Span) -> InterpreterResult {
-        match (left, right) {
-            (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a + b)),
-            (Value::Float(FloatOrd(a)), Value::Float(FloatOrd(b))) => {
-                Ok(Value::Float(FloatOrd(a + b)))
+    fn stringify(&self, value: ValueKind) -> Result<String, WalrusError> {
+        match value {
+            ValueKind::Void => Ok("void".into()),
+            ValueKind::String(s) => Ok(self.scope.arena().get_string(s).unwrap().clone()), // fixme: unwrap
+            ValueKind::List(l) => {
+                let list = self.scope.arena().get_list(l).unwrap();
+                let mut string = String::new();
+
+                string.push('[');
+
+                for (i, value) in list.iter().enumerate() {
+                    string.push_str(&self.stringify(*value)?);
+
+                    if i != list.len() - 1 {
+                        string.push_str(", ");
+                    }
+                }
+
+                string.push(']');
+
+                Ok(string)
             }
-            (Value::String(a), Value::String(b)) => {
-                let a_str = self.arena.get_string(a)?;
-                let b_str = self.arena.get_string(b)?;
-                Ok(self.arena.insert_string(a_str.clone() + b_str.as_str()))
+            ValueKind::Dict(d) => {
+                let dict = self.scope.arena().get_dict(d).unwrap();
+                let mut string = String::new();
+
+                string.push('{');
+
+                for (i, (key, value)) in dict.iter().enumerate() {
+                    string.push_str(&self.stringify(*key)?);
+                    string.push_str(": ");
+                    string.push_str(&self.stringify(*value)?);
+
+                    if i != dict.len() - 1 {
+                        string.push_str(", ");
+                    }
+                }
+
+                string.push('}');
+
+                Ok(string)
+            }
+            ValueKind::Function(f) => {
+                let function = self.scope.arena().get_function(f).unwrap();
+                Ok(format!("fn {}", function.0))
+            }
+            ValueKind::RustFunction(f) => {
+                let function = self.scope.arena().get_rust_function(f).unwrap();
+                Ok(format!("rust fn {:?}", function)) // fixme
+            }
+            ValueKind::Int(n) => Ok(n.to_string()),
+            ValueKind::Float(n) => Ok(n.0.to_string()),
+            ValueKind::Bool(b) => Ok(b.to_string()),
+        }
+    }
+
+    fn add(&mut self, left: ValueKind, right: ValueKind, span: Span) -> InterpreterResult {
+        match (left, right) {
+            (ValueKind::Int(a), ValueKind::Int(b)) => Ok(ValueKind::Int(a + b)),
+            (ValueKind::Float(FloatOrd(a)), ValueKind::Float(FloatOrd(b))) => {
+                Ok(ValueKind::Float(FloatOrd(a + b)))
+            }
+            (ValueKind::String(a), ValueKind::String(b)) => {
+                let a_str = self.scope.arena().get_string(a)?.clone();
+                let b_str = self.scope.arena().get_string(b)?.clone();
+                // above clones required because we need to move the strings out of the arena
+
+                Ok(self.scope.mut_arena().insert_string(a_str + b_str.as_str()))
             }
             (a, b) => Err(self.construct_err(Op::Add, a, b, span)),
         }
     }
 
-    fn sub(&self, left: Value, right: Value, span: Span) -> InterpreterResult {
+    fn sub(&self, left: ValueKind, right: ValueKind, span: Span) -> InterpreterResult {
         match (left, right) {
-            (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a - b)),
-            (Value::Float(FloatOrd(a)), Value::Float(FloatOrd(b))) => {
-                Ok(Value::Float(FloatOrd(a - b)))
+            (ValueKind::Int(a), ValueKind::Int(b)) => Ok(ValueKind::Int(a - b)),
+            (ValueKind::Float(FloatOrd(a)), ValueKind::Float(FloatOrd(b))) => {
+                Ok(ValueKind::Float(FloatOrd(a - b)))
             }
             (a, b) => Err(self.construct_err(Op::Sub, a, b, span)),
         }
     }
 
-    fn mul(&self, left: Value, right: Value, span: Span) -> InterpreterResult {
+    fn mul(&self, left: ValueKind, right: ValueKind, span: Span) -> InterpreterResult {
         match (left, right) {
-            (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a * b)),
-            (Value::Float(FloatOrd(a)), Value::Float(FloatOrd(b))) => {
-                Ok(Value::Float(FloatOrd(a * b)))
+            (ValueKind::Int(a), ValueKind::Int(b)) => Ok(ValueKind::Int(a * b)),
+            (ValueKind::Float(FloatOrd(a)), ValueKind::Float(FloatOrd(b))) => {
+                Ok(ValueKind::Float(FloatOrd(a * b)))
             }
             (a, b) => Err(self.construct_err(Op::Mul, a, b, span)),
         }
     }
 
-    fn div(&self, left: Value, right: Value, span: Span) -> InterpreterResult {
+    fn div(&self, left: ValueKind, right: ValueKind, span: Span) -> InterpreterResult {
         match (left, right) {
-            (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a / b)),
-            (Value::Float(FloatOrd(a)), Value::Float(FloatOrd(b))) => {
-                Ok(Value::Float(FloatOrd(a / b)))
+            (ValueKind::Int(a), ValueKind::Int(b)) => Ok(ValueKind::Int(a / b)),
+            (ValueKind::Float(FloatOrd(a)), ValueKind::Float(FloatOrd(b))) => {
+                Ok(ValueKind::Float(FloatOrd(a / b)))
             }
             (a, b) => Err(self.construct_err(Op::Div, a, b, span)),
         }
     }
 
-    fn rem(&self, left: Value, right: Value, span: Span) -> InterpreterResult {
+    fn rem(&self, left: ValueKind, right: ValueKind, span: Span) -> InterpreterResult {
         match (left, right) {
-            (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a % b)),
-            (Value::Float(FloatOrd(a)), Value::Float(FloatOrd(b))) => {
-                Ok(Value::Float(FloatOrd(a % b)))
+            (ValueKind::Int(a), ValueKind::Int(b)) => Ok(ValueKind::Int(a % b)),
+            (ValueKind::Float(FloatOrd(a)), ValueKind::Float(FloatOrd(b))) => {
+                Ok(ValueKind::Float(FloatOrd(a % b)))
             }
             (a, b) => Err(self.construct_err(Op::Mod, a, b, span)),
         }
     }
 
-    fn pow(&self, left: Value, right: Value, span: Span) -> InterpreterResult {
+    fn pow(&self, left: ValueKind, right: ValueKind, span: Span) -> InterpreterResult {
         match (left, right) {
-            (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a.pow(b as u32))),
-            (Value::Float(FloatOrd(a)), Value::Float(FloatOrd(b))) => {
-                Ok(Value::Float(FloatOrd(a.powf(b))))
+            (ValueKind::Int(a), ValueKind::Int(b)) => Ok(ValueKind::Int(a.pow(b as u32))),
+            (ValueKind::Float(FloatOrd(a)), ValueKind::Float(FloatOrd(b))) => {
+                Ok(ValueKind::Float(FloatOrd(a.powf(b))))
             }
             (a, b) => Err(self.construct_err(Op::Pow, a, b, span)),
         }
     }
 
-    fn neg(&self, value: Value, span: Span) -> InterpreterResult {
+    fn neg(&self, value: ValueKind, span: Span) -> InterpreterResult {
         match value {
-            Value::Int(a) => Ok(Value::Int(-a)),
-            Value::Float(FloatOrd(a)) => Ok(Value::Float(FloatOrd(-a))),
+            ValueKind::Int(a) => Ok(ValueKind::Int(-a)),
+            ValueKind::Float(FloatOrd(a)) => Ok(ValueKind::Float(FloatOrd(-a))),
             value => Err(WalrusError::InvalidUnaryOperation {
                 op: Op::Sub,
                 operand: value.get_type().to_string(),
@@ -359,63 +414,71 @@ impl<'a> Interpreter<'a> {
         }
     }
 
-    fn equal(&self, left: Value, right: Value) -> InterpreterResult {
-        Ok(Value::Bool(left == right))
+    fn equal(&self, left: ValueKind, right: ValueKind) -> InterpreterResult {
+        Ok(ValueKind::Bool(left == right))
     }
 
-    fn not_equal(&self, left: Value, right: Value) -> InterpreterResult {
-        Ok(Value::Bool(left != right))
+    fn not_equal(&self, left: ValueKind, right: ValueKind) -> InterpreterResult {
+        Ok(ValueKind::Bool(left != right))
     }
 
-    fn less(&self, left: Value, right: Value, span: Span) -> InterpreterResult {
+    fn less(&self, left: ValueKind, right: ValueKind, span: Span) -> InterpreterResult {
         match (left, right) {
-            (Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a < b)),
-            (Value::Float(FloatOrd(a)), Value::Float(FloatOrd(b))) => Ok(Value::Bool(a < b)),
+            (ValueKind::Int(a), ValueKind::Int(b)) => Ok(ValueKind::Bool(a < b)),
+            (ValueKind::Float(FloatOrd(a)), ValueKind::Float(FloatOrd(b))) => {
+                Ok(ValueKind::Bool(a < b))
+            }
             (a, b) => Err(self.construct_err(Op::Less, a, b, span)),
         }
     }
 
-    fn less_equal(&self, left: Value, right: Value, span: Span) -> InterpreterResult {
+    fn less_equal(&self, left: ValueKind, right: ValueKind, span: Span) -> InterpreterResult {
         match (left, right) {
-            (Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a <= b)),
-            (Value::Float(FloatOrd(a)), Value::Float(FloatOrd(b))) => Ok(Value::Bool(a <= b)),
+            (ValueKind::Int(a), ValueKind::Int(b)) => Ok(ValueKind::Bool(a <= b)),
+            (ValueKind::Float(FloatOrd(a)), ValueKind::Float(FloatOrd(b))) => {
+                Ok(ValueKind::Bool(a <= b))
+            }
             (a, b) => Err(self.construct_err(Op::LessEqual, a, b, span)),
         }
     }
 
-    fn greater(&self, left: Value, right: Value, span: Span) -> InterpreterResult {
+    fn greater(&self, left: ValueKind, right: ValueKind, span: Span) -> InterpreterResult {
         match (left, right) {
-            (Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a > b)),
-            (Value::Float(FloatOrd(a)), Value::Float(FloatOrd(b))) => Ok(Value::Bool(a > b)),
+            (ValueKind::Int(a), ValueKind::Int(b)) => Ok(ValueKind::Bool(a > b)),
+            (ValueKind::Float(FloatOrd(a)), ValueKind::Float(FloatOrd(b))) => {
+                Ok(ValueKind::Bool(a > b))
+            }
             (a, b) => Err(self.construct_err(Op::Greater, a, b, span)),
         }
     }
 
-    fn greater_equal(&self, left: Value, right: Value, span: Span) -> InterpreterResult {
+    fn greater_equal(&self, left: ValueKind, right: ValueKind, span: Span) -> InterpreterResult {
         match (left, right) {
-            (Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a >= b)),
-            (Value::Float(FloatOrd(a)), Value::Float(FloatOrd(b))) => Ok(Value::Bool(a >= b)),
+            (ValueKind::Int(a), ValueKind::Int(b)) => Ok(ValueKind::Bool(a >= b)),
+            (ValueKind::Float(FloatOrd(a)), ValueKind::Float(FloatOrd(b))) => {
+                Ok(ValueKind::Bool(a >= b))
+            }
             (a, b) => Err(self.construct_err(Op::GreaterEqual, a, b, span)),
         }
     }
 
-    fn and(&self, left: Value, right: Value, span: Span) -> InterpreterResult {
+    fn and(&self, left: ValueKind, right: ValueKind, span: Span) -> InterpreterResult {
         match (left, right) {
-            (Value::Bool(a), Value::Bool(b)) => Ok(Value::Bool(a && b)),
+            (ValueKind::Bool(a), ValueKind::Bool(b)) => Ok(ValueKind::Bool(a && b)),
             (a, b) => Err(self.construct_err(Op::And, a, b, span)),
         }
     }
 
-    fn or(&self, left: Value, right: Value, span: Span) -> InterpreterResult {
+    fn or(&self, left: ValueKind, right: ValueKind, span: Span) -> InterpreterResult {
         match (left, right) {
-            (Value::Bool(a), Value::Bool(b)) => Ok(Value::Bool(a || b)),
+            (ValueKind::Bool(a), ValueKind::Bool(b)) => Ok(ValueKind::Bool(a || b)),
             (a, b) => Err(self.construct_err(Op::Or, a, b, span)),
         }
     }
 
-    fn not(&self, value: Value, span: Span) -> InterpreterResult {
+    fn not(&self, value: ValueKind, span: Span) -> InterpreterResult {
         match value {
-            Value::Bool(a) => Ok(Value::Bool(!a)),
+            ValueKind::Bool(a) => Ok(ValueKind::Bool(!a)),
             value => Err(WalrusError::InvalidUnaryOperation {
                 op: Op::Not,
                 operand: value.get_type().to_string(),
@@ -426,9 +489,9 @@ impl<'a> Interpreter<'a> {
         }
     }
 
-    fn is_truthy(&self, value: Value, span: Span) -> Result<bool, WalrusError> {
+    fn is_truthy(&self, value: ValueKind, span: Span) -> Result<bool, WalrusError> {
         match value {
-            Value::Bool(b) => Ok(b),
+            ValueKind::Bool(b) => Ok(b),
             value => Err(WalrusError::TypeMismatch {
                 expected: "bool".to_string(),
                 found: value.get_type().to_string(),
@@ -439,7 +502,7 @@ impl<'a> Interpreter<'a> {
         }
     }
 
-    fn construct_err(&self, op: Op, left: Value, right: Value, span: Span) -> WalrusError {
+    fn construct_err(&self, op: Op, left: ValueKind, right: ValueKind, span: Span) -> WalrusError {
         WalrusError::InvalidOperation {
             op,
             left: left.get_type().to_string(),

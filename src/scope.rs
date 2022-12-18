@@ -1,5 +1,5 @@
 use crate::arenas::ValueHolder;
-use crate::value::Value;
+use crate::value::ValueKind;
 use log::debug;
 use std::collections::{HashMap, VecDeque};
 
@@ -7,20 +7,24 @@ use std::collections::{HashMap, VecDeque};
 pub struct Scope<'a> {
     name: String,
     // todo: add line and file name
-    vars: HashMap<String, Value>,
+    vars: HashMap<String, ValueKind>,
+    arena: ValueHolder,
     parent: Option<&'a Scope<'a>>,
 }
 
 impl<'a> Scope<'a> {
-    pub fn new(arena: &mut ValueHolder) -> Self {
+    pub fn new() -> Self {
         Self {
             name: "global".to_string(),
-            vars: Self::global_vars(arena),
+            vars: HashMap::new(),
             parent: None,
+            arena: ValueHolder::new(),
         }
     }
 
     pub fn dump(&self) {
+        self.arena.dump();
+
         debug!("Scope dump: {}", self.name);
 
         for (k, v) in self.vars.iter() {
@@ -32,19 +36,12 @@ impl<'a> Scope<'a> {
         }
     }
 
-    // todo: I want this to be behind an import but I'm not sure how to do that currently
-    fn global_vars(arena: &mut ValueHolder) -> HashMap<String, Value> {
-        let mut vars = HashMap::new();
+    pub fn mut_arena(&mut self) -> &mut ValueHolder {
+        &mut self.arena
+    }
 
-        vars.insert(
-            "print".to_string(),
-            arena.insert_rust_function(|args| {
-                println!("{:?}", args); // todo: make this print what it should
-                Value::Void
-            }),
-        );
-
-        vars
+    pub fn arena(&self) -> &ValueHolder {
+        &self.arena
     }
 
     pub fn new_child(&'a self, name: String) -> Self {
@@ -52,13 +49,14 @@ impl<'a> Scope<'a> {
             name,
             vars: HashMap::new(),
             parent: Some(self),
+            arena: self.arena.clone(), // fixme: eventually we just want to borrow the arena
         }
     }
 
-    pub fn get(&self, name: &str) -> Option<Value> {
+    pub fn get(&self, name: &str) -> Option<ValueKind> {
         // todo: should this be the behavior? maybe be more explicit
         if name == "_" {
-            return Some(Value::Void);
+            return Some(ValueKind::Void);
         }
 
         if let Some(value) = self.vars.get(name) {
@@ -71,7 +69,7 @@ impl<'a> Scope<'a> {
         }
     }
 
-    pub fn define(&mut self, name: String, value: Value) {
+    pub fn define(&mut self, name: String, value: ValueKind) {
         if name == "_" {
             return;
         }
@@ -79,7 +77,7 @@ impl<'a> Scope<'a> {
         self.vars.insert(name, value);
     }
 
-    pub fn reassign(&mut self, name: String, value: Value) -> bool {
+    pub fn reassign(&mut self, name: String, value: ValueKind) -> bool {
         if self.vars.contains_key(&name) {
             self.define(name, value);
             true
