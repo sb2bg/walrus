@@ -1,6 +1,6 @@
 use std::ops::Range;
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Copy, Clone, Hash)] // todo: remove PartialEq, Eq, Hash, PartialOrd, Ord
+#[derive(Debug, PartialEq, Eq, Copy, Clone)]
 pub struct Span(pub usize, pub usize);
 
 impl Span {
@@ -27,7 +27,7 @@ impl From<Range<usize>> for Span {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Spanned<T> {
     value: T,
     span: Span,
