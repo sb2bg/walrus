@@ -43,8 +43,30 @@ BinOp<Op, Next>: NodeKind = {
     Next,
 };
 
-Expr: NodeKind = BinOp<ExprOp, Factor>;
-Factor: NodeKind = BinOp<FactorOp, Term>;
+Expr: NodeKind = BinOp<ComparisonOp, AddSub>;
+AddSub: NodeKind = BinOp<ExprOp, Factor>;
+Factor: NodeKind = BinOp<FactorOp, Unary>;
+
+Unary: NodeKind = {
+    <o: UnaryOp> <e: Sp<Unary>> => NodeKind::UnaryOp(o, e),
+    Pow,
+};
+
+Pow: NodeKind = BinOp<PowOp, Call>;
+
+Call: NodeKind = {
+    <e: IdentStr> <args: Paren<Comma<SpExpr>>> => NodeKind::FunctionCall(e, args),
+    Term,
+};
+
+ComparisonOp: Op = {
+    "==" => Op::Equal,
+    "!=" => Op::NotEqual,
+    "<" => Op::Less,
+    ">" => Op::Greater,
+    "<=" => Op::LessEqual,
+    ">=" => Op::GreaterEqual,
+};
 
 ExprOp: Op = {
     "+" => Op::Add,
@@ -54,6 +76,16 @@ ExprOp: Op = {
 FactorOp: Op = {
     "*" => Op::Mul,
     "/" => Op::Div,
+    "%" => Op::Mod,
+};
+
+UnaryOp: Op = {
+    "-" => Op::Sub,
+    "not" => Op::Not,
+};
+
+PowOp: Op = {
+    "**" => Op::Pow,
 };
 
 Term: NodeKind = {
