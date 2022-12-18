@@ -122,16 +122,16 @@ impl Display for Op {
             Op::Add => write!(f, "+"),
             Op::Sub => write!(f, "-"),
             Op::Mod => write!(f, "%"),
-            Op::Pow => write!(f, "^"),
-            Op::Not => write!(f, "!"),
+            Op::Pow => write!(f, "**"),
+            Op::Not => write!(f, "not"),
             Op::Equal => write!(f, "=="),
             Op::NotEqual => write!(f, "!="),
             Op::Greater => write!(f, ">"),
             Op::GreaterEqual => write!(f, ">="),
             Op::Less => write!(f, "<"),
             Op::LessEqual => write!(f, "<="),
-            Op::And => write!(f, "&&"),
-            Op::Or => write!(f, "||"),
+            Op::And => write!(f, "and"),
+            Op::Or => write!(f, "or"),
         }
     }
 }
