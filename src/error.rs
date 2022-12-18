@@ -195,11 +195,64 @@ pub enum WalrusError {
         filename: String,
     },
 
-    #[error("Cannot call non-function '{name}' at {}",
+    #[error("Cannot call non-function '{value}' at {}",
         get_line(src, filename, *span)
     )]
     NotCallable {
+        value: String,
+        span: Span,
+        src: String,
+        filename: String,
+    },
+
+    #[error("Function '{name}' expected {expected} arg(s) but got {got} arg(s) at {}",
+        get_line(src, filename, *span)
+    )]
+    InvalidArgCount {
         name: String,
+        expected: usize,
+        got: usize,
+        span: Span,
+        src: String,
+        filename: String,
+    },
+
+    #[error("Index {index} out of bounds for object with len {len} at {}",
+        get_line(src, filename, *span)
+    )]
+    IndexOutOfBounds {
+        index: usize,
+        len: usize,
+        span: Span,
+        src: String,
+        filename: String,
+    },
+
+    #[error("Cannot index non-indexable type '{value}' at {}",
+        get_line(src, filename, *span)
+    )]
+    NotIndexable {
+        value: String,
+        span: Span,
+        src: String,
+        filename: String,
+    },
+
+    #[error("Cannot index type '{non_indexable}' with type '{index_type}' at {}",
+        get_line(src, filename, *span)
+    )]
+    InvalidIndexType {
+        non_indexable: String,
+        index_type: String,
+        span: Span,
+        src: String,
+        filename: String,
+    },
+
+    #[error("Attempted to access released memory at {}. This is either a bug in the interpreter or you freed memory allocated by the interpreter.",
+        get_line(src, filename, *span)
+    )]
+    AccessReleasedMemory {
         span: Span,
         src: String,
         filename: String,
