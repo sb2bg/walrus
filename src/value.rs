@@ -5,7 +5,7 @@ use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::Hash;
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub struct Value<'a> {
     kind: ValueKind,
     scope: &'a Scope<'a>,
