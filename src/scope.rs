@@ -8,6 +8,7 @@ pub struct Scope<'a> {
     name: String,
     // todo: add line and file name
     vars: HashMap<String, ValueKind>,
+    // todo: can I use a cow to have the ValueHolder held by the top level scope and reference it from the child scopes?
     arena: ValueHolder,
     parent: Option<&'a Scope<'a>>,
 }
