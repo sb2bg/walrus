@@ -1,5 +1,6 @@
 use crate::ast::Node;
 use crate::error::WalrusError;
+use crate::interpreter::InterpreterResult;
 use crate::value::ValueKind;
 use log::debug;
 use slotmap::{new_key_type, DenseSlotMap};
@@ -14,7 +15,7 @@ new_key_type! {
 }
 
 type ArenaResult<T> = Result<T, WalrusError>;
-type RustFunction = fn(Vec<ValueKind>) -> ValueKind;
+type RustFunction = fn(Vec<ValueKind>) -> InterpreterResult;
 
 // todo: maybe instead of this, we can use a single slotmap
 // and use a different enum to differentiate between the
