@@ -75,7 +75,8 @@ impl<'a> Interpreter<'a> {
             NodeKind::Print(value) => self.visit_print(*value),
             NodeKind::Throw(value) => self.visit_throw(*value, span),
             NodeKind::Free(value) => self.visit_free(*value),
-            NodeKind::FunctionCall(name, args) => self.visit_fn_call(name, args, span),
+            NodeKind::FunctionCall(value, args) => self.visit_fn_call(*value, args, span),
+            NodeKind::Index(value, index) => self.visit_index(*value, *index),
             node => Err(WalrusError::UnknownError {
                 message: format!("Unknown node: {:?}", node),
             }),
@@ -83,6 +84,15 @@ impl<'a> Interpreter<'a> {
 
         debug!("{:?}", res);
         res
+    }
+
+    fn get_variable(&self, name: &str, span: Span) -> InterpreterResult {
+        self.scope.get(name).ok_or_else(|| UndefinedVariable {
+            name: name.to_string(),
+            span,
+            src: self.source_ref.source().into(),
+            filename: self.source_ref.filename().into(),
+        })
     }
 
     fn visit_statements(&mut self, nodes: Vec<Box<Node>>) -> InterpreterResult {
@@ -188,12 +198,7 @@ impl<'a> Interpreter<'a> {
     }
 
     fn visit_var(&self, name: String, span: Span) -> InterpreterResult {
-        self.scope.get(&name).ok_or_else(|| UndefinedVariable {
-            name,
-            span,
-            src: self.source_ref.source().into(),
-            filename: self.source_ref.filename().into(),
-        })
+        self.get_variable(&name, span)
     }
 
     fn visit_if(
@@ -245,11 +250,12 @@ impl<'a> Interpreter<'a> {
     }
 
     fn visit_reassign(&mut self, ident: Spanned<String>, value: Node, op: Op) -> InterpreterResult {
-        let value = self.interpret(value)?;
+        let new_value = self.interpret(value)?;
+        let old_value = self.get_variable(ident.value(), ident.span())?;
 
         // fixme: clone
         // fixme: operator such as +=, -=, etc should be handled here
-        if !self.scope.reassign(ident.value().clone(), value) {
+        if !self.scope.reassign(ident.value().clone(), new_value) {
             return Err(UndefinedVariable {
                 name: ident.value().clone(), // fixme: clone
                 span: ident.span(),
@@ -265,7 +271,7 @@ impl<'a> Interpreter<'a> {
         let value = self.interpret(value)?;
 
         Err(WalrusError::Exception {
-            message: value.to_string(),
+            message: self.stringify(value)?,
             span,
             src: self.source_ref.source().into(),
             filename: self.source_ref.filename().into(),
@@ -352,30 +358,37 @@ impl<'a> Interpreter<'a> {
 
     fn visit_fn_call(
         &mut self,
-        name: String,
+        value: Node,
         args: Vec<Box<Node>>,
         span: Span,
     ) -> InterpreterResult {
+        let value = self.interpret(value)?;
+
         let args = args
             .into_iter()
             .map(|arg| self.interpret(*arg))
             .collect::<Result<Vec<_>, _>>()?;
 
-        let value = self.scope.get(&name).ok_or_else(|| UndefinedVariable {
-            name: name.clone(), // todo: clone
-            span,
-            src: self.source_ref.source().into(),
-            filename: self.source_ref.filename().into(),
-        })?;
-
         match value {
             ValueKind::Function(f) => {
                 let function = self.scope.arena().get_function(f)?;
+
+                if function.1.len() != args.len() {
+                    Err(WalrusError::InvalidArgCount {
+                        name: function.0.clone(),
+                        expected: function.1.len(),
+                        got: args.len(),
+                        span,
+                        src: self.source_ref.source().into(),
+                        filename: self.source_ref.filename().into(),
+                    })?
+                }
+
                 // fixme: when sub_interpreter gets dropped, it frees values in the arena causing
                 // valid memory addresses to become invalid. maybe we only want one arena that is
                 // shared between all interpreters and owned by the top level interpreter using
                 // a cow, or maybe we want to use a reference counted arena.
-                let mut sub_interpreter = self.create_child(name.clone()); // todo: clone
+                let mut sub_interpreter = self.create_child(function.0.clone()); // todo: clone
 
                 for (name, value) in function.1.iter().zip(args) {
                     sub_interpreter.scope.define(name.clone(), value); // todo: clone
@@ -392,8 +405,65 @@ impl<'a> Interpreter<'a> {
                 function(args)
             }
             _ => Err(WalrusError::NotCallable {
-                name,
+                value: value.get_type().to_string(),
                 span,
+                src: self.source_ref.source().into(),
+                filename: self.source_ref.filename().into(),
+            }),
+        }
+    }
+
+    fn visit_index(&mut self, value: Node, index: Node) -> InterpreterResult {
+        let index_span = *index.span();
+        let value_span = *value.span();
+        let value = self.interpret(value)?;
+        let index = self.interpret(index)?;
+
+        match value {
+            ValueKind::List(l) => {
+                let list = self.scope.arena().get_list(l)?;
+
+                match index {
+                    ValueKind::Int(n) => {
+                        if n < 0 || n as usize >= list.len() {
+                            Err(WalrusError::IndexOutOfBounds {
+                                index: n as usize, // todo: lossy conversion
+                                len: list.len(),
+                                span: index_span,
+                                src: self.source_ref.source().into(),
+                                filename: self.source_ref.filename().into(),
+                            })?
+                        }
+
+                        Ok(list[n as usize])
+                    }
+                    _ => Err(WalrusError::InvalidIndexType {
+                        non_indexable: value.get_type().to_string(),
+                        index_type: index.get_type().to_string(),
+                        span: index_span,
+                        src: self.source_ref.source().into(),
+                        filename: self.source_ref.filename().into(),
+                    }),
+                }
+            }
+            ValueKind::Dict(d) => {
+                let dict = self.scope.arena().get_dict(d)?;
+
+                // fixme: this doesn't work because it's comparing pointers instead of values
+                // so when the variable is on the heap, it will be different. the only way to
+                // fix this is to compare the actual values, which means we need to implement
+                // PartialEq but we also can't do that because we won't be able to access
+                // the arena from the ValueKind struct. we could make the arena a global
+                // variable but that's not a good idea. we could also make the arena a
+                // reference counted pointer and that's probably the best idea.
+                match dict.get(&index) {
+                    Some(value) => Ok(*value),
+                    None => Ok(ValueKind::Void), // todo: maybe return an error? and let the function return void if it wants to
+                }
+            }
+            _ => Err(WalrusError::NotIndexable {
+                value: value.get_type().to_string(),
+                span: value_span,
                 src: self.source_ref.source().into(),
                 filename: self.source_ref.filename().into(),
             }),
@@ -482,11 +552,75 @@ impl<'a> Interpreter<'a> {
     }
 
     fn equal(&self, left: ValueKind, right: ValueKind) -> InterpreterResult {
-        Ok(ValueKind::Bool(left == right))
+        match (left, right) {
+            (ValueKind::String(a), ValueKind::String(b)) => {
+                let a_str = self.scope.arena().get_string(a)?;
+                let b_str = self.scope.arena().get_string(b)?;
+
+                Ok(ValueKind::Bool(a_str == b_str))
+            }
+            (ValueKind::Dict(a), ValueKind::Dict(b)) => {
+                let a_dict = self.scope.arena().get_dict(a)?;
+                let b_dict = self.scope.arena().get_dict(b)?;
+
+                Ok(ValueKind::Bool(a_dict == b_dict))
+            }
+            (ValueKind::List(a), ValueKind::List(b)) => {
+                let a_list = self.scope.arena().get_list(a)?;
+                let b_list = self.scope.arena().get_list(b)?;
+
+                Ok(ValueKind::Bool(a_list == b_list))
+            }
+            (ValueKind::Function(a), ValueKind::Function(b)) => {
+                let a_func = self.scope.arena().get_function(a)?;
+                let b_func = self.scope.arena().get_function(b)?;
+
+                Ok(ValueKind::Bool(a_func == b_func))
+            }
+            (ValueKind::RustFunction(a), ValueKind::RustFunction(b)) => {
+                let a_func = self.scope.arena().get_rust_function(a)?;
+                let b_func = self.scope.arena().get_rust_function(b)?;
+
+                Ok(ValueKind::Bool(a_func == b_func))
+            }
+            _ => Ok(ValueKind::Bool(left == right)),
+        }
     }
 
     fn not_equal(&self, left: ValueKind, right: ValueKind) -> InterpreterResult {
-        Ok(ValueKind::Bool(left != right))
+        match (left, right) {
+            (ValueKind::String(a), ValueKind::String(b)) => {
+                let a_str = self.scope.arena().get_string(a)?;
+                let b_str = self.scope.arena().get_string(b)?;
+
+                Ok(ValueKind::Bool(a_str != b_str))
+            }
+            (ValueKind::Dict(a), ValueKind::Dict(b)) => {
+                let a_dict = self.scope.arena().get_dict(a)?;
+                let b_dict = self.scope.arena().get_dict(b)?;
+
+                Ok(ValueKind::Bool(a_dict != b_dict))
+            }
+            (ValueKind::List(a), ValueKind::List(b)) => {
+                let a_list = self.scope.arena().get_list(a)?;
+                let b_list = self.scope.arena().get_list(b)?;
+
+                Ok(ValueKind::Bool(a_list != b_list))
+            }
+            (ValueKind::Function(a), ValueKind::Function(b)) => {
+                let a_func = self.scope.arena().get_function(a)?;
+                let b_func = self.scope.arena().get_function(b)?;
+
+                Ok(ValueKind::Bool(a_func != b_func))
+            }
+            (ValueKind::RustFunction(a), ValueKind::RustFunction(b)) => {
+                let a_func = self.scope.arena().get_rust_function(a)?;
+                let b_func = self.scope.arena().get_rust_function(b)?;
+
+                Ok(ValueKind::Bool(a_func != b_func))
+            }
+            _ => Ok(ValueKind::Bool(left != right)),
+        }
     }
 
     fn less(&self, left: ValueKind, right: ValueKind, span: Span) -> InterpreterResult {
