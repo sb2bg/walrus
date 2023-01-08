@@ -1,6 +1,8 @@
-use crate::arenas::{DictKey, FuncKey, ListKey, RustFuncKey, StringKey};
+use crate::arenas::{DictKey, FuncKey, ListKey, RustFuncKey, RustFunction, StringKey};
+use crate::ast::Node;
 use crate::scope::Scope;
 use float_ord::FloatOrd;
+use std::collections::HashMap;
 use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::Hash;
@@ -25,34 +27,12 @@ impl<'a> Value<'a> {
     }
 }
 
-const EXP_ERR: &str = "Attempted to access freed memory";
-
-impl Display for Value<'_> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self.kind {
-            ValueKind::Int(value) => write!(f, "{}", value),
-            ValueKind::Float(FloatOrd(value)) => write!(f, "{}", value),
-            ValueKind::Bool(value) => write!(f, "{}", value),
-            ValueKind::String(key) => {
-                write!(f, "{}", self.scope.arena().get_string(key).expect(EXP_ERR))
-            }
-            ValueKind::List(key) => {
-                write!(f, "{:?}", self.scope.arena().get_list(key).expect(EXP_ERR))
-            }
-            ValueKind::Dict(key) => {
-                write!(f, "{:?}", self.scope.arena().get_dict(key).expect(EXP_ERR))
-            }
-            ValueKind::Function(key) => {
-                write!(
-                    f,
-                    "{:?}",
-                    self.scope.arena().get_function(key).expect(EXP_ERR)
-                )
-            } // fixme: prints incorrectly
-            ValueKind::RustFunction(_) => write!(f, "<rust function>"),
-            ValueKind::Void => write!(f, "None"),
-        }
-    }
+pub enum HeapValue {
+    List(Vec<ValueKind>),
+    Dict(HashMap<ValueKind, ValueKind>),
+    Function((String, Vec<String>, Node)),
+    RustFunction(RustFunction),
+    String(String),
 }
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Copy, Clone, Hash)]
