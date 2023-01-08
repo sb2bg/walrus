@@ -58,7 +58,7 @@ fn try_main() -> WalrusResult {
     create_shell(args.file)
 }
 
-fn create_shell(file: Option<PathBuf>) -> WalrusResult {
+pub fn create_shell(file: Option<PathBuf>) -> WalrusResult {
     match file {
         Some(file) => {
             let filename = file.to_string_lossy();
