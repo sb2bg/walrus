@@ -221,7 +221,7 @@ pub enum WalrusError {
         get_line(src, filename, *span)
     )]
     IndexOutOfBounds {
-        index: usize,
+        index: i64,
         len: usize,
         span: Span,
         src: String,
@@ -257,6 +257,9 @@ pub enum WalrusError {
         src: String,
         filename: String,
     },
+
+    #[error("Failed to gather PWD. This may be due to a permissions error.")]
+    FailedGatherPWD,
 }
 
 pub fn parser_err_mapper(
