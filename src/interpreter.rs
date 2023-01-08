@@ -1,10 +1,11 @@
 use crate::ast::{Node, NodeKind, Op};
+use crate::create_shell;
 use crate::error::WalrusError;
 use crate::error::WalrusError::UndefinedVariable;
 use crate::scope::Scope;
 use crate::source_ref::SourceRef;
 use crate::span::{Span, Spanned};
-use crate::value::ValueKind;
+use crate::value::{HeapValue, ValueKind};
 use float_ord::FloatOrd;
 use log::debug;
 use std::collections::HashMap;
@@ -61,7 +62,7 @@ impl<'a> Interpreter<'a> {
             NodeKind::Int(num) => Ok(ValueKind::Int(num)),
             NodeKind::Float(num) => Ok(ValueKind::Float(num)),
             NodeKind::Bool(boolean) => Ok(ValueKind::Bool(boolean)),
-            NodeKind::String(string) => Ok(self.scope.mut_arena().insert_string(string)),
+            NodeKind::String(string) => Ok(self.scope.heap_alloc(HeapValue::String(string))),
             NodeKind::Dict(dict) => self.visit_dict(dict),
             NodeKind::List(list) => self.visit_list(list),
             NodeKind::FunctionDefinition(name, args, body) => self.visit_fn_def(name, args, *body),
@@ -73,10 +74,13 @@ impl<'a> Interpreter<'a> {
             NodeKind::Assign(name, value) => self.visit_assign(name, *value),
             NodeKind::Reassign(ident, value, op) => self.visit_reassign(ident, *value, op),
             NodeKind::Print(value) => self.visit_print(*value),
+            NodeKind::Println(value) => self.visit_println(*value),
             NodeKind::Throw(value) => self.visit_throw(*value, span),
             NodeKind::Free(value) => self.visit_free(*value),
             NodeKind::FunctionCall(value, args) => self.visit_fn_call(*value, args, span),
             NodeKind::Index(value, index) => self.visit_index(*value, *index),
+            NodeKind::ModuleImport(name, as_name) => self.visit_module_import(name, as_name),
+            NodeKind::PackageImport(name, as_name) => self.visit_package_import(name, as_name),
             node => Err(WalrusError::UnknownError {
                 message: format!("Unknown node: {:?}", node),
             }),
@@ -168,7 +172,7 @@ impl<'a> Interpreter<'a> {
             map.insert(self.interpret(*key)?, self.interpret(*value)?);
         }
 
-        Ok(self.scope.mut_arena().insert_dict(map))
+        Ok(self.scope.heap_alloc(HeapValue::Dict(map)))
     }
 
     fn visit_list(&mut self, list: Vec<Box<Node>>) -> InterpreterResult {
@@ -178,22 +182,22 @@ impl<'a> Interpreter<'a> {
             vec.push(self.interpret(*node)?);
         }
 
-        Ok(self.scope.mut_arena().insert_list(vec))
+        Ok(self.scope.heap_alloc(HeapValue::List(vec)))
     }
 
     fn visit_anon_fn_def(&mut self, args: Vec<String>, body: Node) -> InterpreterResult {
         let fn_name = format!("anon_{}", Uuid::new_v4());
-        Ok(self.scope.mut_arena().insert_function(fn_name, args, body))
+        Ok(self
+            .scope
+            .heap_alloc(HeapValue::Function((fn_name, args, body))))
     }
 
     fn visit_fn_def(&mut self, name: String, args: Vec<String>, body: Node) -> InterpreterResult {
         let value = self
             .scope
-            .mut_arena()
-            .insert_function(name.clone(), args, body);
+            .heap_alloc(HeapValue::Function((name.clone(), args, body)));
 
         self.scope.define(name, value);
-
         Ok(ValueKind::Void)
     }
 
@@ -280,6 +284,13 @@ impl<'a> Interpreter<'a> {
 
     fn visit_print(&mut self, value: Node) -> InterpreterResult {
         let value = self.interpret(value)?;
+        print!("{}", self.stringify(value)?);
+
+        Ok(ValueKind::Void)
+    }
+
+    fn visit_println(&mut self, value: Node) -> InterpreterResult {
+        let value = self.interpret(value)?;
         println!("{}", self.stringify(value)?);
 
         Ok(ValueKind::Void)
@@ -288,9 +299,9 @@ impl<'a> Interpreter<'a> {
     fn stringify(&self, value: ValueKind) -> Result<String, WalrusError> {
         match value {
             ValueKind::Void => Ok("void".into()),
-            ValueKind::String(s) => Ok(self.scope.arena().get_string(s)?.clone()),
+            ValueKind::String(s) => Ok(self.scope.get_string(s)?.clone()),
             ValueKind::List(l) => {
-                let list = self.scope.arena().get_list(l)?;
+                let list = self.scope.get_list(l)?;
                 let mut string = String::new();
 
                 string.push('[');
@@ -308,7 +319,7 @@ impl<'a> Interpreter<'a> {
                 Ok(string)
             }
             ValueKind::Dict(d) => {
-                let dict = self.scope.arena().get_dict(d)?;
+                let dict = self.scope.get_dict(d)?;
                 let mut string = String::new();
 
                 string.push('{');
@@ -328,11 +339,11 @@ impl<'a> Interpreter<'a> {
                 Ok(string)
             }
             ValueKind::Function(f) => {
-                let function = self.scope.arena().get_function(f)?;
+                let function = self.scope.get_function(f)?;
                 Ok(format!("fn {}", function.0))
             }
             ValueKind::RustFunction(f) => {
-                let function = self.scope.arena().get_rust_function(f)?;
+                let function = self.scope.get_rust_function(f)?;
                 Ok(format!("rust fn {:?}", function)) // fixme
             }
             ValueKind::Int(n) => Ok(n.to_string()),
@@ -345,7 +356,7 @@ impl<'a> Interpreter<'a> {
         let span = *value.span();
         let result = self.interpret(value)?;
 
-        if !self.scope.mut_arena().free(result) {
+        if !self.scope.free(result) {
             Err(WalrusError::FailedFree {
                 span,
                 src: self.source_ref.source().into(),
@@ -362,6 +373,7 @@ impl<'a> Interpreter<'a> {
         args: Vec<Box<Node>>,
         span: Span,
     ) -> InterpreterResult {
+        let fn_span = *value.span();
         let value = self.interpret(value)?;
 
         let args = args
@@ -371,7 +383,7 @@ impl<'a> Interpreter<'a> {
 
         match value {
             ValueKind::Function(f) => {
-                let function = self.scope.arena().get_function(f)?;
+                let function = self.scope.get_function(f)?;
 
                 if function.1.len() != args.len() {
                     Err(WalrusError::InvalidArgCount {
@@ -401,12 +413,12 @@ impl<'a> Interpreter<'a> {
                 sub_interpreter.interpret(function.2.clone())
             }
             ValueKind::RustFunction(f) => {
-                let function = self.scope.arena().get_rust_function(f)?;
+                let function = self.scope.get_rust_function(f)?;
                 function(args)
             }
             _ => Err(WalrusError::NotCallable {
                 value: value.get_type().to_string(),
-                span,
+                span: fn_span,
                 src: self.source_ref.source().into(),
                 filename: self.source_ref.filename().into(),
             }),
@@ -421,13 +433,15 @@ impl<'a> Interpreter<'a> {
 
         match value {
             ValueKind::List(l) => {
-                let list = self.scope.arena().get_list(l)?;
+                let list = self.scope.get_list(l)?;
 
                 match index {
                     ValueKind::Int(n) => {
-                        if n < 0 || n as usize >= list.len() {
+                        let index = if n < 0 { n + list.len() as i64 } else { n };
+
+                        if index < 0 || index as usize >= list.len() {
                             Err(WalrusError::IndexOutOfBounds {
-                                index: n as usize, // todo: lossy conversion
+                                index: n, // todo: lossy conversion
                                 len: list.len(),
                                 span: index_span,
                                 src: self.source_ref.source().into(),
@@ -435,7 +449,7 @@ impl<'a> Interpreter<'a> {
                             })?
                         }
 
-                        Ok(list[n as usize])
+                        Ok(list[index as usize])
                     }
                     _ => Err(WalrusError::InvalidIndexType {
                         non_indexable: value.get_type().to_string(),
@@ -447,7 +461,7 @@ impl<'a> Interpreter<'a> {
                 }
             }
             ValueKind::Dict(d) => {
-                let dict = self.scope.arena().get_dict(d)?;
+                let dict = self.scope.get_dict(d)?;
 
                 // fixme: this doesn't work because it's comparing pointers instead of values
                 // so when the variable is on the heap, it will be different. the only way to
@@ -470,6 +484,23 @@ impl<'a> Interpreter<'a> {
         }
     }
 
+    fn visit_module_import(&mut self, name: String, as_name: Option<String>) -> InterpreterResult {
+        // todo: make it so the executed file's cwd is the directory of the file, not the cwd of the file that imported it
+
+        let path = std::path::Path::new(self.source_ref.filename())
+            .parent()
+            .ok_or_else(|| WalrusError::FailedGatherPWD)?
+            .join(name)
+            .with_extension("walrus");
+
+        create_shell(Some(path))?;
+        Ok(ValueKind::Void)
+    }
+
+    fn visit_package_import(&mut self, name: String, as_name: Option<String>) -> InterpreterResult {
+        todo!("importing packages")
+    }
+
     fn add(&mut self, left: ValueKind, right: ValueKind, span: Span) -> InterpreterResult {
         match (left, right) {
             (ValueKind::Int(a), ValueKind::Int(b)) => Ok(ValueKind::Int(a + b)),
@@ -477,11 +508,13 @@ impl<'a> Interpreter<'a> {
                 Ok(ValueKind::Float(FloatOrd(a + b)))
             }
             (ValueKind::String(a), ValueKind::String(b)) => {
-                let a_str = self.scope.arena().get_string(a)?.clone();
-                let b_str = self.scope.arena().get_string(b)?.clone();
+                let a_str = self.scope.get_string(a)?.clone();
+                let b_str = self.scope.get_string(b)?.clone();
                 // above clones required because we need to move the strings out of the arena
 
-                Ok(self.scope.mut_arena().insert_string(a_str + b_str.as_str()))
+                Ok(self
+                    .scope
+                    .heap_alloc(HeapValue::String(a_str + b_str.as_str())))
             }
             (a, b) => Err(self.construct_err(Op::Add, a, b, span)),
         }
@@ -554,32 +587,32 @@ impl<'a> Interpreter<'a> {
     fn equal(&self, left: ValueKind, right: ValueKind) -> InterpreterResult {
         match (left, right) {
             (ValueKind::String(a), ValueKind::String(b)) => {
-                let a_str = self.scope.arena().get_string(a)?;
-                let b_str = self.scope.arena().get_string(b)?;
+                let a_str = self.scope.get_string(a)?;
+                let b_str = self.scope.get_string(b)?;
 
                 Ok(ValueKind::Bool(a_str == b_str))
             }
             (ValueKind::Dict(a), ValueKind::Dict(b)) => {
-                let a_dict = self.scope.arena().get_dict(a)?;
-                let b_dict = self.scope.arena().get_dict(b)?;
+                let a_dict = self.scope.get_dict(a)?;
+                let b_dict = self.scope.get_dict(b)?;
 
                 Ok(ValueKind::Bool(a_dict == b_dict))
             }
             (ValueKind::List(a), ValueKind::List(b)) => {
-                let a_list = self.scope.arena().get_list(a)?;
-                let b_list = self.scope.arena().get_list(b)?;
+                let a_list = self.scope.get_list(a)?;
+                let b_list = self.scope.get_list(b)?;
 
                 Ok(ValueKind::Bool(a_list == b_list))
             }
             (ValueKind::Function(a), ValueKind::Function(b)) => {
-                let a_func = self.scope.arena().get_function(a)?;
-                let b_func = self.scope.arena().get_function(b)?;
+                let a_func = self.scope.get_function(a)?;
+                let b_func = self.scope.get_function(b)?;
 
                 Ok(ValueKind::Bool(a_func == b_func))
             }
             (ValueKind::RustFunction(a), ValueKind::RustFunction(b)) => {
-                let a_func = self.scope.arena().get_rust_function(a)?;
-                let b_func = self.scope.arena().get_rust_function(b)?;
+                let a_func = self.scope.get_rust_function(a)?;
+                let b_func = self.scope.get_rust_function(b)?;
 
                 Ok(ValueKind::Bool(a_func == b_func))
             }
@@ -590,32 +623,32 @@ impl<'a> Interpreter<'a> {
     fn not_equal(&self, left: ValueKind, right: ValueKind) -> InterpreterResult {
         match (left, right) {
             (ValueKind::String(a), ValueKind::String(b)) => {
-                let a_str = self.scope.arena().get_string(a)?;
-                let b_str = self.scope.arena().get_string(b)?;
+                let a_str = self.scope.get_string(a)?;
+                let b_str = self.scope.get_string(b)?;
 
                 Ok(ValueKind::Bool(a_str != b_str))
             }
             (ValueKind::Dict(a), ValueKind::Dict(b)) => {
-                let a_dict = self.scope.arena().get_dict(a)?;
-                let b_dict = self.scope.arena().get_dict(b)?;
+                let a_dict = self.scope.get_dict(a)?;
+                let b_dict = self.scope.get_dict(b)?;
 
                 Ok(ValueKind::Bool(a_dict != b_dict))
             }
             (ValueKind::List(a), ValueKind::List(b)) => {
-                let a_list = self.scope.arena().get_list(a)?;
-                let b_list = self.scope.arena().get_list(b)?;
+                let a_list = self.scope.get_list(a)?;
+                let b_list = self.scope.get_list(b)?;
 
                 Ok(ValueKind::Bool(a_list != b_list))
             }
             (ValueKind::Function(a), ValueKind::Function(b)) => {
-                let a_func = self.scope.arena().get_function(a)?;
-                let b_func = self.scope.arena().get_function(b)?;
+                let a_func = self.scope.get_function(a)?;
+                let b_func = self.scope.get_function(b)?;
 
                 Ok(ValueKind::Bool(a_func != b_func))
             }
             (ValueKind::RustFunction(a), ValueKind::RustFunction(b)) => {
-                let a_func = self.scope.arena().get_rust_function(a)?;
-                let b_func = self.scope.arena().get_rust_function(b)?;
+                let a_func = self.scope.get_rust_function(a)?;
+                let b_func = self.scope.get_rust_function(b)?;
 
                 Ok(ValueKind::Bool(a_func != b_func))
             }
