@@ -1,7 +1,7 @@
 use crate::ast::Node;
 use crate::error::WalrusError;
 use crate::interpreter::InterpreterResult;
-use crate::value::ValueKind;
+use crate::value::{HeapValue, ValueKind};
 use log::debug;
 use slotmap::{new_key_type, DenseSlotMap};
 use std::collections::HashMap;
@@ -14,20 +14,33 @@ new_key_type! {
     pub struct RustFuncKey;
 }
 
-type ArenaResult<T> = Result<T, WalrusError>;
-type RustFunction = fn(Vec<ValueKind>) -> InterpreterResult;
+pub type ArenaResult<T> = Result<T, WalrusError>;
+pub type RustFunction = fn(Vec<ValueKind>) -> InterpreterResult;
 
 // todo: maybe instead of this, we can use a single slotmap
 // and use a different enum to differentiate between the
 // types stored by value and the types stored by key
 // fixme: eventually this will have to be garbage collected
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ValueHolder {
     dict_slotmap: DenseSlotMap<DictKey, HashMap<ValueKind, ValueKind>>,
     list_slotmap: DenseSlotMap<ListKey, Vec<ValueKind>>,
     string_slotmap: DenseSlotMap<StringKey, String>,
     function_slotmap: DenseSlotMap<FuncKey, (String, Vec<String>, Node)>,
     rust_function_slotmap: DenseSlotMap<RustFuncKey, RustFunction>,
+}
+
+impl Clone for ValueHolder {
+    fn clone(&self) -> Self {
+        debug!("cloning value holder");
+        Self {
+            dict_slotmap: self.dict_slotmap.clone(),
+            list_slotmap: self.list_slotmap.clone(),
+            string_slotmap: self.string_slotmap.clone(),
+            function_slotmap: self.function_slotmap.clone(),
+            rust_function_slotmap: self.rust_function_slotmap.clone(),
+        }
+    }
 }
 
 impl ValueHolder {
@@ -62,24 +75,16 @@ impl ValueHolder {
         }
     }
 
-    pub fn insert_dict(&mut self, dict: HashMap<ValueKind, ValueKind>) -> ValueKind {
-        ValueKind::Dict(self.dict_slotmap.insert(dict))
-    }
-
-    pub fn insert_list(&mut self, list: Vec<ValueKind>) -> ValueKind {
-        ValueKind::List(self.list_slotmap.insert(list))
-    }
-
-    pub fn insert_string(&mut self, string: String) -> ValueKind {
-        ValueKind::String(self.string_slotmap.insert(string))
-    }
-
-    pub fn insert_function(&mut self, name: String, args: Vec<String>, body: Node) -> ValueKind {
-        ValueKind::Function(self.function_slotmap.insert((name, args, body)))
-    }
-
-    pub fn insert_rust_function(&mut self, func: RustFunction) -> ValueKind {
-        ValueKind::RustFunction(self.rust_function_slotmap.insert(func))
+    pub fn alloc(&mut self, value: HeapValue) -> ValueKind {
+        match value {
+            HeapValue::List(list) => ValueKind::List(self.list_slotmap.insert(list)),
+            HeapValue::Dict(dict) => ValueKind::Dict(self.dict_slotmap.insert(dict)),
+            HeapValue::Function(func) => ValueKind::Function(self.function_slotmap.insert(func)),
+            HeapValue::RustFunction(rust_func) => {
+                ValueKind::RustFunction(self.rust_function_slotmap.insert(rust_func))
+            }
+            HeapValue::String(string) => ValueKind::String(self.string_slotmap.insert(string)),
+        }
     }
 
     pub fn get_rust_function(&self, key: RustFuncKey) -> ArenaResult<&RustFunction> {
