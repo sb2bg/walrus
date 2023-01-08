@@ -1,8 +1,6 @@
-use crate::ast::{Node, NodeKind};
 use crate::error::parser_err_mapper;
 use crate::grammar::{ProgramParser, ReplParser};
 use crate::interpreter::Interpreter;
-use crate::source_ref::SourceRef;
 use crate::WalrusResult;
 use log::debug;
 use std::io::{stdout, BufRead, Write};
