@@ -146,6 +146,10 @@ IdentStr: String = r"[a-zA-Z_][a-zA-Z0-9_]*" => <>.to_string();
 
 If: NodeKind = "if" <c: SpExpr> <b: Sp<Block>> <e: Else> => NodeKind::If(c, b, e);
 
+Ternary: NodeKind = {
+    <r: SpExpr> "if" <c: SpExpr> "else" <e: SpExpr> => NodeKind::Ternary(r, c, e),
+}
+
 Else: Option<Box<Node>> = {
 	"else" <Sp<Block>> => Some(<>),
 	"else" <Sp<If>> => Some(<>),
@@ -168,7 +172,7 @@ Lambda: NodeKind = {
     "fn" ":" <a: Comma<IdentStr>> <b: Sp<Block>> => NodeKind::AnonFunctionDefinition(a, b),
 };
 
-Extern: NodeKind = { // todo: make it so externs have to define a path to the function
+Extern: NodeKind = {
     "extern fn" <n: IdentStr> ":" <a: Comma<IdentStr>> => NodeKind::ExternFunctionDefinition(n, a),
 };
 
@@ -196,11 +200,15 @@ Continue: NodeKind = {
 };
 
 Import: NodeKind = {
-    "import" <n: IdentStr> => NodeKind::Import(n),
+    "import" <p: IdentStr> => NodeKind::PackageImport(p, None),
+    "import" <m: r#""[^"]*""#> => NodeKind::ModuleImport(m[1..m.len() - 1].to_string(), None),
+    "import" <p: IdentStr> "as" <a: IdentStr> => NodeKind::PackageImport(p, Some(a)),
+    "import" <m: r#""[^"]*""#> "as" <a: IdentStr> => NodeKind::ModuleImport(m[1..m.len() - 1].to_string(), Some(a)),
 };
 
 Print: NodeKind = {
     "print" <SpExpr> => NodeKind::Print(<>),
+    "println" <SpExpr> => NodeKind::Println(<>),
 };
 
 Throw: NodeKind = {
