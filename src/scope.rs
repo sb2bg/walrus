@@ -5,19 +5,20 @@ use crate::ast::Node;
 use crate::value::{HeapValue, ValueKind};
 use log::debug;
 use once_cell::sync::Lazy;
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
+use std::ptr::NonNull;
 
 static mut ARENA: Lazy<ValueHolder> = Lazy::new(ValueHolder::new);
 
 #[derive(Debug)]
-pub struct Scope<'a> {
+pub struct Scope {
     name: String,
     // todo: add line and file name
     vars: HashMap<String, ValueKind>,
-    parent: Option<&'a Scope<'a>>,
+    parent: Option<NonNull<Scope>>,
 }
 
-impl<'a> Scope<'a> {
+impl Scope {
     pub fn new() -> Self {
         Self {
             name: "global".to_string(),
@@ -38,15 +39,15 @@ impl<'a> Scope<'a> {
         }
 
         if let Some(parent) = self.parent {
-            parent.dump();
+            unsafe { parent.as_ref().dump() };
         }
     }
 
-    pub fn new_child(&'a self, name: String) -> Self {
+    pub fn new_child(&self, name: String) -> Self {
         Self {
             name,
             vars: HashMap::new(),
-            parent: Some(self),
+            parent: Some(NonNull::from(self)),
         }
     }
 
@@ -60,7 +61,7 @@ impl<'a> Scope<'a> {
             Some(*value)
         } else {
             match self.parent {
-                Some(parent) => parent.get(name),
+                Some(parent) => unsafe { parent.as_ref().get(name) },
                 _ => None,
             }
         }
@@ -84,8 +85,7 @@ impl<'a> Scope<'a> {
             true
         } else {
             match self.parent {
-                // fixme: mut borrow of self.parent is not allowed
-                // Some(parent) => parent.reassign(name, value),
+                Some(mut parent) => unsafe { parent.as_mut().reassign(name, value) },
                 _ => false,
             }
         }
@@ -116,15 +116,12 @@ impl<'a> Scope<'a> {
     }
 
     pub fn stack_trace(&self) -> String {
-        let mut stack = VecDeque::new();
-        let mut current = self;
-
-        while let Some(parent) = current.parent {
-            stack.push_front(current.name.clone());
-            current = parent;
+        if let Some(parent) = self.parent {
+            format!("{} -> {}", self.name, unsafe {
+                parent.as_ref().stack_trace()
+            })
+        } else {
+            self.name.clone()
         }
-
-        stack.push_front(current.name.clone());
-        stack.make_contiguous().join(" -> ")
     }
 }

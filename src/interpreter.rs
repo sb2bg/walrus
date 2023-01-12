@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 pub struct Interpreter<'a> {
-    scope: Scope<'a>,
+    scope: Scope,
     source_ref: SourceRef<'a>,
     is_returning: bool,
 }
