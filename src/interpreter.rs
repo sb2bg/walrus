@@ -73,7 +73,9 @@ impl<'a> Interpreter<'a> {
             }
             NodeKind::While(condition, body) => Ok(self.visit_while(*condition, *body)?),
             NodeKind::Assign(name, value) => Ok(self.visit_assign(name, *value)?),
-            NodeKind::Reassign(ident, value, op) => Ok(self.visit_reassign(ident, *value, op)?),
+            NodeKind::Reassign(ident, value, op) => {
+                Ok(self.visit_reassign(ident, *value, op, span)?)
+            }
             NodeKind::Print(value) => Ok(self.visit_print(*value)?),
             NodeKind::Println(value) => Ok(self.visit_println(*value)?),
             NodeKind::Throw(value) => Ok(self.visit_throw(*value, span)?),
@@ -243,12 +245,27 @@ impl<'a> Interpreter<'a> {
         Ok(ValueKind::Void)
     }
 
-    fn visit_reassign(&mut self, ident: Spanned<String>, value: Node, op: Op) -> InterpreterResult {
+    fn visit_reassign(
+        &mut self,
+        ident: Spanned<String>,
+        value: Node,
+        op: Op,
+        span: Span,
+    ) -> InterpreterResult {
         let new_value = self.interpret(value)?;
         let old_value = self.visit_variable(ident.value(), ident.span())?;
 
+        let new_value = match op {
+            Op::Add => self.add(old_value, new_value, span)?,
+            Op::Sub => self.sub(old_value, new_value, span)?,
+            Op::Mul => self.mul(old_value, new_value, span)?,
+            Op::Div => self.div(old_value, new_value, span)?,
+            Op::Mod => self.rem(old_value, new_value, span)?,
+            Op::Pow => self.pow(old_value, new_value, span)?,
+            _ => new_value,
+        };
+
         // fixme: clone
-        // fixme: operator such as +=, -=, etc should be handled here
         if !self.scope.reassign(ident.value().clone(), new_value) {
             return Err(UndefinedVariable {
                 name: ident.value().clone(), // fixme: clone
