@@ -14,7 +14,7 @@ pub struct Value<'a> {
 }
 
 impl<'a> Value<'a> {
-    pub fn new(kind: ValueKind, scope: &'a Scope<'a>) -> Self {
+    pub fn new(kind: ValueKind, scope: &'a Scope) -> Self {
         Self { kind, scope }
     }
 
@@ -37,6 +37,7 @@ pub enum HeapValue {
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Copy, Clone, Hash)]
 pub enum ValueKind {
+    // todo: consolidate ints and floats into single number type
     Int(i64),
     Float(FloatOrd<f64>),
     Bool(bool),
