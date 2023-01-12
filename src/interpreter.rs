@@ -14,7 +14,7 @@ use uuid::Uuid;
 pub struct Interpreter<'a> {
     scope: Scope<'a>,
     source_ref: SourceRef<'a>,
-    returnable: bool,
+    is_returning: bool,
 }
 
 pub type InterpreterResult = Result<ValueKind, WalrusError>;
@@ -24,18 +24,13 @@ impl<'a> Interpreter<'a> {
         Self {
             scope: Scope::new(),
             source_ref: SourceRef::new(src, filename),
-            returnable: false,
+            is_returning: false,
         }
     }
 
     pub fn dump(&self) {
         debug!("Interpreter dump");
-        debug!("Returnable: {}", self.returnable);
         self.scope.dump();
-    }
-
-    pub fn source_ref(&self) -> SourceRef<'a> {
-        self.source_ref
     }
 
     // for REPL to use
@@ -47,13 +42,13 @@ impl<'a> Interpreter<'a> {
         Self {
             scope: self.scope.new_child(name),
             source_ref: self.source_ref,
-            returnable: true,
+            is_returning: false,
         }
     }
 
     pub fn interpret(&mut self, node: Node) -> InterpreterResult {
-        // fixme: using copy to avoid borrow checker error, but this is probably not the best way to do this
         let span = *node.span();
+        debug!("{} -> ", node.kind().to_string());
 
         let res = match node.into_kind() {
             NodeKind::Statements(nodes) => self.visit_statements(nodes),
@@ -81,12 +76,14 @@ impl<'a> Interpreter<'a> {
             NodeKind::Index(value, index) => self.visit_index(*value, *index),
             NodeKind::ModuleImport(name, as_name) => self.visit_module_import(name, as_name),
             NodeKind::PackageImport(name, as_name) => self.visit_package_import(name, as_name),
+            NodeKind::For(var, iter, body) => self.visit_for(var, *iter, *body),
+            NodeKind::Return(value) => self.visit_return(*value),
             node => Err(WalrusError::UnknownError {
                 message: format!("Unknown node: {:?}", node),
             }),
         };
 
-        debug!("{:?}", res);
+        debug!("Interpreted: {:?}", res);
         res
     }
 
@@ -99,27 +96,16 @@ impl<'a> Interpreter<'a> {
         })
     }
 
+    // fixme: returns in blocks that aren't immediately in a function don't return from the function, but from the block
     fn visit_statements(&mut self, nodes: Vec<Box<Node>>) -> InterpreterResult {
+        let mut sub_interpreter = self.create_child("name".to_string()); // fixme: should be name of func, for loop, etc
+
         for node in nodes {
-            let span = *node.span();
+            let res = sub_interpreter.interpret(*node);
 
-            match *node {
-                Node {
-                    kind: NodeKind::Return(ret),
-                    ..
-                } => {
-                    if !self.returnable {
-                        return Err(WalrusError::ReturnOutsideFunction {
-                            span,
-                            src: self.source_ref.source().into(),
-                            filename: self.source_ref.filename().into(),
-                        });
-                    }
-
-                    return self.interpret(*ret);
-                }
-                _ => self.interpret(*node)?,
-            };
+            if sub_interpreter.is_returning {
+                return res;
+            }
         }
 
         Ok(ValueKind::Void)
@@ -215,12 +201,12 @@ impl<'a> Interpreter<'a> {
         let condition = self.interpret(condition)?;
 
         if self.is_truthy(condition, cond_span)? {
-            self.interpret(body)?;
+            self.interpret(body)
         } else if let Some(otherwise) = otherwise {
-            self.interpret(*otherwise)?;
+            self.interpret(*otherwise)
+        } else {
+            Ok(ValueKind::Void)
         }
-
-        Ok(ValueKind::Void)
     }
 
     fn visit_while(&mut self, condition: Node, body: Node) -> InterpreterResult {
@@ -236,6 +222,8 @@ impl<'a> Interpreter<'a> {
         loop {
             let condition = self.interpret(condition.clone())?;
 
+            // fixme: i believe this will fail to return a value if a return statement is
+            // encountered in the body of the while loop.
             if self.is_truthy(condition, cond_span)? {
                 self.interpret(body.clone())?;
             } else {
@@ -298,10 +286,11 @@ impl<'a> Interpreter<'a> {
 
     fn stringify(&self, value: ValueKind) -> Result<String, WalrusError> {
         match value {
-            ValueKind::Void => Ok("void".into()),
+            ValueKind::Void => Ok("void".to_string()),
             ValueKind::String(s) => Ok(self.scope.get_string(s)?.clone()),
             ValueKind::List(l) => {
                 let list = self.scope.get_list(l)?;
+
                 let mut string = String::new();
 
                 string.push('[');
@@ -396,10 +385,8 @@ impl<'a> Interpreter<'a> {
                     })?
                 }
 
-                // fixme: when sub_interpreter gets dropped, it frees values in the arena causing
-                // valid memory addresses to become invalid. maybe we only want one arena that is
-                // shared between all interpreters and owned by the top level interpreter using
-                // a cow, or maybe we want to use a reference counted arena.
+                // fixme: this creates a double nested interpreter child because statements also creates a new child
+                // for now this is okay but for performance reasons we should probably avoid this
                 let mut sub_interpreter = self.create_child(function.0.clone()); // todo: clone
 
                 for (name, value) in function.1.iter().zip(args) {
@@ -499,6 +486,54 @@ impl<'a> Interpreter<'a> {
 
     fn visit_package_import(&mut self, name: String, as_name: Option<String>) -> InterpreterResult {
         todo!("importing packages")
+    }
+
+    fn visit_for(&mut self, name: String, value: Node, body: Node) -> InterpreterResult {
+        let value_span = *value.span();
+        let value = self.interpret(value)?;
+
+        // todo: see visit_for comment for info on possible optimization and why clone is required
+        // fixme: i believe this will fail to return a value if a return statement is
+        // encountered in the body of the for loop.
+        match value {
+            ValueKind::List(l) => {
+                let list = self.scope.get_list(l)?;
+
+                for value in list {
+                    // fixme: this is here because I need to be able to put values in the scope
+                    let mut sub_interpreter = self.create_child("for_list".to_string());
+                    sub_interpreter.scope.define(name.clone(), value.clone());
+                    sub_interpreter.interpret(body.clone())?;
+                }
+
+                Ok(ValueKind::Void)
+            }
+            ValueKind::Dict(d) => {
+                let dict = self.scope.get_dict(d)?;
+
+                for (key, value) in dict {
+                    let mut sub_interpreter = self.create_child("for_dict".to_string());
+                    sub_interpreter.scope.define(name.clone(), key.clone());
+                    // fixme: this gets overwritten, we need to support destructuring
+                    sub_interpreter.scope.define(name.clone(), value.clone());
+                    sub_interpreter.interpret(body.clone())?;
+                }
+
+                Ok(ValueKind::Void)
+            }
+            _ => Err(WalrusError::NotIterable {
+                type_name: value.get_type().to_string(),
+                span: value_span,
+                src: self.source_ref.source().into(),
+                filename: self.source_ref.filename().into(),
+            }),
+        }
+    }
+
+    fn visit_return(&mut self, value: Node) -> InterpreterResult {
+        let value = self.interpret(value)?;
+        self.is_returning = true;
+        Ok(value)
     }
 
     fn add(&mut self, left: ValueKind, right: ValueKind, span: Span) -> InterpreterResult {
@@ -616,6 +651,12 @@ impl<'a> Interpreter<'a> {
 
                 Ok(ValueKind::Bool(a_func == b_func))
             }
+            (ValueKind::Int(a), ValueKind::Float(FloatOrd(b))) => {
+                Ok(ValueKind::Bool(a == b as i64))
+            }
+            (ValueKind::Float(FloatOrd(a)), ValueKind::Int(b)) => {
+                Ok(ValueKind::Bool(a as i64 == b))
+            }
             _ => Ok(ValueKind::Bool(left == right)),
         }
     }
@@ -651,6 +692,12 @@ impl<'a> Interpreter<'a> {
                 let b_func = self.scope.get_rust_function(b)?;
 
                 Ok(ValueKind::Bool(a_func != b_func))
+            }
+            (ValueKind::Int(a), ValueKind::Float(FloatOrd(b))) => {
+                Ok(ValueKind::Bool(a != b as i64))
+            }
+            (ValueKind::Float(FloatOrd(a)), ValueKind::Int(b)) => {
+                Ok(ValueKind::Bool(a as i64 != b))
             }
             _ => Ok(ValueKind::Bool(left != right)),
         }
