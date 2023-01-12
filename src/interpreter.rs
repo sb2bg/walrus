@@ -51,33 +51,39 @@ impl<'a> Interpreter<'a> {
         debug!("{} -> ", node.kind().to_string());
 
         let res = match node.into_kind() {
-            NodeKind::Statements(nodes) => self.visit_statements(nodes),
-            NodeKind::BinOp(left, op, right) => self.visit_bin_op(*left, op, *right, span),
-            NodeKind::UnaryOp(op, value) => self.visit_unary_op(op, *value, span),
+            NodeKind::Statements(nodes) => Ok(self.visit_statements(nodes)?),
+            NodeKind::BinOp(left, op, right) => Ok(self.visit_bin_op(*left, op, *right, span)?),
+            NodeKind::UnaryOp(op, value) => Ok(self.visit_unary_op(op, *value, span)?),
             NodeKind::Int(num) => Ok(ValueKind::Int(num)),
             NodeKind::Float(num) => Ok(ValueKind::Float(num)),
             NodeKind::Bool(boolean) => Ok(ValueKind::Bool(boolean)),
             NodeKind::String(string) => Ok(self.scope.heap_alloc(HeapValue::String(string))),
-            NodeKind::Dict(dict) => self.visit_dict(dict),
-            NodeKind::List(list) => self.visit_list(list),
-            NodeKind::FunctionDefinition(name, args, body) => self.visit_fn_def(name, args, *body),
-            NodeKind::AnonFunctionDefinition(args, body) => self.visit_anon_fn_def(args, *body),
-            NodeKind::Ident(ident) => self.visit_var(ident, span),
+            NodeKind::Dict(dict) => Ok(self.visit_dict(dict)?),
+            NodeKind::List(list) => Ok(self.visit_list(list)?),
+            NodeKind::FunctionDefinition(name, args, body) => {
+                Ok(self.visit_fn_def(name, args, *body)?)
+            }
+            NodeKind::AnonFunctionDefinition(args, body) => {
+                Ok(self.visit_anon_fn_def(args, *body)?)
+            }
+            NodeKind::Ident(ident) => Ok(self.visit_var(ident, span)?),
             NodeKind::Void => Ok(ValueKind::Void),
-            NodeKind::If(condition, then, otherwise) => self.visit_if(*condition, *then, otherwise),
-            NodeKind::While(condition, body) => self.visit_while(*condition, *body),
-            NodeKind::Assign(name, value) => self.visit_assign(name, *value),
-            NodeKind::Reassign(ident, value, op) => self.visit_reassign(ident, *value, op),
-            NodeKind::Print(value) => self.visit_print(*value),
-            NodeKind::Println(value) => self.visit_println(*value),
-            NodeKind::Throw(value) => self.visit_throw(*value, span),
-            NodeKind::Free(value) => self.visit_free(*value),
-            NodeKind::FunctionCall(value, args) => self.visit_fn_call(*value, args, span),
-            NodeKind::Index(value, index) => self.visit_index(*value, *index),
-            NodeKind::ModuleImport(name, as_name) => self.visit_module_import(name, as_name),
-            NodeKind::PackageImport(name, as_name) => self.visit_package_import(name, as_name),
-            NodeKind::For(var, iter, body) => self.visit_for(var, *iter, *body),
-            NodeKind::Return(value) => self.visit_return(*value),
+            NodeKind::If(condition, then, otherwise) => {
+                Ok(self.visit_if(*condition, *then, otherwise)?)
+            }
+            NodeKind::While(condition, body) => Ok(self.visit_while(*condition, *body)?),
+            NodeKind::Assign(name, value) => Ok(self.visit_assign(name, *value)?),
+            NodeKind::Reassign(ident, value, op) => Ok(self.visit_reassign(ident, *value, op)?),
+            NodeKind::Print(value) => Ok(self.visit_print(*value)?),
+            NodeKind::Println(value) => Ok(self.visit_println(*value)?),
+            NodeKind::Throw(value) => Ok(self.visit_throw(*value, span)?),
+            NodeKind::Free(value) => Ok(self.visit_free(*value)?),
+            NodeKind::FunctionCall(value, args) => Ok(self.visit_fn_call(*value, args, span)?),
+            NodeKind::Index(value, index) => Ok(self.visit_index(*value, *index)?),
+            NodeKind::ModuleImport(name, as_name) => Ok(self.visit_module_import(name, as_name)?),
+            NodeKind::PackageImport(name, as_name) => Ok(self.visit_package_import(name, as_name)?),
+            NodeKind::For(var, iter, body) => Ok(self.visit_for(var, *iter, *body)?),
+            NodeKind::Return(value) => Ok(self.visit_return(*value)?),
             node => Err(WalrusError::UnknownError {
                 message: format!("Unknown node: {:?}", node),
             }),
