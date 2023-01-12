@@ -76,7 +76,7 @@ pub fn escape_string<T>(
 // todo: accept &str instead of String, and source_refs when possible
 #[derive(Error, Debug)]
 pub enum WalrusError {
-    #[error("Unknown error '{message}'. Please report this bug with the following information: Glass Version = '{}', Git Revision = '{}'", env!("CARGO_PKG_VERSION"), git_version!())]
+    #[error("Unknown error '{message}'. Please report this bug with the following information: Glass Version = '{}', Git Revision = '{}'", env!("CARGO_PKG_VERSION"), git_version!(fallback = "flamegraph"))]
     UnknownError { message: String },
 
     #[error("Unable to locate file '{filename}'. Make sure the file exists and that you have permission to read it.")]
@@ -260,6 +260,16 @@ pub enum WalrusError {
 
     #[error("Failed to gather PWD. This may be due to a permissions error.")]
     FailedGatherPWD,
+
+    #[error("Type '{type_name}' is not iterable at {}",
+        get_line(src, filename, *span)
+    )]
+    NotIterable {
+        type_name: String,
+        span: Span,
+        src: String,
+        filename: String,
+    },
 }
 
 pub fn parser_err_mapper(
