@@ -57,8 +57,8 @@ Unary = {
 Pow = BinOp<PowOp, Call>;
 
 Call = {
-    <e: Sp<Ident>> <args: Paren<Comma<SpExpr>>> => NodeKind::FunctionCall(e, args), // fixme: expr
-    <e: Sp<Ident>> <args: Bracket<SpExpr>> => NodeKind::Index(e, args), // fixme: expr
+    <e: SpIdent> <args: Paren<Comma<SpExpr>>> => NodeKind::FunctionCall(e, args), // fixme: expr
+    <e: SpIdent> <args: Bracket<SpExpr>> => NodeKind::Index(e, args), // fixme: expr
     Term,
 };
 
@@ -144,32 +144,32 @@ Ident: NodeKind = {
 
 IdentStr: String = r"[a-zA-Z_][a-zA-Z0-9_]*" => <>.to_string();
 
-If: NodeKind = "if" <c: SpExpr> <b: Sp<Block>> <e: Else> => NodeKind::If(c, b, e);
+If: NodeKind = "if" <c: SpExpr> <b: SpBlock> <e: Else> => NodeKind::If(c, b, e);
 
 Ternary: NodeKind = {
     <r: SpExpr> "if" <c: SpExpr> "else" <e: SpExpr> => NodeKind::Ternary(r, c, e),
 }
 
 Else: Option<Box<Node>> = {
-	"else" <Sp<Block>> => Some(<>),
+	"else" <SpBlock> => Some(<>),
 	"else" <Sp<If>> => Some(<>),
 	=> None,
 };
 
 While: NodeKind = {
-    "while" <c: SpExpr> <b: Sp<Block>> => NodeKind::While(c, b),
+    "while" <c: SpExpr> <b: SpBlock> => NodeKind::While(c, b),
 };
 
 For: NodeKind = {
-    "for" <v: Sp<Ident>> "in" <i: SpExpr> <b: Sp<Block>> => NodeKind::For(v, i, b),
+    "for" <v: IdentStr> "in" <i: SpExpr> <b: SpBlock> => NodeKind::For(v, i, b),
 };
 
 Func: NodeKind = {
-    "fn" <n: IdentStr> ":" <a: Comma<IdentStr>> <b: Sp<Block>> => NodeKind::FunctionDefinition(n, a, b),
+    "fn" <n: IdentStr> ":" <a: Comma<IdentStr>> <b: SpBlock> => NodeKind::FunctionDefinition(n, a, b),
 };
 
 Lambda: NodeKind = {
-    "fn" ":" <a: Comma<IdentStr>> <b: Sp<Block>> => NodeKind::AnonFunctionDefinition(a, b),
+    "fn" ":" <a: Comma<IdentStr>> <b: SpBlock> => NodeKind::AnonFunctionDefinition(a, b),
 };
 
 Extern: NodeKind = {
@@ -231,6 +231,7 @@ Comma<T> = Delim<T, ",">;
 
 SpBlock = Sp<Block>;
 SpExpr = Sp<Expr>;
+SpIdent = Sp<Ident>;
 
 Delim<T, D>: Vec<T> = {
     <mut h: (<T> D)*> <t: T?> => match t {
