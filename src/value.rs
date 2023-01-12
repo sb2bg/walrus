@@ -1,31 +1,10 @@
 use crate::arenas::{DictKey, FuncKey, ListKey, RustFuncKey, RustFunction, StringKey};
 use crate::ast::Node;
-use crate::scope::Scope;
 use float_ord::FloatOrd;
 use std::collections::HashMap;
 use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::Hash;
-
-#[derive(Debug, Copy, Clone)]
-pub struct Value<'a> {
-    kind: ValueKind,
-    scope: &'a Scope<'a>,
-}
-
-impl<'a> Value<'a> {
-    pub fn new(kind: ValueKind, scope: &'a Scope) -> Self {
-        Self { kind, scope }
-    }
-
-    pub fn kind(&self) -> &ValueKind {
-        &self.kind
-    }
-
-    pub fn into_kind(self) -> ValueKind {
-        self.kind
-    }
-}
 
 pub enum HeapValue {
     List(Vec<ValueKind>),
