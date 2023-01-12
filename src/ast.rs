@@ -31,7 +31,7 @@ pub enum NodeKind {
     If(Box<Node>, Box<Node>, Option<Box<Node>>),
     Ternary(Box<Node>, Box<Node>, Box<Node>),
     While(Box<Node>, Box<Node>),
-    For(Box<Node>, Box<Node>, Box<Node>),
+    For(String, Box<Node>, Box<Node>),
     Block(Vec<Box<Node>>),
     PackageImport(String, Option<String>),
     ModuleImport(String, Option<String>),
@@ -103,7 +103,7 @@ impl Display for NodeKind {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Clone)]
+#[derive(Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Copy, Clone)]
 pub enum Op {
     Mul,
     Div,
