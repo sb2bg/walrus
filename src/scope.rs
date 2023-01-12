@@ -4,14 +4,16 @@ use crate::arenas::{
 use crate::ast::Node;
 use crate::value::{HeapValue, ValueKind};
 use log::debug;
+use once_cell::sync::Lazy;
 use std::collections::{HashMap, VecDeque};
+
+static mut ARENA: Lazy<ValueHolder> = Lazy::new(ValueHolder::new);
 
 #[derive(Debug)]
 pub struct Scope<'a> {
     name: String,
     // todo: add line and file name
     vars: HashMap<String, ValueKind>,
-    arena: ValueHolder, // todo RC?
     parent: Option<&'a Scope<'a>>,
 }
 
@@ -21,12 +23,13 @@ impl<'a> Scope<'a> {
             name: "global".to_string(),
             vars: HashMap::new(),
             parent: None,
-            arena: ValueHolder::new(),
         }
     }
 
     pub fn dump(&self) {
-        self.arena.dump();
+        unsafe {
+            ARENA.dump();
+        }
 
         debug!("Scope dump: {}", self.name);
 
@@ -44,7 +47,6 @@ impl<'a> Scope<'a> {
             name,
             vars: HashMap::new(),
             parent: Some(self),
-            arena: self.arena.clone(),
         }
     }
 
@@ -65,7 +67,7 @@ impl<'a> Scope<'a> {
     }
 
     pub fn heap_alloc(&mut self, value: HeapValue) -> ValueKind {
-        self.arena.alloc(value)
+        unsafe { ARENA.alloc(value) }
     }
 
     pub fn define(&mut self, name: String, value: ValueKind) {
@@ -90,27 +92,27 @@ impl<'a> Scope<'a> {
     }
 
     pub fn get_rust_function(&self, key: RustFuncKey) -> ArenaResult<&RustFunction> {
-        self.arena.get_rust_function(key)
+        unsafe { ARENA.get_rust_function(key) }
     }
 
     pub fn get_dict(&self, key: DictKey) -> ArenaResult<&HashMap<ValueKind, ValueKind>> {
-        self.arena.get_dict(key)
+        unsafe { ARENA.get_dict(key) }
     }
 
     pub fn get_list(&self, key: ListKey) -> ArenaResult<&Vec<ValueKind>> {
-        self.arena.get_list(key)
+        unsafe { ARENA.get_list(key) }
     }
 
     pub fn get_string(&self, key: StringKey) -> ArenaResult<&String> {
-        self.arena.get_string(key)
+        unsafe { ARENA.get_string(key) }
     }
 
     pub fn get_function(&self, key: FuncKey) -> ArenaResult<&(String, Vec<String>, Node)> {
-        self.arena.get_function(key)
+        unsafe { ARENA.get_function(key) }
     }
 
     pub fn free(&mut self, value: ValueKind) -> bool {
-        self.arena.free(value)
+        unsafe { ARENA.free(value) }
     }
 
     pub fn stack_trace(&self) -> String {
