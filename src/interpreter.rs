@@ -66,7 +66,7 @@ impl<'a> Interpreter<'a> {
             NodeKind::AnonFunctionDefinition(args, body) => {
                 Ok(self.visit_anon_fn_def(args, *body)?)
             }
-            NodeKind::Ident(ident) => Ok(self.visit_var(ident, span)?),
+            NodeKind::Ident(ident) => Ok(self.visit_variable(&ident, span)?),
             NodeKind::Void => Ok(ValueKind::Void),
             NodeKind::If(condition, then, otherwise) => {
                 Ok(self.visit_if(*condition, *then, otherwise)?)
@@ -93,7 +93,7 @@ impl<'a> Interpreter<'a> {
         res
     }
 
-    fn get_variable(&self, name: &str, span: Span) -> InterpreterResult {
+    fn visit_variable(&self, name: &str, span: Span) -> InterpreterResult {
         self.scope.get(name).ok_or_else(|| UndefinedVariable {
             name: name.to_string(),
             span,
@@ -107,10 +107,10 @@ impl<'a> Interpreter<'a> {
         let mut sub_interpreter = self.create_child("name".to_string()); // fixme: should be name of func, for loop, etc
 
         for node in nodes {
-            let res = sub_interpreter.interpret(*node);
+            let res = sub_interpreter.interpret(*node)?;
 
             if sub_interpreter.is_returning {
-                return res;
+                return Ok(res);
             }
         }
 
@@ -193,10 +193,6 @@ impl<'a> Interpreter<'a> {
         Ok(ValueKind::Void)
     }
 
-    fn visit_var(&self, name: String, span: Span) -> InterpreterResult {
-        self.get_variable(&name, span)
-    }
-
     fn visit_if(
         &mut self,
         condition: Node,
@@ -207,9 +203,9 @@ impl<'a> Interpreter<'a> {
         let condition = self.interpret(condition)?;
 
         if self.is_truthy(condition, cond_span)? {
-            self.interpret(body)
+            Ok(self.interpret(body)?)
         } else if let Some(otherwise) = otherwise {
-            self.interpret(*otherwise)
+            Ok(self.interpret(*otherwise)?)
         } else {
             Ok(ValueKind::Void)
         }
@@ -249,7 +245,7 @@ impl<'a> Interpreter<'a> {
 
     fn visit_reassign(&mut self, ident: Spanned<String>, value: Node, op: Op) -> InterpreterResult {
         let new_value = self.interpret(value)?;
-        let old_value = self.get_variable(ident.value(), ident.span())?;
+        let old_value = self.visit_variable(ident.value(), ident.span())?;
 
         // fixme: clone
         // fixme: operator such as +=, -=, etc should be handled here
@@ -403,7 +399,7 @@ impl<'a> Interpreter<'a> {
                 // to do some crazy optimization stuff such as putting it in an
                 // arena but that's a lot of work for a small optimization
                 // this comment is very similar to the one in visit_while
-                sub_interpreter.interpret(function.2.clone())
+                Ok(sub_interpreter.interpret(function.2.clone())?)
             }
             ValueKind::RustFunction(f) => {
                 let function = self.scope.get_rust_function(f)?;
