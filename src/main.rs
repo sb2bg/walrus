@@ -10,6 +10,7 @@ mod type_checker;
 mod value;
 
 use crate::error::WalrusError;
+use crate::interpreter::InterpreterResult;
 use crate::program::{Program, Repl};
 use clap::Parser as ClapParser;
 use lalrpop_util::lalrpop_mod;
@@ -55,10 +56,11 @@ fn main() {
 fn try_main() -> WalrusResult {
     let args = Args::parse();
     setup_logger(args.debug)?;
-    create_shell(args.file)
+    create_shell(args.file)?;
+    Ok(())
 }
 
-pub fn create_shell(file: Option<PathBuf>) -> WalrusResult {
+pub fn create_shell(file: Option<PathBuf>) -> InterpreterResult {
     match file {
         Some(file) => {
             let filename = file.to_string_lossy();
@@ -67,14 +69,10 @@ pub fn create_shell(file: Option<PathBuf>) -> WalrusResult {
                 filename: filename.to_string(),
             })?;
 
-            Program::new(src, filename.into_owned()).run()?;
+            Ok(Program::new(src, filename.into_owned()).run()?)
         }
-        None => {
-            Repl::new().run()?;
-        }
+        None => Ok(Repl::new().run()?),
     }
-
-    Ok(())
 }
 
 fn setup_logger(debug: bool) -> WalrusResult {

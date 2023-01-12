@@ -490,16 +490,21 @@ impl<'a> Interpreter<'a> {
         }
     }
 
+    // fixme: when 2 files import each other, it loops
     fn visit_module_import(&mut self, name: String, as_name: Option<String>) -> InterpreterResult {
-        // todo: make it so the executed file's cwd is the directory of the file, not the cwd of the file that imported it
-
         let path = std::path::Path::new(self.source_ref.filename())
             .parent()
             .ok_or_else(|| WalrusError::FailedGatherPWD)?
             .join(name)
             .with_extension("walrus");
 
-        create_shell(Some(path))?;
+        // fixme: I don't like this because it makes a new parser struct
+        let result = create_shell(Some(path))?;
+
+        if let Some(as_name) = as_name {
+            self.scope.define(as_name, result);
+        }
+
         Ok(ValueKind::Void)
     }
 

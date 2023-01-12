@@ -1,7 +1,7 @@
 use crate::error::parser_err_mapper;
 use crate::grammar::{ProgramParser, ReplParser};
-use crate::interpreter::Interpreter;
-use crate::WalrusResult;
+use crate::interpreter::{Interpreter, InterpreterResult};
+use crate::value::ValueKind;
 use log::debug;
 use std::io::{stdout, BufRead, Write};
 
@@ -15,7 +15,7 @@ impl Program {
         Self { src, filename }
     }
 
-    pub fn run(&mut self) -> WalrusResult {
+    pub fn run(&mut self) -> InterpreterResult {
         debug!("Read {} bytes from '{}'", self.src.len(), self.filename);
 
         let ast = *ProgramParser::new()
@@ -28,7 +28,7 @@ impl Program {
         let result = interpreter.interpret(ast)?;
         debug!("Result > {:?}", result);
 
-        return Ok(());
+        Ok(result)
     }
 }
 
@@ -43,7 +43,7 @@ impl Repl<'_> {
         Self { interpreter }
     }
 
-    pub fn run(&mut self) -> WalrusResult {
+    pub fn run(&mut self) -> InterpreterResult {
         let parser = ReplParser::new();
         Self::prompt_and_flush();
 
@@ -69,7 +69,7 @@ impl Repl<'_> {
             Self::prompt_and_flush();
         }
 
-        Ok(())
+        Ok(ValueKind::Void)
     }
 
     fn prompt_and_flush() {
