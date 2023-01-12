@@ -21,6 +21,9 @@ pub type RustFunction = fn(Vec<ValueKind>) -> InterpreterResult;
 // and use a different enum to differentiate between the
 // types stored by value and the types stored by key
 // fixme: eventually this will have to be garbage collected
+// fixme: maybe we can just replace this with RC values in ValueKind
+// and then just clone everything and the copy types would just
+// be copied and the rc types would be cloned
 #[derive(Debug)]
 pub struct ValueHolder {
     dict_slotmap: DenseSlotMap<DictKey, HashMap<ValueKind, ValueKind>>,
@@ -28,19 +31,6 @@ pub struct ValueHolder {
     string_slotmap: DenseSlotMap<StringKey, String>,
     function_slotmap: DenseSlotMap<FuncKey, (String, Vec<String>, Node)>,
     rust_function_slotmap: DenseSlotMap<RustFuncKey, RustFunction>,
-}
-
-impl Clone for ValueHolder {
-    fn clone(&self) -> Self {
-        debug!("cloning value holder");
-        Self {
-            dict_slotmap: self.dict_slotmap.clone(),
-            list_slotmap: self.list_slotmap.clone(),
-            string_slotmap: self.string_slotmap.clone(),
-            function_slotmap: self.function_slotmap.clone(),
-            rust_function_slotmap: self.rust_function_slotmap.clone(),
-        }
-    }
 }
 
 impl ValueHolder {
