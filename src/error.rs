@@ -270,6 +270,15 @@ pub enum WalrusError {
         src: String,
         filename: String,
     },
+
+    #[error("Division by zero at {}",
+        get_line(src, filename, *span)
+    )]
+    DivisionByZero {
+        span: Span,
+        src: String,
+        filename: String,
+    },
 }
 
 pub fn parser_err_mapper(
