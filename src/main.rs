@@ -48,7 +48,7 @@ fn main() {
 
     if let Err(err) = try_main() {
         eprintln!();
-        error!("Fatal exception during execution -> {}", err);
+        eprintln!("[ERROR] Fatal exception during execution -> {}", err);
         eprintln!();
     }
 }
