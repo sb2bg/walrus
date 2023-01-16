@@ -13,7 +13,7 @@ static mut ARENA: Lazy<ValueHolder> = Lazy::new(ValueHolder::new);
 #[derive(Debug)]
 pub struct Scope {
     name: String,
-    // todo: add line and file name
+    // todo: add line and file name for stack trace
     vars: HashMap<String, ValueKind>,
     parent: Option<NonNull<Scope>>,
 }
@@ -52,11 +52,6 @@ impl Scope {
     }
 
     pub fn get(&self, name: &str) -> Option<ValueKind> {
-        // todo: should this be the behavior? maybe be more explicit
-        if name == "_" {
-            return Some(ValueKind::Void);
-        }
-
         if let Some(value) = self.vars.get(name) {
             Some(*value)
         } else {
@@ -115,6 +110,8 @@ impl Scope {
         unsafe { ARENA.free(value) }
     }
 
+    // todo: make this print the right way around and do better than just a string
+    // something like StackTraceEntry
     pub fn stack_trace(&self) -> String {
         if let Some(parent) = self.parent {
             format!("{} -> {}", self.name, unsafe {
