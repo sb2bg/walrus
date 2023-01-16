@@ -1,7 +1,6 @@
 use crate::ast::{Node, NodeKind, Op};
 use crate::create_shell;
 use crate::error::WalrusError;
-use crate::error::WalrusError::UndefinedVariable;
 use crate::scope::Scope;
 use crate::source_ref::SourceRef;
 use crate::span::{Span, Spanned};
@@ -96,12 +95,14 @@ impl<'a> Interpreter<'a> {
     }
 
     fn visit_variable(&self, name: &str, span: Span) -> InterpreterResult {
-        self.scope.get(name).ok_or_else(|| UndefinedVariable {
-            name: name.to_string(),
-            span,
-            src: self.source_ref.source().into(),
-            filename: self.source_ref.filename().into(),
-        })
+        self.scope
+            .get(name)
+            .ok_or_else(|| WalrusError::UndefinedVariable {
+                name: name.to_string(),
+                span,
+                src: self.source_ref.source().into(),
+                filename: self.source_ref.filename().into(),
+            })
     }
 
     // fixme: returns in blocks that aren't immediately in a function don't return from the function, but from the block
@@ -265,15 +266,16 @@ impl<'a> Interpreter<'a> {
             _ => new_value,
         };
 
-        // fixme: clone
-        if !self.scope.reassign(ident.value().clone(), new_value) {
-            return Err(UndefinedVariable {
-                name: ident.value().clone(), // fixme: clone
-                span: ident.span(),
-                src: self.source_ref.source().into(),
-                filename: self.source_ref.filename().into(),
-            });
-        }
+        let span = ident.span();
+
+        if let Err(name) = self.scope.reassign(ident.into_value(), new_value) {
+            Err(WalrusError::UndefinedVariable {
+                name,
+                span,
+                src: self.source_ref.source().to_string(),
+                filename: self.source_ref.filename().to_string(),
+            })?
+        };
 
         Ok(ValueKind::Void)
     }
@@ -412,10 +414,7 @@ impl<'a> Interpreter<'a> {
                     sub_interpreter.scope.define(name.clone(), value); // todo: clone
                 }
 
-                // todo: I'm pretty sure this clone is required unless I want
-                // to do some crazy optimization stuff such as putting it in an
-                // arena but that's a lot of work for a small optimization
-                // this comment is very similar to the one in visit_while
+                // todo: I'm pretty sure this clone is required but see if we can avoid it
                 Ok(sub_interpreter.interpret(function.2.clone())?)
             }
             ValueKind::RustFunction(f) => {
@@ -425,8 +424,8 @@ impl<'a> Interpreter<'a> {
             _ => Err(WalrusError::NotCallable {
                 value: value.get_type().to_string(),
                 span: fn_span,
-                src: self.source_ref.source().into(),
-                filename: self.source_ref.filename().into(),
+                src: self.source_ref.source().to_string(),
+                filename: self.source_ref.filename().to_string(),
             }),
         }
     }
@@ -491,6 +490,7 @@ impl<'a> Interpreter<'a> {
     }
 
     // fixme: when 2 files import each other, it loops
+    // fixme: when importing a function, for example, it clones the function rather than just referencing it
     fn visit_module_import(&mut self, name: String, as_name: Option<String>) -> InterpreterResult {
         let path = std::path::Path::new(self.source_ref.filename())
             .parent()
