@@ -10,6 +10,9 @@ lalrpop = "0.19.8"
 [profile.release]
 debug = true
 
+[features]
+dhat-heap = []
+
 [dependencies]
 clap = { version = "4.0.26", features = ["derive"] }
 thiserror = "1.0.37"
@@ -26,3 +29,4 @@ itertools = "0.10.5"
 slotmap = "1.0.6"
 once_cell = "1.17.0"
 mimalloc = { version = "0.1.34", default-features = false }
+dhat = "0.3.2"

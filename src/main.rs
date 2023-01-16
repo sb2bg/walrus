@@ -15,13 +15,18 @@ use crate::program::{Program, Repl};
 use clap::Parser as ClapParser;
 use lalrpop_util::lalrpop_mod;
 use log::LevelFilter;
-use mimalloc::MiMalloc;
 use simplelog::SimpleLogger;
 use std::path::PathBuf;
 use std::{fs, panic};
 
+#[cfg(not(feature = "dhat-heap"))]
 #[global_allocator]
-static GLOBAL: MiMalloc = MiMalloc;
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
+// profile heap usage with dhat
+#[cfg(feature = "dhat-heap")]
+#[global_allocator]
+static ALLOC: dhat::Alloc = dhat::Alloc;
 
 lalrpop_mod!(pub grammar);
 
@@ -49,6 +54,9 @@ fn main() {
             }
         );
     }));
+
+    #[cfg(feature = "dhat-heap")]
+    let _profiler = dhat::Profiler::new_heap();
 
     if let Err(err) = try_main() {
         eprintln!();
