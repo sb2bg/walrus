@@ -14,10 +14,14 @@ use crate::interpreter::InterpreterResult;
 use crate::program::{Program, Repl};
 use clap::Parser as ClapParser;
 use lalrpop_util::lalrpop_mod;
-use log::{error, LevelFilter};
+use log::LevelFilter;
+use mimalloc::MiMalloc;
 use simplelog::SimpleLogger;
 use std::path::PathBuf;
 use std::{fs, panic};
+
+#[global_allocator]
+static GLOBAL: MiMalloc = MiMalloc;
 
 lalrpop_mod!(pub grammar);
 
