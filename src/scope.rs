@@ -74,14 +74,14 @@ impl Scope {
         self.vars.insert(name, value);
     }
 
-    pub fn reassign(&mut self, name: String, value: ValueKind) -> bool {
+    pub fn reassign(&mut self, name: String, value: ValueKind) -> Result<(), String> {
         if self.vars.contains_key(&name) {
             self.define(name, value);
-            true
+            Ok(())
         } else {
             match self.parent {
                 Some(mut parent) => unsafe { parent.as_mut().reassign(name, value) },
-                _ => false,
+                _ => Err(name),
             }
         }
     }
