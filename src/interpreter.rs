@@ -601,9 +601,28 @@ impl<'a> Interpreter<'a> {
 
     fn div(&self, left: ValueKind, right: ValueKind, span: Span) -> InterpreterResult {
         match (left, right) {
-            (ValueKind::Int(a), ValueKind::Int(b)) => Ok(ValueKind::Int(a / b)),
+            (ValueKind::Int(a), ValueKind::Int(b)) => {
+                if b == 0 {
+                    Err(WalrusError::DivisionByZero {
+                        span,
+                        src: self.source_ref.source().into(),
+                        filename: self.source_ref.filename().into(),
+                    })
+                } else {
+                    Ok(ValueKind::Int(a / b))
+                }
+            }
+
             (ValueKind::Float(FloatOrd(a)), ValueKind::Float(FloatOrd(b))) => {
-                Ok(ValueKind::Float(FloatOrd(a / b)))
+                if b == 0.0 {
+                    Err(WalrusError::DivisionByZero {
+                        span,
+                        src: self.source_ref.source().into(),
+                        filename: self.source_ref.filename().into(),
+                    })
+                } else {
+                    Ok(ValueKind::Float(FloatOrd(a / b)))
+                }
             }
             (a, b) => Err(self.construct_err(Op::Div, a, b, span)),
         }
@@ -611,9 +630,27 @@ impl<'a> Interpreter<'a> {
 
     fn rem(&self, left: ValueKind, right: ValueKind, span: Span) -> InterpreterResult {
         match (left, right) {
-            (ValueKind::Int(a), ValueKind::Int(b)) => Ok(ValueKind::Int(a % b)),
+            (ValueKind::Int(a), ValueKind::Int(b)) => {
+                if b == 0 {
+                    Err(WalrusError::DivisionByZero {
+                        span,
+                        src: self.source_ref.source().into(),
+                        filename: self.source_ref.filename().into(),
+                    })
+                } else {
+                    Ok(ValueKind::Int(a % b))
+                }
+            }
             (ValueKind::Float(FloatOrd(a)), ValueKind::Float(FloatOrd(b))) => {
-                Ok(ValueKind::Float(FloatOrd(a % b)))
+                if b == 0.0 {
+                    Err(WalrusError::DivisionByZero {
+                        span,
+                        src: self.source_ref.source().into(),
+                        filename: self.source_ref.filename().into(),
+                    })
+                } else {
+                    Ok(ValueKind::Float(FloatOrd(a % b)))
+                }
             }
             (a, b) => Err(self.construct_err(Op::Mod, a, b, span)),
         }
