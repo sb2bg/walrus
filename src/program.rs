@@ -1,4 +1,4 @@
-use crate::error::parser_err_mapper;
+use crate::error::{parser_err_mapper, WalrusError};
 use crate::grammar::{ProgramParser, ReplParser};
 use crate::interpreter::{Interpreter, InterpreterResult};
 use crate::value::ValueKind;
@@ -66,14 +66,19 @@ impl Repl<'_> {
                 self.interpreter.dump();
             }
 
-            Self::prompt_and_flush();
+            Self::prompt_and_flush()?;
         }
 
         Ok(ValueKind::Void)
     }
 
-    fn prompt_and_flush() {
+    fn prompt_and_flush() -> Result<(), WalrusError> {
         print!("REPL > ");
-        stdout().flush().unwrap(); // fixme: handle error even though it's unlikely to happen
+
+        stdout()
+            .flush()
+            .map_err(|e| WalrusError::IOError { source: e })?;
+
+        Ok(())
     }
 }

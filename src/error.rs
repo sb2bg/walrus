@@ -79,6 +79,12 @@ pub enum WalrusError {
     #[error("Unknown error '{message}'. Please report this bug with the following information: Glass Version = '{}', Git Revision = '{}'", env!("CARGO_PKG_VERSION"), git_version!(fallback = "flamegraph"))]
     UnknownError { message: String },
 
+    #[error("Unknown IO error occurred while flushing REPL")]
+    IOError {
+        #[from]
+        source: std::io::Error,
+    },
+
     #[error("Unable to locate file '{filename}'. Make sure the file exists and that you have permission to read it.")]
     FileNotFound { filename: String },
 
