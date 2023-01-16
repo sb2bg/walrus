@@ -57,9 +57,9 @@ Unary = {
 Pow = BinOp<PowOp, Call>;
 
 Call = {
-    <e: SpIdent> <args: Paren<Comma<SpExpr>>> => NodeKind::FunctionCall(e, args), // fixme: expr
-    <e: SpIdent> <args: Bracket<SpExpr>> => NodeKind::Index(e, args), // fixme: expr
-    Term,
+    <e: Sp<Atom>> <args: Paren<Comma<SpExpr>>> => NodeKind::FunctionCall(e, args),
+    <e: Sp<Atom>> <args: Bracket<SpExpr>> => NodeKind::Index(e, args),
+    Atom,
 };
 
 OrOp: Op = "or" => Op::Or;
@@ -94,7 +94,7 @@ PowOp: Op = {
     "**" => Op::Pow,
 };
 
-Term: NodeKind = {
+Atom: NodeKind = {
     Int,
     Float,
 	String,
