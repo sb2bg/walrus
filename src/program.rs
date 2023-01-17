@@ -45,7 +45,7 @@ impl Repl<'_> {
 
     pub fn run(&mut self) -> InterpreterResult {
         let parser = ReplParser::new();
-        Self::prompt_and_flush();
+        Self::prompt_and_flush()?;
 
         for line in std::io::stdin().lock().lines() {
             let line = line.expect("Failed to read line");
@@ -61,10 +61,6 @@ impl Repl<'_> {
 
             let result = self.interpreter.interpret(ast)?;
             debug!("{:?}", result);
-
-            if log::log_enabled!(log::Level::Debug) {
-                self.interpreter.dump();
-            }
 
             Self::prompt_and_flush()?;
         }
