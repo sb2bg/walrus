@@ -1,14 +1,14 @@
 use crate::arenas::{DictKey, FuncKey, ListKey, RustFuncKey, RustFunction, StringKey};
 use crate::ast::Node;
 use float_ord::FloatOrd;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::Hash;
 
 pub enum HeapValue {
     List(Vec<ValueKind>),
-    Dict(HashMap<ValueKind, ValueKind>),
+    Dict(FxHashMap<ValueKind, ValueKind>),
     Function((String, Vec<String>, Node)),
     RustFunction(RustFunction),
     String(String),
