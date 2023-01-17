@@ -1,10 +1,11 @@
 use crate::ast::Node;
 use crate::error::WalrusError;
-use crate::interpreter::InterpreterResult;
+use crate::interpreter::{Interpreter, InterpreterResult};
+use crate::span::Span;
 use crate::value::{HeapValue, ValueKind};
 use log::debug;
+use rustc_hash::FxHashMap;
 use slotmap::{new_key_type, DenseSlotMap};
-use std::collections::HashMap;
 
 new_key_type! {
     pub struct ListKey;
@@ -15,7 +16,10 @@ new_key_type! {
 }
 
 pub type ArenaResult<T> = Result<T, WalrusError>;
-pub type RustFunction = fn(Vec<ValueKind>) -> InterpreterResult;
+pub type RustFunction = (
+    fn(Vec<ValueKind>, interpreter: &Interpreter, span: Span) -> InterpreterResult,
+    Option<usize>,
+);
 
 // todo: maybe instead of this, we can use a single slotmap
 // and use a different enum to differentiate between the
@@ -24,9 +28,8 @@ pub type RustFunction = fn(Vec<ValueKind>) -> InterpreterResult;
 // fixme: maybe we can just replace this with RC values in ValueKind
 // and then just clone everything and the copy types would just
 // be copied and the rc types would be cloned
-#[derive(Debug)]
 pub struct ValueHolder {
-    dict_slotmap: DenseSlotMap<DictKey, HashMap<ValueKind, ValueKind>>,
+    dict_slotmap: DenseSlotMap<DictKey, FxHashMap<ValueKind, ValueKind>>,
     list_slotmap: DenseSlotMap<ListKey, Vec<ValueKind>>,
     string_slotmap: DenseSlotMap<StringKey, String>,
     function_slotmap: DenseSlotMap<FuncKey, (String, Vec<String>, Node)>,
@@ -42,16 +45,6 @@ impl ValueHolder {
             function_slotmap: DenseSlotMap::with_key(),
             rust_function_slotmap: DenseSlotMap::with_key(),
         }
-    }
-
-    pub fn dump(&self) {
-        debug!("Arena dump");
-
-        debug!("Dictionaries: {:?}", self.dict_slotmap);
-        debug!("Lists: {:?}", self.list_slotmap);
-        debug!("Strings: {:?}", self.string_slotmap);
-        debug!("Functions: {:?}", self.function_slotmap);
-        debug!("Rust Functions: {:?}", self.rust_function_slotmap);
     }
 
     pub fn free(&mut self, key: ValueKind) -> bool {
@@ -81,7 +74,7 @@ impl ValueHolder {
         Self::check(self.rust_function_slotmap.get(key))
     }
 
-    pub fn get_dict(&self, key: DictKey) -> ArenaResult<&HashMap<ValueKind, ValueKind>> {
+    pub fn get_dict(&self, key: DictKey) -> ArenaResult<&FxHashMap<ValueKind, ValueKind>> {
         Self::check(self.dict_slotmap.get(key))
     }
 
