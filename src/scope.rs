@@ -2,10 +2,11 @@ use crate::arenas::{
     ArenaResult, DictKey, FuncKey, ListKey, RustFuncKey, RustFunction, StringKey, ValueHolder,
 };
 use crate::ast::Node;
+use crate::error::WalrusError;
 use crate::value::{HeapValue, ValueKind};
-use log::debug;
 use once_cell::sync::Lazy;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
+use std::io::Write;
 use std::ptr::NonNull;
 
 static mut ARENA: Lazy<ValueHolder> = Lazy::new(ValueHolder::new);
@@ -14,7 +15,7 @@ static mut ARENA: Lazy<ValueHolder> = Lazy::new(ValueHolder::new);
 pub struct Scope {
     name: String,
     // todo: add line and file name for stack trace
-    vars: HashMap<String, ValueKind>,
+    vars: FxHashMap<String, ValueKind>,
     parent: Option<NonNull<Scope>>,
 }
 
@@ -22,31 +23,57 @@ impl Scope {
     pub fn new() -> Self {
         Self {
             name: "global".to_string(),
-            vars: HashMap::new(),
+            vars: Self::create_builtins(),
             parent: None,
         }
     }
 
-    pub fn dump(&self) {
-        unsafe {
-            ARENA.dump();
-        }
+    fn create_builtins() -> FxHashMap<String, ValueKind> {
+        let mut builtins = FxHashMap::default();
 
-        debug!("Scope dump: {}", self.name);
+        builtins.insert(
+            "input".to_string(),
+            Self::heap_alloc(HeapValue::RustFunction((
+                |args, interpreter, _| {
+                    print!("{}", interpreter.stringify(args[0])?);
+                    std::io::stdout().flush().unwrap();
 
-        for (k, v) in self.vars.iter() {
-            debug!("{}: {}", k, v);
-        }
+                    let mut input = String::new();
+                    std::io::stdin().read_line(&mut input).unwrap();
 
-        if let Some(parent) = self.parent {
-            unsafe { parent.as_ref().dump() };
-        }
+                    Ok(Self::heap_alloc(HeapValue::String(input)))
+                },
+                Some(1),
+            ))),
+        );
+
+        builtins.insert(
+            "len".to_string(),
+            Self::heap_alloc(HeapValue::RustFunction((
+                |args, interpreter, span| match args[0] {
+                    ValueKind::String(key) => {
+                        Ok(ValueKind::Int(Self::get_string(key)?.len() as i64))
+                    }
+                    ValueKind::List(key) => Ok(ValueKind::Int(Self::get_list(key)?.len() as i64)),
+                    ValueKind::Dict(key) => Ok(ValueKind::Int(Self::get_dict(key)?.len() as i64)),
+                    _ => Err(WalrusError::NoLength {
+                        type_name: args[0].get_type().to_string(),
+                        span,
+                        src: interpreter.source_ref().source().to_string(),
+                        filename: interpreter.source_ref().filename().to_string(),
+                    }),
+                },
+                Some(1),
+            ))),
+        );
+
+        builtins
     }
 
     pub fn new_child(&self, name: String) -> Self {
         Self {
             name,
-            vars: HashMap::new(),
+            vars: FxHashMap::default(),
             parent: Some(NonNull::from(self)),
         }
     }
@@ -62,7 +89,7 @@ impl Scope {
         }
     }
 
-    pub fn heap_alloc(&mut self, value: HeapValue) -> ValueKind {
+    pub fn heap_alloc(value: HeapValue) -> ValueKind {
         unsafe { ARENA.alloc(value) }
     }
 
@@ -86,27 +113,27 @@ impl Scope {
         }
     }
 
-    pub fn get_rust_function(&self, key: RustFuncKey) -> ArenaResult<&RustFunction> {
+    pub fn get_rust_function<'a>(key: RustFuncKey) -> ArenaResult<&'a RustFunction> {
         unsafe { ARENA.get_rust_function(key) }
     }
 
-    pub fn get_dict(&self, key: DictKey) -> ArenaResult<&HashMap<ValueKind, ValueKind>> {
+    pub fn get_dict<'a>(key: DictKey) -> ArenaResult<&'a FxHashMap<ValueKind, ValueKind>> {
         unsafe { ARENA.get_dict(key) }
     }
 
-    pub fn get_list(&self, key: ListKey) -> ArenaResult<&Vec<ValueKind>> {
+    pub fn get_list<'a>(key: ListKey) -> ArenaResult<&'a Vec<ValueKind>> {
         unsafe { ARENA.get_list(key) }
     }
 
-    pub fn get_string(&self, key: StringKey) -> ArenaResult<&String> {
+    pub fn get_string<'a>(key: StringKey) -> ArenaResult<&'a String> {
         unsafe { ARENA.get_string(key) }
     }
 
-    pub fn get_function(&self, key: FuncKey) -> ArenaResult<&(String, Vec<String>, Node)> {
+    pub fn get_function<'a>(key: FuncKey) -> ArenaResult<&'a (String, Vec<String>, Node)> {
         unsafe { ARENA.get_function(key) }
     }
 
-    pub fn free(&mut self, value: ValueKind) -> bool {
+    pub fn free(value: ValueKind) -> bool {
         unsafe { ARENA.free(value) }
     }
 
