@@ -59,6 +59,10 @@ Pow = BinOp<PowOp, Call>;
 Call = {
     <e: Sp<Atom>> <args: Paren<Comma<SpExpr>>> => NodeKind::FunctionCall(e, args),
     <e: Sp<Atom>> <args: Bracket<SpExpr>> => NodeKind::Index(e, args),
+    <e: Sp<Atom>> "[" <l: SpExpr> ".." <u: SpExpr> "]" => NodeKind::RangedIndex(e, Some(l), Some(u)),
+    <e: Sp<Atom>> "[" <l: SpExpr> ".." "]" => NodeKind::RangedIndex(e, Some(l), None),
+    <e: Sp<Atom>> "[" ".." <u: SpExpr> "]" => NodeKind::RangedIndex(e, None, Some(u)),
+    <e: Sp<Atom>> "[" ".." "]" => NodeKind::RangedIndex(e, None, None),
     Atom,
 };
 
@@ -169,7 +173,7 @@ Func: NodeKind = {
 };
 
 Lambda: NodeKind = {
-    "fn" ":" <a: Comma<IdentStr>> <b: SpBlock> => NodeKind::AnonFunctionDefinition(a, b),
+    ":" <a: Comma<IdentStr>> <b: SpBlock> => NodeKind::AnonFunctionDefinition(a, b),
 };
 
 Extern: NodeKind = {
