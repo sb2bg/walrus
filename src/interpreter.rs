@@ -83,6 +83,9 @@ impl<'a> Interpreter<'a> {
             NodeKind::PackageImport(name, as_name) => Ok(self.visit_package_import(name, as_name)?),
             NodeKind::For(var, iter, body) => Ok(self.visit_for(var, *iter, *body)?),
             NodeKind::Return(value) => Ok(self.visit_return(*value)?),
+            NodeKind::IndexAssign(value, index, new_value) => {
+                Ok(self.visit_index_assign(*value, *index, *new_value)?)
+            }
             node => Err(WalrusError::UnknownError {
                 message: format!("Unknown node: {:?}", node),
             }),
@@ -261,6 +264,8 @@ impl<'a> Interpreter<'a> {
             Op::Div => self.div(old_value, new_value, span)?,
             Op::Mod => self.rem(old_value, new_value, span)?,
             Op::Pow => self.pow(old_value, new_value, span)?,
+            Op::Or => self.or(old_value, new_value, span)?,
+            Op::And => self.and(old_value, new_value, span)?,
             _ => new_value,
         };
 
@@ -602,6 +607,64 @@ impl<'a> Interpreter<'a> {
         let value = self.interpret(value)?;
         self.is_returning = true;
         Ok(value)
+    }
+
+    fn visit_index_assign(
+        &mut self,
+        value: Node,
+        index: Node,
+        new_value: Node,
+    ) -> InterpreterResult {
+        let value_span = *value.span();
+        let value = self.interpret(value)?;
+        let index_span = *index.span();
+        let index = self.interpret(index)?;
+        let new_value = self.interpret(new_value)?;
+
+        match value {
+            ValueKind::List(l) => {
+                let list = Scope::get_mut_list(l)?;
+
+                match index {
+                    ValueKind::Int(n) => {
+                        let index = if n < 0 { n + list.len() as i64 } else { n };
+
+                        if index < 0 || index as usize >= list.len() {
+                            Err(WalrusError::IndexOutOfBounds {
+                                index: n, // fixme: lossy conversion
+                                len: list.len(),
+                                span: index_span,
+                                src: self.source_ref.source().into(),
+                                filename: self.source_ref.filename().into(),
+                            })?
+                        }
+
+                        list[index as usize] = new_value;
+                        Ok(ValueKind::Void)
+                    }
+                    _ => Err(WalrusError::InvalidIndexType {
+                        non_indexable: value.get_type().to_string(),
+                        index_type: index.get_type().to_string(),
+                        span: index_span,
+                        src: self.source_ref.source().into(),
+                        filename: self.source_ref.filename().into(),
+                    }),
+                }
+            }
+            ValueKind::Dict(d) => {
+                let dict = Scope::get_mut_dict(d)?;
+                dict.insert(index, new_value);
+
+                Ok(ValueKind::Void)
+            }
+            _ => Err(WalrusError::InvalidIndexType {
+                non_indexable: value.get_type().to_string(),
+                index_type: index.get_type().to_string(),
+                span: index_span,
+                src: self.source_ref.source().into(),
+                filename: self.source_ref.filename().into(),
+            }),
+        }
     }
 
     fn add(&mut self, left: ValueKind, right: ValueKind, span: Span) -> InterpreterResult {

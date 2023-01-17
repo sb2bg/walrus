@@ -117,8 +117,16 @@ impl Scope {
         unsafe { ARENA.get_rust_function(key) }
     }
 
+    pub fn get_mut_dict<'a>(key: DictKey) -> ArenaResult<&'a mut FxHashMap<ValueKind, ValueKind>> {
+        unsafe { ARENA.get_mut_dict(key) }
+    }
+
     pub fn get_dict<'a>(key: DictKey) -> ArenaResult<&'a FxHashMap<ValueKind, ValueKind>> {
         unsafe { ARENA.get_dict(key) }
+    }
+
+    pub fn get_mut_list<'a>(key: ListKey) -> ArenaResult<&'a mut Vec<ValueKind>> {
+        unsafe { ARENA.get_mut_list(key) }
     }
 
     pub fn get_list<'a>(key: ListKey) -> ArenaResult<&'a Vec<ValueKind>> {

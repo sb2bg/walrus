@@ -107,6 +107,7 @@ Atom: NodeKind = {
 	List,
 	Dict,
 	Lambda,
+	Void,
 	Paren<Expr>,
 };
 
@@ -176,6 +177,10 @@ Lambda: NodeKind = {
     ":" <a: Comma<IdentStr>> <b: SpBlock> => NodeKind::AnonFunctionDefinition(a, b),
 };
 
+Void: NodeKind = {
+    "void" => NodeKind::Void,
+};
+
 Extern: NodeKind = {
     "extern fn" <n: IdentStr> ":" <a: Comma<IdentStr>> => NodeKind::ExternFunctionDefinition(n, a),
 };
@@ -189,6 +194,9 @@ Assign: NodeKind = {
     <n: StrSp<IdentStr>> "/=" <e: SpExpr> => NodeKind::Reassign(n, e, Op::Div),
     <n: StrSp<IdentStr>> "%=" <e: SpExpr> => NodeKind::Reassign(n, e, Op::Mod),
     <n: StrSp<IdentStr>> "**=" <e: SpExpr> => NodeKind::Reassign(n, e, Op::Pow),
+    <n: StrSp<IdentStr>> "or=" <e: SpExpr> => NodeKind::Reassign(n, e, Op::Or),
+    <n: StrSp<IdentStr>> "and=" <e: SpExpr> => NodeKind::Reassign(n, e, Op::And),
+    <n: Sp<Atom>> "[" <i: SpExpr> "]" "=" <e: SpExpr> => NodeKind::IndexAssign(n, i, e), // fixme: add ops, make x[n][m] work
 };
 
 Return: NodeKind = {

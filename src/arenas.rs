@@ -3,7 +3,6 @@ use crate::error::WalrusError;
 use crate::interpreter::{Interpreter, InterpreterResult};
 use crate::span::Span;
 use crate::value::{HeapValue, ValueKind};
-use log::debug;
 use rustc_hash::FxHashMap;
 use slotmap::{new_key_type, DenseSlotMap};
 
@@ -74,8 +73,19 @@ impl ValueHolder {
         Self::check(self.rust_function_slotmap.get(key))
     }
 
+    pub fn get_mut_dict(
+        &mut self,
+        key: DictKey,
+    ) -> ArenaResult<&mut FxHashMap<ValueKind, ValueKind>> {
+        Self::check(self.dict_slotmap.get_mut(key))
+    }
+
     pub fn get_dict(&self, key: DictKey) -> ArenaResult<&FxHashMap<ValueKind, ValueKind>> {
         Self::check(self.dict_slotmap.get(key))
+    }
+
+    pub fn get_mut_list(&mut self, key: ListKey) -> ArenaResult<&mut Vec<ValueKind>> {
+        Self::check(self.list_slotmap.get_mut(key))
     }
 
     pub fn get_list(&self, key: ListKey) -> ArenaResult<&Vec<ValueKind>> {
