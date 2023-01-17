@@ -14,8 +14,6 @@ pub struct Interpreter<'a> {
     scope: Scope,
     source_ref: SourceRef<'a>,
     is_returning: bool,
-    is_breaking: bool,
-    is_continuing: bool,
 }
 
 pub type InterpreterResult = Result<ValueKind, WalrusError>;
@@ -26,8 +24,6 @@ impl<'a> Interpreter<'a> {
             scope: Scope::new(),
             source_ref: SourceRef::new(src, filename),
             is_returning: false,
-            is_breaking: false,
-            is_continuing: false,
         }
     }
 
@@ -45,8 +41,6 @@ impl<'a> Interpreter<'a> {
             scope: self.scope.new_child(name),
             source_ref: self.source_ref,
             is_returning: false,
-            is_breaking: false,
-            is_continuing: false,
         }
     }
 
@@ -89,8 +83,6 @@ impl<'a> Interpreter<'a> {
             NodeKind::PackageImport(name, as_name) => Ok(self.visit_package_import(name, as_name)?),
             NodeKind::For(var, iter, body) => Ok(self.visit_for(var, *iter, *body)?),
             NodeKind::Return(value) => Ok(self.visit_return(*value)?),
-            NodeKind::Break => Ok(self.visit_break()?),
-            NodeKind::Continue => Ok(self.visit_continue()?),
             node => Err(WalrusError::UnknownError {
                 message: format!("Unknown node: {:?}", node),
             }),
@@ -119,6 +111,7 @@ impl<'a> Interpreter<'a> {
             let res = sub_interpreter.interpret(*node)?;
 
             if sub_interpreter.is_returning {
+                self.is_returning = true;
                 return Ok(res);
             }
         }
@@ -609,16 +602,6 @@ impl<'a> Interpreter<'a> {
         let value = self.interpret(value)?;
         self.is_returning = true;
         Ok(value)
-    }
-
-    fn visit_break(&mut self) -> InterpreterResult {
-        self.is_breaking = true;
-        Ok(ValueKind::Void)
-    }
-
-    fn visit_continue(&mut self) -> InterpreterResult {
-        self.is_continuing = true;
-        Ok(ValueKind::Void)
     }
 
     fn add(&mut self, left: ValueKind, right: ValueKind, span: Span) -> InterpreterResult {
