@@ -28,6 +28,7 @@ impl Scope {
         }
     }
 
+    // fixme: this feels janky
     fn create_builtins() -> FxHashMap<String, ValueKind> {
         let mut builtins = FxHashMap::default();
 
@@ -36,14 +37,19 @@ impl Scope {
             Self::heap_alloc(HeapValue::RustFunction((
                 |args, interpreter, _| {
                     print!("{}", interpreter.stringify(args[0])?);
-                    std::io::stdout().flush().unwrap();
+                    std::io::stdout()
+                        .flush()
+                        .map_err(|source| WalrusError::IOError { source })?;
 
                     let mut input = String::new();
-                    std::io::stdin().read_line(&mut input).unwrap();
+                    std::io::stdin()
+                        .read_line(&mut input)
+                        .map_err(|source| WalrusError::IOError { source })?;
 
                     Ok(Self::heap_alloc(HeapValue::String(input)))
                 },
                 Some(1),
+                "input".to_string(),
             ))),
         );
 
@@ -64,6 +70,7 @@ impl Scope {
                     }),
                 },
                 Some(1),
+                "len".to_string(),
             ))),
         );
 
@@ -101,9 +108,17 @@ impl Scope {
         self.vars.insert(name, value);
     }
 
-    pub fn reassign(&mut self, name: String, value: ValueKind) -> Result<(), String> {
-        if self.vars.contains_key(&name) {
-            self.define(name, value);
+    pub fn is_defined(&self, name: &str) -> bool {
+        self.get(name).is_some()
+    }
+
+    pub fn reassign<'a>(&'a mut self, name: &'a str, value: ValueKind) -> Result<(), &'a str> {
+        if self.vars.contains_key(name) {
+            if let Some((entry, _)) = self.vars.remove_entry(name) {
+                self.vars.insert(entry, value);
+            }
+
+            self.vars.insert(name.to_string(), value); // should never happen
             Ok(())
         } else {
             match self.parent {
