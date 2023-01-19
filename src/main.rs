@@ -7,7 +7,6 @@ mod range;
 mod scope;
 mod source_ref;
 mod span;
-mod type_checker;
 mod value;
 
 use crate::error::WalrusError;
