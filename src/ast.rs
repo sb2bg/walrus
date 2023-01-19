@@ -25,7 +25,6 @@ pub enum NodeKind {
     IndexAssign(Box<Node>, Box<Node>, Box<Node>),
     FunctionCall(Box<Node>, Vec<Box<Node>>),
     Index(Box<Node>, Box<Node>),
-    RangedIndex(Box<Node>, Option<Box<Node>>, Option<Box<Node>>),
     AnonFunctionDefinition(Vec<String>, Box<Node>),
     FunctionDefinition(String, Vec<String>, Box<Node>),
     ExternFunctionDefinition(String, Vec<String>),
@@ -42,6 +41,7 @@ pub enum NodeKind {
     Throw(Box<Node>),
     Try(Box<Node>, String, Box<Node>),
     Free(Box<Node>),
+    Range(Option<Box<Node>>, Option<Box<Node>>),
     Break,
     Continue,
     Void,
@@ -101,7 +101,7 @@ impl Display for NodeKind {
             NodeKind::Free(_) => write!(f, "Free"),
             NodeKind::Index(_, _) => write!(f, "Index"),
             NodeKind::IndexAssign(_, _, _) => write!(f, "IndexAssign"),
-            NodeKind::RangedIndex(_, _, _) => write!(f, "RangedIndex"),
+            NodeKind::Range(_, _) => write!(f, "Range"),
             NodeKind::Void => write!(f, "Void"),
         }
     }
