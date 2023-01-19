@@ -79,7 +79,7 @@ pub enum WalrusError {
     #[error("Unknown error '{message}'. Please report this bug with the following information: Glass Version = '{}', Git Revision = '{}'", env!("CARGO_PKG_VERSION"), git_version!(fallback = "flamegraph"))]
     UnknownError { message: String },
 
-    #[error("Unknown IO error occurred while flushing REPL")]
+    #[error("IO error occurred while reading/writing")]
     IOError {
         #[from]
         source: std::io::Error,
