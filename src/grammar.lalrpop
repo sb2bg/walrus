@@ -31,6 +31,7 @@ Statement: Box<Node> = {
     Sp<Throw>,
     Sp<Try>,
     Sp<Free>,
+    Sp<Defer>,
 };
 
 BinOp<Op, Next>: NodeKind = {
@@ -99,7 +100,7 @@ Atom: NodeKind = {
 	Dict,
 	Lambda,
 	Void,
-//	Range,
+	Range,
 	Paren<Expr>,
 };
 
@@ -170,9 +171,10 @@ Lambda: NodeKind = {
 };
 
 Range: NodeKind = {
-    <l: SpExpr> ".." <u: SpExpr> => NodeKind::Range(Some(l), Some(u)),
-    <l: SpExpr> ".." => NodeKind::Range(Some(l), None),
-    ".." <u: SpExpr> => NodeKind::Range(None, Some(u)),
+    // fixme: limited to identifiers
+    <l: SpIdent> ".." <u: SpIdent> => NodeKind::Range(Some(l), Some(u)),
+    <l: SpIdent> ".." => NodeKind::Range(Some(l), None),
+    ".." <u: SpIdent> => NodeKind::Range(None, Some(u)),
     ".." => NodeKind::Range(None, None),
 };
 
@@ -232,6 +234,10 @@ Try: NodeKind = {
 
 Free: NodeKind = {
     "free" <SpExpr> => NodeKind::Free(<>),
+};
+
+Defer: NodeKind = {
+    "defer" <SpExpr> => NodeKind::Defer(<>),
 };
 
 Block = Brace<Statements>;
