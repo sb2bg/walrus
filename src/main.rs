@@ -3,7 +3,7 @@ mod ast;
 mod error;
 mod interpreter;
 mod program;
-Begin work mod range;
+mod range;
 mod scope;
 mod source_ref;
 mod span;
