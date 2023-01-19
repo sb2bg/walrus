@@ -10,11 +10,6 @@ extern {
 
 pub Program = Sp<Statements>;
 
-pub Repl = {
-    Statement,
-    <Statement> ";",
-};
-
 Statements: NodeKind = {
     TrailingDelim<Statement, ";"> => NodeKind::Statements(<>), // fixme: make so only certain statements require a trailing semicolon
     => NodeKind::Void
@@ -59,10 +54,6 @@ Pow = BinOp<PowOp, Call>;
 Call = {
     <e: Sp<Atom>> <args: Paren<Comma<SpExpr>>> => NodeKind::FunctionCall(e, args),
     <e: Sp<Atom>> <args: Bracket<SpExpr>> => NodeKind::Index(e, args),
-    <e: Sp<Atom>> "[" <l: SpExpr> ".." <u: SpExpr> "]" => NodeKind::RangedIndex(e, Some(l), Some(u)),
-    <e: Sp<Atom>> "[" <l: SpExpr> ".." "]" => NodeKind::RangedIndex(e, Some(l), None),
-    <e: Sp<Atom>> "[" ".." <u: SpExpr> "]" => NodeKind::RangedIndex(e, None, Some(u)),
-    <e: Sp<Atom>> "[" ".." "]" => NodeKind::RangedIndex(e, None, None),
     Atom,
 };
 
@@ -108,6 +99,7 @@ Atom: NodeKind = {
 	Dict,
 	Lambda,
 	Void,
+//	Range,
 	Paren<Expr>,
 };
 
@@ -175,6 +167,13 @@ Func: NodeKind = {
 
 Lambda: NodeKind = {
     ":" <a: Comma<IdentStr>> <b: SpBlock> => NodeKind::AnonFunctionDefinition(a, b),
+};
+
+Range: NodeKind = {
+    <l: SpExpr> ".." <u: SpExpr> => NodeKind::Range(Some(l), Some(u)),
+    <l: SpExpr> ".." => NodeKind::Range(Some(l), None),
+    ".." <u: SpExpr> => NodeKind::Range(None, Some(u)),
+    ".." => NodeKind::Range(None, None),
 };
 
 Void: NodeKind = {
