@@ -42,6 +42,7 @@ pub enum NodeKind {
     Try(Box<Node>, String, Box<Node>),
     Free(Box<Node>),
     Range(Option<Box<Node>>, Option<Box<Node>>),
+    Defer(Box<Node>),
     Break,
     Continue,
     Void,
@@ -102,12 +103,13 @@ impl Display for NodeKind {
             NodeKind::Index(_, _) => write!(f, "Index"),
             NodeKind::IndexAssign(_, _, _) => write!(f, "IndexAssign"),
             NodeKind::Range(_, _) => write!(f, "Range"),
+            NodeKind::Defer(_) => write!(f, "Defer"),
             NodeKind::Void => write!(f, "Void"),
         }
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Copy, Clone)]
+#[derive(Debug, PartialEq, Eq, Hash, Copy, Clone)]
 pub enum Op {
     Mul,
     Div,
