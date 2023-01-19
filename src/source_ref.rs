@@ -17,3 +17,23 @@ impl<'a> SourceRef<'a> {
         self.filename
     }
 }
+
+pub struct OwnedSourceRef {
+    pub src: String,
+    pub filename: String,
+}
+
+impl OwnedSourceRef {
+    pub fn new(src: String, filename: String) -> Self {
+        Self { src, filename }
+    }
+}
+
+impl<'a> From<&'a OwnedSourceRef> for SourceRef<'a> {
+    fn from(src: &'a OwnedSourceRef) -> Self {
+        Self {
+            source: &src.src,
+            filename: &src.filename,
+        }
+    }
+}

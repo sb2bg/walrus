@@ -1,6 +1,7 @@
 use crate::ast::{Node, NodeKind, Op};
-use crate::create_shell;
 use crate::error::WalrusError;
+use crate::program::Program;
+use crate::range::RangeValue;
 use crate::scope::Scope;
 use crate::source_ref::SourceRef;
 use crate::span::{Span, Spanned};
@@ -13,16 +14,18 @@ use uuid::Uuid;
 pub struct Interpreter<'a> {
     scope: Scope,
     source_ref: SourceRef<'a>,
+    program: &'a Program,
     is_returning: bool,
 }
 
 pub type InterpreterResult = Result<ValueKind, WalrusError>;
 
 impl<'a> Interpreter<'a> {
-    pub fn new(src: &'a str, filename: &'a str) -> Self {
+    pub fn new(source_ref: SourceRef<'a>, program: &'a Program) -> Self {
         Self {
             scope: Scope::new(),
-            source_ref: SourceRef::new(src, filename),
+            source_ref,
+            program,
             is_returning: false,
         }
     }
@@ -36,11 +39,12 @@ impl<'a> Interpreter<'a> {
         self.source_ref = SourceRef::new(src, self.source_ref.filename());
     }
 
-    pub fn create_child(&'a self, name: String) -> Interpreter {
+    pub fn create_child(&'a self, name: String) -> Interpreter<'a> {
         Self {
             scope: self.scope.new_child(name),
             source_ref: self.source_ref,
             is_returning: false,
+            program: self.program,
         }
     }
 
@@ -86,6 +90,7 @@ impl<'a> Interpreter<'a> {
             NodeKind::IndexAssign(value, index, new_value) => {
                 Ok(self.visit_index_assign(*value, *index, *new_value)?)
             }
+            NodeKind::Range(start, end) => Ok(self.visit_range(start, end)?),
             node => Err(WalrusError::UnknownError {
                 message: format!("Unknown node: {:?}", node),
             }),
@@ -271,9 +276,9 @@ impl<'a> Interpreter<'a> {
 
         let span = ident.span();
 
-        if let Err(name) = self.scope.reassign(ident.into_value(), new_value) {
+        if let Err(name) = self.scope.reassign(ident.value(), new_value) {
             Err(WalrusError::UndefinedVariable {
-                name,
+                name: name.to_string(),
                 span,
                 src: self.source_ref.source().to_string(),
                 filename: self.source_ref.filename().to_string(),
@@ -308,7 +313,7 @@ impl<'a> Interpreter<'a> {
         Ok(ValueKind::Void)
     }
 
-    pub(crate) fn stringify(&self, value: ValueKind) -> Result<String, WalrusError> {
+    pub fn stringify(&self, value: ValueKind) -> Result<String, WalrusError> {
         match value {
             ValueKind::Void => Ok("void".to_string()),
             ValueKind::String(s) => Ok(Scope::get_string(s)?.clone()),
@@ -357,11 +362,12 @@ impl<'a> Interpreter<'a> {
             }
             ValueKind::RustFunction(f) => {
                 let function = Scope::get_rust_function(f)?;
-                Ok(format!("rust fn {}", "unknown")) // fixme
+                Ok(format!("rust fn {}", function.2))
             }
             ValueKind::Int(n) => Ok(n.to_string()),
             ValueKind::Float(n) => Ok(n.0.to_string()),
             ValueKind::Bool(b) => Ok(b.to_string()),
+            ValueKind::Range(range) => Ok(range.to_string()),
         }
     }
 
@@ -458,12 +464,13 @@ impl<'a> Interpreter<'a> {
                 let list = Scope::get_list(l)?;
 
                 match index {
+                    // todo: make sure all these usize to i64 and vice versa conversions are safe
                     ValueKind::Int(n) => {
                         let index = if n < 0 { n + list.len() as i64 } else { n };
 
                         if index < 0 || index as usize >= list.len() {
                             Err(WalrusError::IndexOutOfBounds {
-                                index: n, // fixme: lossy conversion
+                                index: n,
                                 len: list.len(),
                                 span: index_span,
                                 src: self.source_ref.source().into(),
@@ -472,6 +479,41 @@ impl<'a> Interpreter<'a> {
                         }
 
                         Ok(list[index as usize])
+                    }
+                    ValueKind::Range(range) => {
+                        let start = range.start();
+                        let end = range.end();
+                        let start_span = range.start_span();
+                        let end_span = range.end_span();
+
+                        let end = if end < 0 {
+                            end + list.len() as i64
+                        } else {
+                            end
+                        };
+
+                        if start < 0 || start as usize >= list.len() {
+                            Err(WalrusError::IndexOutOfBounds {
+                                index: start,
+                                len: list.len(),
+                                span: start_span,
+                                src: self.source_ref.source().into(),
+                                filename: self.source_ref.filename().into(),
+                            })?
+                        }
+
+                        if end < 0 || end as usize >= list.len() {
+                            Err(WalrusError::IndexOutOfBounds {
+                                index: end,
+                                len: list.len(),
+                                span: end_span,
+                                src: self.source_ref.source().into(),
+                                filename: self.source_ref.filename().into(),
+                            })?
+                        }
+
+                        let sublist = list[start as usize..end as usize].to_vec();
+                        Ok(Scope::heap_alloc(HeapValue::List(sublist)))
                     }
                     _ => Err(WalrusError::InvalidIndexType {
                         non_indexable: value.get_type().to_string(),
@@ -520,6 +562,42 @@ impl<'a> Interpreter<'a> {
                             (&string[index..index + 1]).to_string(),
                         )))
                     }
+                    // fixme: this is a exact copy of the above code, make a function for this
+                    ValueKind::Range(range) => {
+                        let start = range.start();
+                        let end = range.end();
+                        let start_span = range.start_span();
+                        let end_span = range.end_span();
+
+                        let end = if end < 0 {
+                            end + string.len() as i64
+                        } else {
+                            end
+                        };
+
+                        if start < 0 || start as usize >= string.len() {
+                            Err(WalrusError::IndexOutOfBounds {
+                                index: start,
+                                len: string.len(),
+                                span: start_span,
+                                src: self.source_ref.source().into(),
+                                filename: self.source_ref.filename().into(),
+                            })?
+                        }
+
+                        if end < 0 || end as usize >= string.len() {
+                            Err(WalrusError::IndexOutOfBounds {
+                                index: end,
+                                len: string.len(),
+                                span: end_span,
+                                src: self.source_ref.source().into(),
+                                filename: self.source_ref.filename().into(),
+                            })?
+                        }
+
+                        let substring = string[start as usize..end as usize].to_string();
+                        Ok(Scope::heap_alloc(HeapValue::String(substring)))
+                    }
                     _ => Err(WalrusError::InvalidIndexType {
                         non_indexable: value.get_type().to_string(),
                         index_type: index.get_type().to_string(),
@@ -541,17 +619,9 @@ impl<'a> Interpreter<'a> {
     // fixme: when 2 files import each other, it loops
     // fixme: when importing a function, for example, it clones the function rather than just referencing it
     fn visit_module_import(&mut self, name: String, as_name: Option<String>) -> InterpreterResult {
-        let path = std::path::Path::new(self.source_ref.filename())
-            .parent()
-            .ok_or_else(|| WalrusError::FailedGatherPWD)?
-            .join(name)
-            .with_extension("walrus");
-
-        // fixme: I don't like this because it makes a new parser struct
-        let result = create_shell(Some(path))?;
-
         if let Some(as_name) = as_name {
-            self.scope.define(as_name, result);
+            // fixme: we need to get program as mutable
+            // self.scope.define(as_name, self.program.load_module(&name)?);
         }
 
         Ok(ValueKind::Void)
@@ -574,8 +644,16 @@ impl<'a> Interpreter<'a> {
 
                 for value in list {
                     // fixme: this is here because I need to be able to put values in the scope
+                    // even though statements already get a new scope. same for the dict and string
+                    // and range cases below
                     let mut sub_interpreter = self.create_child("for_list".to_string());
-                    sub_interpreter.scope.define(name.clone(), value.clone());
+
+                    if sub_interpreter.scope.is_defined(&name) {
+                        sub_interpreter.scope.reassign(&name, *value).unwrap_or(());
+                    } else {
+                        sub_interpreter.scope.define(name.clone(), *value);
+                    };
+
                     sub_interpreter.interpret(body.clone())?;
                 }
 
@@ -586,9 +664,54 @@ impl<'a> Interpreter<'a> {
 
                 for (key, value) in dict {
                     let mut sub_interpreter = self.create_child("for_dict".to_string());
-                    sub_interpreter.scope.define(name.clone(), key.clone());
+
+                    if sub_interpreter.scope.is_defined(&name) {
+                        sub_interpreter.scope.reassign(&name, *key).unwrap_or(());
+                    } else {
+                        sub_interpreter.scope.define(name.clone(), *key);
+                    };
+
                     // fixme: this gets overwritten, we need to support destructuring
-                    sub_interpreter.scope.define(name.clone(), value.clone());
+                    sub_interpreter.scope.define(name.clone(), *value);
+                    sub_interpreter.interpret(body.clone())?;
+                }
+
+                Ok(ValueKind::Void)
+            }
+            ValueKind::String(s) => {
+                let string = Scope::get_string(s)?;
+
+                for character in string.chars() {
+                    let mut sub_interpreter = self.create_child("for_string".to_string());
+                    if sub_interpreter.scope.is_defined(&name) {
+                        sub_interpreter
+                            .scope
+                            .reassign(
+                                &name,
+                                Scope::heap_alloc(HeapValue::String(character.to_string())),
+                            )
+                            .unwrap_or(());
+                    } else {
+                        sub_interpreter.scope.define(
+                            name.clone(),
+                            Scope::heap_alloc(HeapValue::String(character.to_string())),
+                        );
+                    };
+                    sub_interpreter.interpret(body.clone())?;
+                }
+
+                Ok(ValueKind::Void)
+            }
+            ValueKind::Range(range) => {
+                let start = range.start();
+                let end = range.end();
+
+                for i in start..end {
+                    let mut sub_interpreter = self.create_child("for_range".to_string());
+                    sub_interpreter
+                        .scope
+                        .define(name.clone(), ValueKind::Int(i));
+
                     sub_interpreter.interpret(body.clone())?;
                 }
 
@@ -667,6 +790,55 @@ impl<'a> Interpreter<'a> {
         }
     }
 
+    fn visit_range(
+        &mut self,
+        start: Option<Box<Node>>,
+        end: Option<Box<Node>>,
+    ) -> InterpreterResult {
+        let (start, start_span) = if let Some(start) = start {
+            let start_span = *start.span();
+            (self.interpret(*start)?, start_span)
+        } else {
+            (ValueKind::Int(0), Span::default())
+        };
+
+        let (end, end_span) = if let Some(end) = end {
+            let end_span = *end.span();
+            (self.interpret(*end)?, end_span)
+        } else {
+            (ValueKind::Int(-1), Span::default())
+        };
+
+        match (start, end) {
+            (ValueKind::Int(start), ValueKind::Int(end)) => {
+                Ok(ValueKind::Range(RangeValue::new(
+                    start, start_span, end, end_span,
+                ))) // todo: check if this is lossy
+            }
+            (ValueKind::Int(_), end) => Err(WalrusError::TypeMismatch {
+                expected: "int".to_string(),
+                found: end.get_type().to_string(),
+                span: end_span,
+                src: self.source_ref.source().into(),
+                filename: self.source_ref.filename().into(),
+            }),
+            (start, ValueKind::Int(_)) => Err(WalrusError::TypeMismatch {
+                expected: "int".to_string(),
+                found: start.get_type().to_string(),
+                span: start_span,
+                src: self.source_ref.source().into(),
+                filename: self.source_ref.filename().into(),
+            }),
+            (start, end) => Err(WalrusError::TypeMismatch {
+                expected: "int".to_string(),
+                found: format!("{} and {}", start.get_type(), end.get_type()),
+                span: start_span.extend(end_span),
+                src: self.source_ref.source().into(),
+                filename: self.source_ref.filename().into(),
+            }),
+        }
+    }
+
     fn add(&mut self, left: ValueKind, right: ValueKind, span: Span) -> InterpreterResult {
         match (left, right) {
             (ValueKind::Int(a), ValueKind::Int(b)) => Ok(ValueKind::Int(a + b)),
@@ -676,7 +848,6 @@ impl<'a> Interpreter<'a> {
             (ValueKind::String(a), ValueKind::String(b)) => {
                 let a_str = Scope::get_string(a)?.clone();
                 let b_str = Scope::get_string(b)?;
-                // above clones required because we need to move the strings out of the arena
 
                 Ok(Scope::heap_alloc(HeapValue::String(a_str + b_str)))
             }

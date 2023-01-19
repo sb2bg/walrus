@@ -3,6 +3,7 @@ mod ast;
 mod error;
 mod interpreter;
 mod program;
+Begin work mod range;
 mod scope;
 mod source_ref;
 mod span;
@@ -11,13 +12,13 @@ mod value;
 
 use crate::error::WalrusError;
 use crate::interpreter::InterpreterResult;
-use crate::program::{Program, Repl};
+use crate::program::Program;
 use clap::Parser as ClapParser;
 use lalrpop_util::lalrpop_mod;
 use log::LevelFilter;
 use simplelog::SimpleLogger;
+use std::panic;
 use std::path::PathBuf;
-use std::{fs, panic};
 
 #[cfg(not(feature = "dhat-heap"))]
 #[global_allocator]
@@ -74,16 +75,8 @@ fn try_main() -> WalrusResult {
 
 pub fn create_shell(file: Option<PathBuf>) -> InterpreterResult {
     match file {
-        Some(file) => {
-            let filename = file.to_string_lossy();
-
-            let src = fs::read_to_string(&file).map_err(|_| WalrusError::FileNotFound {
-                filename: filename.to_string(),
-            })?;
-
-            Ok(Program::new(src, filename.into_owned()).run()?)
-        }
-        None => Ok(Repl::new().run()?),
+        Some(file) => Ok(Program::new(file, None)?.execute_file()?),
+        None => Ok(Program::new(PathBuf::from("fixme"), None)?.execute_repl()?), // fixme: make path optional
     }
 }
 
