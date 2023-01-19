@@ -1,4 +1,4 @@
-use crate::arenas::{DictKey, FuncKey, ListKey, RustFuncKey, RustFunction, StringKey};
+use crate::arenas::{DictKey, FuncKey, ListKey, RustFuncKey, RustFunction};
 use crate::ast::Node;
 use crate::range::RangeValue;
 use float_ord::FloatOrd;
@@ -6,6 +6,7 @@ use rustc_hash::FxHashMap;
 use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::Hash;
+use string_interner::DefaultSymbol;
 
 pub enum HeapValue {
     List(Vec<ValueKind>),
@@ -22,7 +23,7 @@ pub enum ValueKind {
     Float(FloatOrd<f64>),
     Bool(bool),
     Range(RangeValue),
-    String(StringKey),
+    String(DefaultSymbol),
     List(ListKey),
     Dict(DictKey),
     Function(FuncKey),

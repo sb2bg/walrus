@@ -5,11 +5,11 @@ use crate::span::Span;
 use crate::value::{HeapValue, ValueKind};
 use rustc_hash::FxHashMap;
 use slotmap::{new_key_type, DenseSlotMap};
+use string_interner::{DefaultSymbol, StringInterner};
 
 new_key_type! {
     pub struct ListKey;
     pub struct DictKey;
-    pub struct StringKey;
     pub struct FuncKey;
     pub struct RustFuncKey;
 }
@@ -28,10 +28,11 @@ pub type RustFunction = (
 // fixme: maybe we can just replace this with RC values in ValueKind
 // and then just clone everything and the copy types would just
 // be copied and the rc types would be cloned
+// todo: maybe use a different arena library, DenseSlotMap is mid-performance
 pub struct ValueHolder {
     dict_slotmap: DenseSlotMap<DictKey, FxHashMap<ValueKind, ValueKind>>,
     list_slotmap: DenseSlotMap<ListKey, Vec<ValueKind>>,
-    string_slotmap: DenseSlotMap<StringKey, String>,
+    string_interner: StringInterner,
     function_slotmap: DenseSlotMap<FuncKey, (String, Vec<String>, Node)>,
     rust_function_slotmap: DenseSlotMap<RustFuncKey, RustFunction>,
 }
@@ -41,7 +42,7 @@ impl ValueHolder {
         Self {
             dict_slotmap: DenseSlotMap::with_key(),
             list_slotmap: DenseSlotMap::with_key(),
-            string_slotmap: DenseSlotMap::with_key(),
+            string_interner: StringInterner::default(), // todo: use FxHasher
             function_slotmap: DenseSlotMap::with_key(),
             rust_function_slotmap: DenseSlotMap::with_key(),
         }
@@ -51,7 +52,11 @@ impl ValueHolder {
         match key {
             ValueKind::Dict(key) => self.dict_slotmap.remove(key).is_some(),
             ValueKind::List(key) => self.list_slotmap.remove(key).is_some(),
-            ValueKind::String(key) => self.string_slotmap.remove(key).is_some(),
+            ValueKind::String(key) => {
+                // fixme: for now, no way to free strings
+                // self.string_interner.remove(key).is_some()
+                false
+            }
             ValueKind::Function(key) => self.function_slotmap.remove(key).is_some(),
             ValueKind::RustFunction(key) => self.rust_function_slotmap.remove(key).is_some(),
             _ => false,
@@ -66,7 +71,9 @@ impl ValueHolder {
             HeapValue::RustFunction(rust_func) => {
                 ValueKind::RustFunction(self.rust_function_slotmap.insert(rust_func))
             }
-            HeapValue::String(string) => ValueKind::String(self.string_slotmap.insert(string)),
+            HeapValue::String(string) => {
+                ValueKind::String(self.string_interner.get_or_intern(string))
+            }
         }
     }
 
@@ -93,8 +100,8 @@ impl ValueHolder {
         Self::check(self.list_slotmap.get(key))
     }
 
-    pub fn get_string(&self, key: StringKey) -> ArenaResult<&String> {
-        Self::check(self.string_slotmap.get(key))
+    pub fn get_string(&self, key: DefaultSymbol) -> ArenaResult<&str> {
+        Self::check(self.string_interner.resolve(key))
     }
 
     pub fn get_function(&self, key: FuncKey) -> ArenaResult<&(String, Vec<String>, Node)> {

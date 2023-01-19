@@ -316,7 +316,7 @@ impl<'a> Interpreter<'a> {
     pub fn stringify(&self, value: ValueKind) -> Result<String, WalrusError> {
         match value {
             ValueKind::Void => Ok("void".to_string()),
-            ValueKind::String(s) => Ok(Scope::get_string(s)?.clone()),
+            ValueKind::String(s) => Ok(Scope::get_string(s)?.to_string()),
             ValueKind::List(l) => {
                 let list = Scope::get_list(l)?;
 
@@ -846,7 +846,7 @@ impl<'a> Interpreter<'a> {
                 Ok(ValueKind::Float(FloatOrd(a + b)))
             }
             (ValueKind::String(a), ValueKind::String(b)) => {
-                let a_str = Scope::get_string(a)?.clone();
+                let a_str = Scope::get_string(a)?.to_string();
                 let b_str = Scope::get_string(b)?;
 
                 Ok(Scope::heap_alloc(HeapValue::String(a_str + b_str)))

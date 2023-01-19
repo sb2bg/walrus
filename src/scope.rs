@@ -1,5 +1,5 @@
 use crate::arenas::{
-    ArenaResult, DictKey, FuncKey, ListKey, RustFuncKey, RustFunction, StringKey, ValueHolder,
+    ArenaResult, DictKey, FuncKey, ListKey, RustFuncKey, RustFunction, ValueHolder,
 };
 use crate::ast::Node;
 use crate::error::WalrusError;
@@ -8,6 +8,7 @@ use once_cell::sync::Lazy;
 use rustc_hash::FxHashMap;
 use std::io::Write;
 use std::ptr::NonNull;
+use string_interner::DefaultSymbol;
 
 static mut ARENA: Lazy<ValueHolder> = Lazy::new(ValueHolder::new);
 
@@ -148,7 +149,7 @@ impl Scope {
         unsafe { ARENA.get_list(key) }
     }
 
-    pub fn get_string<'a>(key: StringKey) -> ArenaResult<&'a String> {
+    pub fn get_string<'a>(key: DefaultSymbol) -> ArenaResult<&'a str> {
         unsafe { ARENA.get_string(key) }
     }
 
