@@ -1,5 +1,6 @@
 use crate::arenas::{DictKey, FuncKey, ListKey, RustFuncKey, RustFunction, StringKey};
 use crate::ast::Node;
+use crate::range::RangeValue;
 use float_ord::FloatOrd;
 use rustc_hash::FxHashMap;
 use std::fmt;
@@ -14,12 +15,13 @@ pub enum HeapValue {
     String(String),
 }
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Copy, Clone, Hash)]
+#[derive(Debug, PartialEq, Eq, Copy, Clone, Hash)]
 pub enum ValueKind {
     // todo: consolidate ints and floats into single number type
     Int(i64),
     Float(FloatOrd<f64>),
     Bool(bool),
+    Range(RangeValue),
     String(StringKey),
     List(ListKey),
     Dict(DictKey),
@@ -34,6 +36,7 @@ impl ValueKind {
             ValueKind::Int(_) => "int",
             ValueKind::Float(_) => "float",
             ValueKind::Bool(_) => "bool",
+            ValueKind::Range(_) => "range",
             ValueKind::String(_) => "string",
             ValueKind::List(_) => "list",
             ValueKind::Dict(_) => "dict",
@@ -51,6 +54,7 @@ impl Display for ValueKind {
             ValueKind::Int(i) => write!(f, "{}", i),
             ValueKind::Float(fo) => write!(f, "{}", fo.0),
             ValueKind::Bool(b) => write!(f, "{}", b),
+            ValueKind::Range(range) => write!(f, "{}", range),
             ValueKind::String(s) => write!(f, "{:?}", s),
             ValueKind::List(l) => write!(f, "{:?}", l),
             ValueKind::Dict(d) => write!(f, "{:?}", d),
