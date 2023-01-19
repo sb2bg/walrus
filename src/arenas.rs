@@ -18,6 +18,7 @@ pub type ArenaResult<T> = Result<T, WalrusError>;
 pub type RustFunction = (
     fn(Vec<ValueKind>, interpreter: &Interpreter, span: Span) -> InterpreterResult,
     Option<usize>,
+    String,
 );
 
 // todo: maybe instead of this, we can use a single slotmap
