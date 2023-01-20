@@ -3,6 +3,7 @@ use crate::error::WalrusError;
 use crate::interpreter::{Interpreter, InterpreterResult};
 use crate::span::Span;
 use crate::value::{HeapValue, ValueKind};
+use crate::WalrusResult;
 use rustc_hash::FxHashMap;
 use slotmap::{new_key_type, DenseSlotMap};
 use string_interner::{DefaultSymbol, StringInterner};
@@ -14,7 +15,6 @@ new_key_type! {
     pub struct RustFuncKey;
 }
 
-pub type ArenaResult<T> = Result<T, WalrusError>;
 pub type RustFunction = (
     fn(Vec<ValueKind>, interpreter: &Interpreter, span: Span) -> InterpreterResult,
     Option<usize>,
@@ -77,34 +77,34 @@ impl ValueHolder {
         }
     }
 
-    pub fn get_rust_function(&self, key: RustFuncKey) -> ArenaResult<&RustFunction> {
+    pub fn get_rust_function(&self, key: RustFuncKey) -> WalrusResult<&RustFunction> {
         Self::check(self.rust_function_slotmap.get(key))
     }
 
     pub fn get_mut_dict(
         &mut self,
         key: DictKey,
-    ) -> ArenaResult<&mut FxHashMap<ValueKind, ValueKind>> {
+    ) -> WalrusResult<&mut FxHashMap<ValueKind, ValueKind>> {
         Self::check(self.dict_slotmap.get_mut(key))
     }
 
-    pub fn get_dict(&self, key: DictKey) -> ArenaResult<&FxHashMap<ValueKind, ValueKind>> {
+    pub fn get_dict(&self, key: DictKey) -> WalrusResult<&FxHashMap<ValueKind, ValueKind>> {
         Self::check(self.dict_slotmap.get(key))
     }
 
-    pub fn get_mut_list(&mut self, key: ListKey) -> ArenaResult<&mut Vec<ValueKind>> {
+    pub fn get_mut_list(&mut self, key: ListKey) -> WalrusResult<&mut Vec<ValueKind>> {
         Self::check(self.list_slotmap.get_mut(key))
     }
 
-    pub fn get_list(&self, key: ListKey) -> ArenaResult<&Vec<ValueKind>> {
+    pub fn get_list(&self, key: ListKey) -> WalrusResult<&Vec<ValueKind>> {
         Self::check(self.list_slotmap.get(key))
     }
 
-    pub fn get_string(&self, key: DefaultSymbol) -> ArenaResult<&str> {
+    pub fn get_string(&self, key: DefaultSymbol) -> WalrusResult<&str> {
         Self::check(self.string_interner.resolve(key))
     }
 
-    pub fn get_function(&self, key: FuncKey) -> ArenaResult<&(String, Vec<String>, Node)> {
+    pub fn get_function(&self, key: FuncKey) -> WalrusResult<&(String, Vec<String>, Node)> {
         Self::check(self.function_slotmap.get(key))
     }
 

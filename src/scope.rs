@@ -1,9 +1,8 @@
-use crate::arenas::{
-    ArenaResult, DictKey, FuncKey, ListKey, RustFuncKey, RustFunction, ValueHolder,
-};
+use crate::arenas::{DictKey, FuncKey, ListKey, RustFuncKey, RustFunction, ValueHolder};
 use crate::ast::Node;
 use crate::error::WalrusError;
 use crate::value::{HeapValue, ValueKind};
+use crate::WalrusResult;
 use once_cell::sync::Lazy;
 use rustc_hash::FxHashMap;
 use std::io::Write;
@@ -129,31 +128,31 @@ impl Scope {
         }
     }
 
-    pub fn get_rust_function<'a>(key: RustFuncKey) -> ArenaResult<&'a RustFunction> {
+    pub fn get_rust_function<'a>(key: RustFuncKey) -> WalrusResult<&'a RustFunction> {
         unsafe { ARENA.get_rust_function(key) }
     }
 
-    pub fn get_mut_dict<'a>(key: DictKey) -> ArenaResult<&'a mut FxHashMap<ValueKind, ValueKind>> {
+    pub fn get_mut_dict<'a>(key: DictKey) -> WalrusResult<&'a mut FxHashMap<ValueKind, ValueKind>> {
         unsafe { ARENA.get_mut_dict(key) }
     }
 
-    pub fn get_dict<'a>(key: DictKey) -> ArenaResult<&'a FxHashMap<ValueKind, ValueKind>> {
+    pub fn get_dict<'a>(key: DictKey) -> WalrusResult<&'a FxHashMap<ValueKind, ValueKind>> {
         unsafe { ARENA.get_dict(key) }
     }
 
-    pub fn get_mut_list<'a>(key: ListKey) -> ArenaResult<&'a mut Vec<ValueKind>> {
+    pub fn get_mut_list<'a>(key: ListKey) -> WalrusResult<&'a mut Vec<ValueKind>> {
         unsafe { ARENA.get_mut_list(key) }
     }
 
-    pub fn get_list<'a>(key: ListKey) -> ArenaResult<&'a Vec<ValueKind>> {
+    pub fn get_list<'a>(key: ListKey) -> WalrusResult<&'a Vec<ValueKind>> {
         unsafe { ARENA.get_list(key) }
     }
 
-    pub fn get_string<'a>(key: DefaultSymbol) -> ArenaResult<&'a str> {
+    pub fn get_string<'a>(key: DefaultSymbol) -> WalrusResult<&'a str> {
         unsafe { ARENA.get_string(key) }
     }
 
-    pub fn get_function<'a>(key: FuncKey) -> ArenaResult<&'a (String, Vec<String>, Node)> {
+    pub fn get_function<'a>(key: FuncKey) -> WalrusResult<&'a (String, Vec<String>, Node)> {
         unsafe { ARENA.get_function(key) }
     }
 

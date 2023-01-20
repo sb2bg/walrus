@@ -43,7 +43,7 @@ struct Args {
     verbose: bool,
 }
 
-type WalrusResult = Result<(), WalrusError>;
+type WalrusResult<T> = Result<T, WalrusError>;
 
 fn main() {
     panic::set_hook(Box::new(|err| {
@@ -65,7 +65,7 @@ fn main() {
     }
 }
 
-fn try_main() -> WalrusResult {
+fn try_main() -> WalrusResult<()> {
     let args = Args::parse();
     setup_logger(args.debug)?;
     create_shell(args.file)?;
@@ -79,7 +79,7 @@ pub fn create_shell(file: Option<PathBuf>) -> InterpreterResult {
     }
 }
 
-fn setup_logger(debug: bool) -> WalrusResult {
+fn setup_logger(debug: bool) -> WalrusResult<()> {
     let level = if debug {
         LevelFilter::Debug
     } else {
