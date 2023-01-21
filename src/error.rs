@@ -1,5 +1,6 @@
 use crate::ast::{NodeKind, Op};
 use crate::span::{Span, Spanned};
+use crate::vm::opcode::Opcode;
 use float_ord::FloatOrd;
 use git_version::git_version;
 use lalrpop_util::lexer::Token;
@@ -295,6 +296,26 @@ pub enum WalrusError {
         src: String,
         filename: String,
     },
+
+    #[error("Stack underflow while executing opcode '{op:?}' at {}",
+        get_line(src, filename, *span)
+    )]
+    StackUnderflow {
+        op: Opcode,
+        span: Span,
+        src: String,
+        filename: String,
+    },
+
+    #[error("Invalid instruction '{op:?}' at {}",
+        get_line(src, filename, *span)
+    )]
+    InvalidInstruction {
+        op: Opcode,
+        span: Span,
+        src: String,
+        filename: String,
+    },
 }
 
 pub fn parser_err_mapper(
@@ -356,7 +377,7 @@ fn get_line<'a>(src: &'a str, filename: &'a str, span: Span) -> String {
     let mut trimmed = line.trim_start();
     let diff = line.len() - trimmed.len();
     trimmed = trimmed.trim_end();
-    let line_num = src[..span.0].lines().count(); // fixme: I have a sneaking suspicion this is wrong but only in some cases, also slow
+    let line_num = src[..span.0].lines().count(); // fixme: I have a sneaking suspicion this is wrong but only in some cases
     let affected_range = span.0 - start - diff..span.1 - start - diff;
 
     format!(
