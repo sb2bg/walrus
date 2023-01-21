@@ -1,8 +1,8 @@
+use crate::arenas::{HeapValue, Resolve, ResolveMut};
 use crate::error::WalrusError;
-use crate::scope::Scope;
 use crate::source_ref::SourceRef;
 use crate::span::Span;
-use crate::value::{HeapValue, ValueKind};
+use crate::value::ValueKind;
 use crate::vm::opcode::Opcode;
 use crate::WalrusResult;
 use float_ord::FloatOrd;
@@ -45,7 +45,7 @@ impl<'a> VM<'a> {
                     let value = match self.is.get_constant(index) {
                         // todo: make own Opcode for list and dict
                         ValueKind::List(key) => {
-                            let list = Scope::get_mut_list(key)?;
+                            let list = key.resolve_mut()?;
 
                             for _ in 0..list.capacity() {
                                 list.push(self.pop(opcode, span)?);
@@ -56,7 +56,7 @@ impl<'a> VM<'a> {
                             ValueKind::List(key)
                         }
                         ValueKind::Dict(key) => {
-                            let dict = Scope::get_mut_dict(key)?;
+                            let dict = key.resolve_mut()?;
 
                             // fixme: this is wrong
                             for _ in 0..dict.len() {
@@ -73,6 +73,9 @@ impl<'a> VM<'a> {
 
                     self.push(value);
                 }
+                Opcode::True => self.push(ValueKind::Bool(true)),
+                Opcode::False => self.push(ValueKind::Bool(false)),
+                Opcode::Void => self.push(ValueKind::Void),
                 Opcode::Pop => {
                     self.pop(opcode, span)?;
                 }
@@ -88,25 +91,25 @@ impl<'a> VM<'a> {
                             self.push(ValueKind::Float(FloatOrd(a + b)));
                         }
                         (ValueKind::String(a), ValueKind::String(b)) => {
-                            let mut a = Scope::get_string(a)?.to_string();
-                            let b = Scope::get_string(b)?;
+                            let mut a = a.resolve()?.to_string();
+                            let b = b.resolve()?;
                             a.push_str(b);
 
-                            self.push(Scope::heap_alloc(HeapValue::String(a)));
+                            self.push(HeapValue::String(a).alloc());
                         }
                         (ValueKind::List(a), ValueKind::List(b)) => {
-                            let mut a = Scope::get_list(a)?.to_vec();
-                            let b = Scope::get_list(b)?;
+                            let mut a = a.resolve()?.to_vec();
+                            let b = b.resolve()?;
                             a.extend(b);
 
-                            self.push(Scope::heap_alloc(HeapValue::List(a)));
+                            self.push(HeapValue::List(a).alloc());
                         }
                         (ValueKind::Dict(a), ValueKind::Dict(b)) => {
-                            let mut a = Scope::get_dict(a)?.to_owned();
-                            let b = Scope::get_dict(b)?;
+                            let mut a = a.resolve()?.to_owned();
+                            let b = b.resolve()?;
                             a.extend(b);
 
-                            self.push(Scope::heap_alloc(HeapValue::Dict(a)));
+                            self.push(HeapValue::Dict(a).alloc());
                         }
                         _ => return Err(self.construct_err(opcode, a, Some(b), span)),
                     }
@@ -232,20 +235,20 @@ impl<'a> VM<'a> {
 
                     match (a, b) {
                         (ValueKind::List(a), ValueKind::List(b)) => {
-                            let a = Scope::get_list(a)?;
-                            let b = Scope::get_list(b)?;
+                            let a = a.resolve()?;
+                            let b = b.resolve()?;
 
                             self.push(ValueKind::Bool(a == b));
                         }
                         (ValueKind::Dict(a), ValueKind::Dict(b)) => {
-                            let a = Scope::get_dict(a)?;
-                            let b = Scope::get_dict(b)?;
+                            let a = a.resolve()?;
+                            let b = b.resolve()?;
 
                             self.push(ValueKind::Bool(a == b));
                         }
                         (ValueKind::Function(a), ValueKind::Function(b)) => {
-                            let a_func = Scope::get_function(a)?;
-                            let b_func = Scope::get_function(b)?;
+                            let a_func = a.resolve()?;
+                            let b_func = b.resolve()?;
 
                             self.push(ValueKind::Bool(a_func == b_func));
                         }
@@ -264,20 +267,20 @@ impl<'a> VM<'a> {
 
                     match (a, b) {
                         (ValueKind::List(a), ValueKind::List(b)) => {
-                            let a = Scope::get_list(a)?;
-                            let b = Scope::get_list(b)?;
+                            let a = a.resolve()?;
+                            let b = b.resolve()?;
 
                             self.push(ValueKind::Bool(a != b));
                         }
                         (ValueKind::Dict(a), ValueKind::Dict(b)) => {
-                            let a = Scope::get_dict(a)?;
-                            let b = Scope::get_dict(b)?;
+                            let a = a.resolve()?;
+                            let b = b.resolve()?;
 
                             self.push(ValueKind::Bool(a != b));
                         }
                         (ValueKind::Function(a), ValueKind::Function(b)) => {
-                            let a_func = Scope::get_function(a)?;
-                            let b_func = Scope::get_function(b)?;
+                            let a_func = a.resolve()?;
+                            let b_func = b.resolve()?;
 
                             self.push(ValueKind::Bool(a_func != b_func));
                         }
@@ -413,5 +416,20 @@ impl<'a> VM<'a> {
         for (i, frame) in self.stack.iter().enumerate() {
             debug!("| {}: {}", i, frame);
         }
+    }
+
+    fn is_truthy(&self, value: ValueKind) -> WalrusResult<bool> {
+        Ok(match value {
+            ValueKind::Bool(b) => b,
+            ValueKind::Int(i) => i != 0,
+            ValueKind::Float(FloatOrd(f)) => f != 0.0,
+            ValueKind::String(s) => !s.resolve()?.is_empty(),
+            ValueKind::List(l) => !l.resolve()?.is_empty(),
+            ValueKind::Dict(d) => !d.resolve()?.is_empty(),
+            ValueKind::Function(_) => true,
+            ValueKind::Void => false,
+            ValueKind::Range(range) => !range.is_empty(),
+            ValueKind::RustFunction(_) => true,
+        })
     }
 }
