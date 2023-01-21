@@ -10,6 +10,7 @@ use instruction_set::InstructionSet;
 use log::{debug, log_enabled};
 use opcode::Opcode;
 
+pub mod compiler;
 pub mod instruction_set;
 pub mod opcode;
 
@@ -41,8 +42,8 @@ impl<'a> VM<'a> {
             self.ip += 1;
 
             match opcode {
-                Opcode::Constant(index) => {
-                    self.stack.push(self.is.get_constant(index));
+                Opcode::LoadConst(index) => {
+                    self.push(self.is.get_constant(index));
                 }
                 Opcode::Pop => {
                     self.pop(opcode, span)?;
@@ -53,31 +54,31 @@ impl<'a> VM<'a> {
 
                     match (a, b) {
                         (ValueKind::Int(a), ValueKind::Int(b)) => {
-                            self.stack.push(ValueKind::Int(a + b));
+                            self.push(ValueKind::Int(a + b));
                         }
                         (ValueKind::Float(FloatOrd(a)), ValueKind::Float(FloatOrd(b))) => {
-                            self.stack.push(ValueKind::Float(FloatOrd(a + b)));
+                            self.push(ValueKind::Float(FloatOrd(a + b)));
                         }
                         (ValueKind::String(a), ValueKind::String(b)) => {
                             let mut a = Scope::get_string(a)?.to_string();
                             let b = Scope::get_string(b)?;
                             a.push_str(b);
 
-                            self.stack.push(Scope::heap_alloc(HeapValue::String(a)));
+                            self.push(Scope::heap_alloc(HeapValue::String(a)));
                         }
                         (ValueKind::List(a), ValueKind::List(b)) => {
                             let mut a = Scope::get_list(a)?.to_vec();
                             let b = Scope::get_list(b)?;
                             a.extend(b);
 
-                            self.stack.push(Scope::heap_alloc(HeapValue::List(a)));
+                            self.push(Scope::heap_alloc(HeapValue::List(a)));
                         }
                         (ValueKind::Dict(a), ValueKind::Dict(b)) => {
                             let mut a = Scope::get_dict(a)?.to_owned();
                             let b = Scope::get_dict(b)?;
                             a.extend(b);
 
-                            self.stack.push(Scope::heap_alloc(HeapValue::Dict(a)));
+                            self.push(Scope::heap_alloc(HeapValue::Dict(a)));
                         }
                         _ => return Err(self.construct_err(Op::Add, a, Some(b), span)),
                     }
@@ -88,10 +89,10 @@ impl<'a> VM<'a> {
 
                     match (a, b) {
                         (ValueKind::Int(a), ValueKind::Int(b)) => {
-                            self.stack.push(ValueKind::Int(a - b));
+                            self.push(ValueKind::Int(a - b));
                         }
                         (ValueKind::Float(FloatOrd(a)), ValueKind::Float(FloatOrd(b))) => {
-                            self.stack.push(ValueKind::Float(FloatOrd(a - b)));
+                            self.push(ValueKind::Float(FloatOrd(a - b)));
                         }
                         _ => return Err(self.construct_err(Op::Sub, a, Some(b), span)),
                     }
@@ -102,10 +103,10 @@ impl<'a> VM<'a> {
 
                     match (a, b) {
                         (ValueKind::Int(a), ValueKind::Int(b)) => {
-                            self.stack.push(ValueKind::Int(a * b));
+                            self.push(ValueKind::Int(a * b));
                         }
                         (ValueKind::Float(FloatOrd(a)), ValueKind::Float(FloatOrd(b))) => {
-                            self.stack.push(ValueKind::Float(FloatOrd(a * b)));
+                            self.push(ValueKind::Float(FloatOrd(a * b)));
                         }
                         _ => return Err(self.construct_err(Op::Mul, a, Some(b), span)),
                     }
@@ -116,10 +117,10 @@ impl<'a> VM<'a> {
 
                     match (a, b) {
                         (ValueKind::Int(a), ValueKind::Int(b)) => {
-                            self.stack.push(ValueKind::Int(a / b));
+                            self.push(ValueKind::Int(a / b));
                         }
                         (ValueKind::Float(FloatOrd(a)), ValueKind::Float(FloatOrd(b))) => {
-                            self.stack.push(ValueKind::Float(FloatOrd(a / b)));
+                            self.push(ValueKind::Float(FloatOrd(a / b)));
                         }
                         _ => return Err(self.construct_err(Op::Div, a, Some(b), span)),
                     }
@@ -130,10 +131,10 @@ impl<'a> VM<'a> {
 
                     match (a, b) {
                         (ValueKind::Int(a), ValueKind::Int(b)) => {
-                            self.stack.push(ValueKind::Int(a.pow(b as u32)));
+                            self.push(ValueKind::Int(a.pow(b as u32)));
                         }
                         (ValueKind::Float(FloatOrd(a)), ValueKind::Float(FloatOrd(b))) => {
-                            self.stack.push(ValueKind::Float(FloatOrd(a.powf(b))));
+                            self.push(ValueKind::Float(FloatOrd(a.powf(b))));
                         }
                         _ => return Err(self.construct_err(Op::Pow, a, Some(b), span)),
                     }
@@ -144,10 +145,10 @@ impl<'a> VM<'a> {
 
                     match (a, b) {
                         (ValueKind::Int(a), ValueKind::Int(b)) => {
-                            self.stack.push(ValueKind::Int(a % b));
+                            self.push(ValueKind::Int(a % b));
                         }
                         (ValueKind::Float(FloatOrd(a)), ValueKind::Float(FloatOrd(b))) => {
-                            self.stack.push(ValueKind::Float(FloatOrd(a % b)));
+                            self.push(ValueKind::Float(FloatOrd(a % b)));
                         }
                         _ => return Err(self.construct_err(Op::Mod, a, Some(b), span)),
                     }
@@ -157,10 +158,10 @@ impl<'a> VM<'a> {
 
                     match a {
                         ValueKind::Int(a) => {
-                            self.stack.push(ValueKind::Int(-a));
+                            self.push(ValueKind::Int(-a));
                         }
                         ValueKind::Float(FloatOrd(a)) => {
-                            self.stack.push(ValueKind::Float(FloatOrd(-a)));
+                            self.push(ValueKind::Float(FloatOrd(-a)));
                         }
                         _ => return Err(self.construct_err(Op::Sub, a, None, span)),
                     }
@@ -170,7 +171,7 @@ impl<'a> VM<'a> {
 
                     match a {
                         ValueKind::Bool(a) => {
-                            self.stack.push(ValueKind::Bool(!a));
+                            self.push(ValueKind::Bool(!a));
                         }
                         _ => return Err(self.construct_err(Op::Not, a, None, span)),
                     }
@@ -189,6 +190,8 @@ impl<'a> VM<'a> {
                 }
                 Opcode::Nop => {}
             }
+
+            self.stack_trace();
         }
     }
 
@@ -230,8 +233,6 @@ impl<'a> VM<'a> {
         if !log_enabled!(log::Level::Debug) {
             return;
         }
-
-        debug!("| == Stack trace ==");
 
         for (i, frame) in self.stack.iter().enumerate() {
             debug!("| {}: {}", i, frame);
