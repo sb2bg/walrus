@@ -1,7 +1,14 @@
+use std::fmt::Display;
 use std::ops::Range;
 
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
 pub struct Span(pub usize, pub usize);
+
+impl Display for Span {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}..{}", self.0, self.1)
+    }
+}
 
 impl Span {
     pub fn extend(self, other: Span) -> Span {
