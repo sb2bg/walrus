@@ -9,6 +9,7 @@ mod scope;
 mod source_ref;
 mod span;
 mod value;
+mod vm;
 
 use crate::error::WalrusError;
 use crate::interpreter::InterpreterResult;
