@@ -292,7 +292,7 @@ impl<'a> Interpreter<'a> {
         let value = self.interpret(value)?;
 
         Err(WalrusError::Exception {
-            message: self.stringify(value)?,
+            message: value.stringify()?,
             span,
             src: self.source_ref.source().into(),
             filename: self.source_ref.filename().into(),
@@ -301,74 +301,16 @@ impl<'a> Interpreter<'a> {
 
     fn visit_print(&mut self, value: Node) -> InterpreterResult {
         let value = self.interpret(value)?;
-        print!("{}", self.stringify(value)?);
+        print!("{}", value.stringify()?);
 
         Ok(ValueKind::Void)
     }
 
     fn visit_println(&mut self, value: Node) -> InterpreterResult {
         let value = self.interpret(value)?;
-        println!("{}", self.stringify(value)?);
+        println!("{}", value.stringify()?);
 
         Ok(ValueKind::Void)
-    }
-
-    pub fn stringify(&self, value: ValueKind) -> Result<String, WalrusError> {
-        match value {
-            ValueKind::Void => Ok("void".to_string()),
-            ValueKind::String(s) => Ok(Scope::get_string(s)?.to_string()),
-            ValueKind::List(l) => {
-                let list = Scope::get_list(l)?;
-
-                let mut string = String::new();
-
-                string.push('[');
-
-                for (i, value) in list.iter().enumerate() {
-                    string.push_str(&self.stringify(*value)?);
-
-                    if i != list.len() - 1 {
-                        string.push_str(", ");
-                    }
-                }
-
-                string.push(']');
-
-                Ok(string)
-            }
-            ValueKind::Dict(d) => {
-                let dict = Scope::get_dict(d)?;
-                let mut string = String::new();
-
-                string.push('{');
-
-                for (i, (key, value)) in dict.iter().enumerate() {
-                    string.push_str(&self.stringify(*key)?);
-                    string.push_str(": ");
-                    string.push_str(&self.stringify(*value)?);
-
-                    if i != dict.len() - 1 {
-                        string.push_str(", ");
-                    }
-                }
-
-                string.push('}');
-
-                Ok(string)
-            }
-            ValueKind::Function(f) => {
-                let function = Scope::get_function(f)?;
-                Ok(format!("fn {}", function.0))
-            }
-            ValueKind::RustFunction(f) => {
-                let function = Scope::get_rust_function(f)?;
-                Ok(format!("rust fn {}", function.2))
-            }
-            ValueKind::Int(n) => Ok(n.to_string()),
-            ValueKind::Float(n) => Ok(n.0.to_string()),
-            ValueKind::Bool(b) => Ok(b.to_string()),
-            ValueKind::Range(range) => Ok(range.to_string()),
-        }
     }
 
     fn visit_free(&mut self, value: Node) -> InterpreterResult {
@@ -429,7 +371,7 @@ impl<'a> Interpreter<'a> {
             ValueKind::RustFunction(f) => {
                 let function = Scope::get_rust_function(f)?;
 
-                if let Some(rust_args) = function.1 {
+                if let Some(rust_args) = function.args() {
                     if rust_args != args.len() {
                         Err(WalrusError::InvalidArgCount {
                             name: "rust fn".to_string(), // fixme: get name
@@ -442,7 +384,7 @@ impl<'a> Interpreter<'a> {
                     }
                 }
 
-                function.0(args, self, span)
+                function.call(args, self.source_ref, span)
             }
             _ => Err(WalrusError::NotCallable {
                 value: value.get_type().to_string(),
@@ -512,7 +454,7 @@ impl<'a> Interpreter<'a> {
                             })?
                         }
 
-                        let sublist = list[start as usize..end as usize].to_vec();
+                        let sublist = list[start as usize..(end + 1) as usize].to_vec();
                         Ok(Scope::heap_alloc(HeapValue::List(sublist)))
                     }
                     _ => Err(WalrusError::InvalidIndexType {
@@ -595,7 +537,7 @@ impl<'a> Interpreter<'a> {
                             })?
                         }
 
-                        let substring = string[start as usize..end as usize].to_string();
+                        let substring = string[start as usize..(end + 1) as usize].to_string();
                         Ok(Scope::heap_alloc(HeapValue::String(substring)))
                     }
                     _ => Err(WalrusError::InvalidIndexType {
