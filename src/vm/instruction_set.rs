@@ -11,7 +11,7 @@ impl InstructionSet {
     pub fn new() -> Self {
         Self {
             instructions: Vec::new(),
-            constants: vec![ValueKind::Void],
+            constants: Vec::new(),
         }
     }
 
