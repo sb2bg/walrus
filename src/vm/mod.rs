@@ -1,14 +1,13 @@
-use crate::ast::Op;
 use crate::error::WalrusError;
 use crate::scope::Scope;
 use crate::source_ref::SourceRef;
 use crate::span::Span;
 use crate::value::{HeapValue, ValueKind};
+use crate::vm::opcode::Opcode;
 use crate::WalrusResult;
 use float_ord::FloatOrd;
 use instruction_set::InstructionSet;
 use log::{debug, log_enabled};
-use opcode::Opcode;
 
 pub mod compiler;
 pub mod instruction_set;
@@ -43,7 +42,36 @@ impl<'a> VM<'a> {
 
             match opcode {
                 Opcode::LoadConst(index) => {
-                    self.push(self.is.get_constant(index));
+                    let value = match self.is.get_constant(index) {
+                        // todo: make own Opcode for list and dict
+                        ValueKind::List(key) => {
+                            let list = Scope::get_mut_list(key)?;
+
+                            for _ in 0..list.capacity() {
+                                list.push(self.pop(opcode, span)?);
+                            }
+
+                            list.reverse(); // todo: can we avoid this?
+
+                            ValueKind::List(key)
+                        }
+                        ValueKind::Dict(key) => {
+                            let dict = Scope::get_mut_dict(key)?;
+
+                            // fixme: this is wrong
+                            for _ in 0..dict.len() {
+                                let value = self.pop(opcode, span)?;
+                                let key = self.pop(opcode, span)?;
+
+                                dict.insert(key, value);
+                            }
+
+                            ValueKind::Dict(key)
+                        }
+                        value => value,
+                    };
+
+                    self.push(value);
                 }
                 Opcode::Pop => {
                     self.pop(opcode, span)?;
@@ -80,7 +108,7 @@ impl<'a> VM<'a> {
 
                             self.push(Scope::heap_alloc(HeapValue::Dict(a)));
                         }
-                        _ => return Err(self.construct_err(Op::Add, a, Some(b), span)),
+                        _ => return Err(self.construct_err(opcode, a, Some(b), span)),
                     }
                 }
                 Opcode::Subtract => {
@@ -94,7 +122,7 @@ impl<'a> VM<'a> {
                         (ValueKind::Float(FloatOrd(a)), ValueKind::Float(FloatOrd(b))) => {
                             self.push(ValueKind::Float(FloatOrd(a - b)));
                         }
-                        _ => return Err(self.construct_err(Op::Sub, a, Some(b), span)),
+                        _ => return Err(self.construct_err(opcode, a, Some(b), span)),
                     }
                 }
                 Opcode::Multiply => {
@@ -108,7 +136,7 @@ impl<'a> VM<'a> {
                         (ValueKind::Float(FloatOrd(a)), ValueKind::Float(FloatOrd(b))) => {
                             self.push(ValueKind::Float(FloatOrd(a * b)));
                         }
-                        _ => return Err(self.construct_err(Op::Mul, a, Some(b), span)),
+                        _ => return Err(self.construct_err(opcode, a, Some(b), span)),
                     }
                 }
                 Opcode::Divide => {
@@ -122,7 +150,7 @@ impl<'a> VM<'a> {
                         (ValueKind::Float(FloatOrd(a)), ValueKind::Float(FloatOrd(b))) => {
                             self.push(ValueKind::Float(FloatOrd(a / b)));
                         }
-                        _ => return Err(self.construct_err(Op::Div, a, Some(b), span)),
+                        _ => return Err(self.construct_err(opcode, a, Some(b), span)),
                     }
                 }
                 Opcode::Power => {
@@ -136,7 +164,7 @@ impl<'a> VM<'a> {
                         (ValueKind::Float(FloatOrd(a)), ValueKind::Float(FloatOrd(b))) => {
                             self.push(ValueKind::Float(FloatOrd(a.powf(b))));
                         }
-                        _ => return Err(self.construct_err(Op::Pow, a, Some(b), span)),
+                        _ => return Err(self.construct_err(opcode, a, Some(b), span)),
                     }
                 }
                 Opcode::Modulo => {
@@ -150,7 +178,7 @@ impl<'a> VM<'a> {
                         (ValueKind::Float(FloatOrd(a)), ValueKind::Float(FloatOrd(b))) => {
                             self.push(ValueKind::Float(FloatOrd(a % b)));
                         }
-                        _ => return Err(self.construct_err(Op::Mod, a, Some(b), span)),
+                        _ => return Err(self.construct_err(opcode, a, Some(b), span)),
                     }
                 }
                 Opcode::Negate => {
@@ -163,7 +191,7 @@ impl<'a> VM<'a> {
                         ValueKind::Float(FloatOrd(a)) => {
                             self.push(ValueKind::Float(FloatOrd(-a)));
                         }
-                        _ => return Err(self.construct_err(Op::Sub, a, None, span)),
+                        _ => return Err(self.construct_err(opcode, a, None, span)),
                     }
                 }
                 Opcode::Not => {
@@ -173,7 +201,149 @@ impl<'a> VM<'a> {
                         ValueKind::Bool(a) => {
                             self.push(ValueKind::Bool(!a));
                         }
-                        _ => return Err(self.construct_err(Op::Not, a, None, span)),
+                        _ => return Err(self.construct_err(opcode, a, None, span)),
+                    }
+                }
+                Opcode::And => {
+                    let b = self.pop(opcode, span)?;
+                    let a = self.pop(opcode, span)?;
+
+                    match (a, b) {
+                        (ValueKind::Bool(a), ValueKind::Bool(b)) => {
+                            self.push(ValueKind::Bool(a && b));
+                        }
+                        _ => return Err(self.construct_err(opcode, a, Some(b), span)),
+                    }
+                }
+                Opcode::Or => {
+                    let b = self.pop(opcode, span)?;
+                    let a = self.pop(opcode, span)?;
+
+                    match (a, b) {
+                        (ValueKind::Bool(a), ValueKind::Bool(b)) => {
+                            self.push(ValueKind::Bool(a || b));
+                        }
+                        _ => return Err(self.construct_err(opcode, a, Some(b), span)),
+                    }
+                }
+                Opcode::Equal => {
+                    let b = self.pop(opcode, span)?;
+                    let a = self.pop(opcode, span)?;
+
+                    match (a, b) {
+                        (ValueKind::List(a), ValueKind::List(b)) => {
+                            let a = Scope::get_list(a)?;
+                            let b = Scope::get_list(b)?;
+
+                            self.push(ValueKind::Bool(a == b));
+                        }
+                        (ValueKind::Dict(a), ValueKind::Dict(b)) => {
+                            let a = Scope::get_dict(a)?;
+                            let b = Scope::get_dict(b)?;
+
+                            self.push(ValueKind::Bool(a == b));
+                        }
+                        (ValueKind::Function(a), ValueKind::Function(b)) => {
+                            let a_func = Scope::get_function(a)?;
+                            let b_func = Scope::get_function(b)?;
+
+                            self.push(ValueKind::Bool(a_func == b_func));
+                        }
+                        (ValueKind::Int(a), ValueKind::Float(FloatOrd(b))) => {
+                            self.push(ValueKind::Bool(a as f64 == b));
+                        }
+                        (ValueKind::Float(FloatOrd(a)), ValueKind::Int(b)) => {
+                            self.push(ValueKind::Bool(a == b as f64));
+                        }
+                        _ => self.push(ValueKind::Bool(a == b)),
+                    }
+                }
+                Opcode::NotEqual => {
+                    let b = self.pop(opcode, span)?;
+                    let a = self.pop(opcode, span)?;
+
+                    match (a, b) {
+                        (ValueKind::List(a), ValueKind::List(b)) => {
+                            let a = Scope::get_list(a)?;
+                            let b = Scope::get_list(b)?;
+
+                            self.push(ValueKind::Bool(a != b));
+                        }
+                        (ValueKind::Dict(a), ValueKind::Dict(b)) => {
+                            let a = Scope::get_dict(a)?;
+                            let b = Scope::get_dict(b)?;
+
+                            self.push(ValueKind::Bool(a != b));
+                        }
+                        (ValueKind::Function(a), ValueKind::Function(b)) => {
+                            let a_func = Scope::get_function(a)?;
+                            let b_func = Scope::get_function(b)?;
+
+                            self.push(ValueKind::Bool(a_func != b_func));
+                        }
+                        (ValueKind::Int(a), ValueKind::Float(FloatOrd(b))) => {
+                            self.push(ValueKind::Bool(a as f64 != b));
+                        }
+                        (ValueKind::Float(FloatOrd(a)), ValueKind::Int(b)) => {
+                            self.push(ValueKind::Bool(a != b as f64));
+                        }
+                        _ => self.push(ValueKind::Bool(a != b)),
+                    }
+                }
+                Opcode::Greater => {
+                    let b = self.pop(opcode, span)?;
+                    let a = self.pop(opcode, span)?;
+
+                    match (a, b) {
+                        (ValueKind::Int(a), ValueKind::Int(b)) => {
+                            self.push(ValueKind::Bool(a > b));
+                        }
+                        (ValueKind::Float(FloatOrd(a)), ValueKind::Float(FloatOrd(b))) => {
+                            self.push(ValueKind::Bool(a > b));
+                        }
+                        _ => return Err(self.construct_err(opcode, a, Some(b), span)),
+                    }
+                }
+                Opcode::GreaterEqual => {
+                    let b = self.pop(opcode, span)?;
+                    let a = self.pop(opcode, span)?;
+
+                    match (a, b) {
+                        (ValueKind::Int(a), ValueKind::Int(b)) => {
+                            self.push(ValueKind::Bool(a >= b));
+                        }
+                        (ValueKind::Float(FloatOrd(a)), ValueKind::Float(FloatOrd(b))) => {
+                            self.push(ValueKind::Bool(a >= b));
+                        }
+                        _ => return Err(self.construct_err(opcode, a, Some(b), span)),
+                    }
+                }
+                Opcode::Less => {
+                    let b = self.pop(opcode, span)?;
+                    let a = self.pop(opcode, span)?;
+
+                    match (a, b) {
+                        (ValueKind::Int(a), ValueKind::Int(b)) => {
+                            self.push(ValueKind::Bool(a < b));
+                        }
+                        (ValueKind::Float(FloatOrd(a)), ValueKind::Float(FloatOrd(b))) => {
+                            self.push(ValueKind::Bool(a < b));
+                        }
+                        _ => return Err(self.construct_err(opcode, a, Some(b), span)),
+                    }
+                }
+                Opcode::LessEqual => {
+                    let b = self.pop(opcode, span)?;
+                    let a = self.pop(opcode, span)?;
+
+                    match (a, b) {
+                        (ValueKind::Int(a), ValueKind::Int(b)) => {
+                            self.push(ValueKind::Bool(a <= b));
+                        }
+                        (ValueKind::Float(FloatOrd(a)), ValueKind::Float(FloatOrd(b))) => {
+                            self.push(ValueKind::Bool(a <= b));
+                        }
+                        _ => return Err(self.construct_err(opcode, a, Some(b), span)),
                     }
                 }
                 Opcode::Print => {
@@ -195,7 +365,13 @@ impl<'a> VM<'a> {
         }
     }
 
-    fn construct_err(&self, op: Op, a: ValueKind, b: Option<ValueKind>, span: Span) -> WalrusError {
+    fn construct_err(
+        &self,
+        op: Opcode,
+        a: ValueKind,
+        b: Option<ValueKind>,
+        span: Span,
+    ) -> WalrusError {
         if let Some(b) = b {
             WalrusError::InvalidOperation {
                 op,
