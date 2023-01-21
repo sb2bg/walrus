@@ -11,7 +11,7 @@ impl InstructionSet {
     pub fn new() -> Self {
         Self {
             instructions: Vec::new(),
-            constants: Vec::new(),
+            constants: vec![ValueKind::Void],
         }
     }
 
@@ -44,12 +44,12 @@ impl InstructionSet {
         debug!("| == disassemble ==");
         debug!("| sizeof(instructions) = {}", self.instructions.len());
 
-        for (i, instruction) in self.instructions.iter().enumerate() {
-            debug!("| {:04} {:?}", i, instruction.opcode());
+        for (i, _) in self.instructions.iter().enumerate() {
+            self.disassemble_single(i);
         }
     }
 
     pub fn disassemble_single(&self, index: usize) {
-        debug!("| {:04} {:?}", index, self.instructions[index].opcode());
+        debug!("| {index:03} {:?}", self.instructions[index].opcode(),);
     }
 }
