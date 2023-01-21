@@ -101,7 +101,7 @@ impl Scope {
         unsafe { ARENA.alloc(value) }
     }
 
-    pub fn define(&mut self, name: String, value: ValueKind) {
+    pub fn assign(&mut self, name: String, value: ValueKind) {
         if name == "_" {
             return;
         }
