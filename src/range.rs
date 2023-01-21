@@ -41,6 +41,10 @@ impl RangeValue {
     pub fn end_span(&self) -> Span {
         self.end_span
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.start >= self.end
+    }
 }
 
 impl std::fmt::Display for RangeValue {
