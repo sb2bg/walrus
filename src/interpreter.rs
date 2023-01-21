@@ -788,15 +788,15 @@ impl<'a> Interpreter<'a> {
                 Ok(ValueKind::Float(FloatOrd(a + b)))
             }
             (ValueKind::String(a), ValueKind::String(b)) => {
-                let a_str = Scope::get_string(a)?.to_string();
+                let mut a_str = Scope::get_string(a)?.to_string();
                 let b_str = Scope::get_string(b)?;
+                a_str.push_str(b_str);
 
-                Ok(Scope::heap_alloc(HeapValue::String(a_str + b_str)))
+                Ok(Scope::heap_alloc(HeapValue::String(a_str)))
             }
             (ValueKind::List(a), ValueKind::List(b)) => {
                 let mut a_list = Scope::get_list(a)?.clone();
                 let b_list = Scope::get_list(b)?;
-
                 a_list.extend(b_list);
 
                 Ok(Scope::heap_alloc(HeapValue::List(a_list)))
