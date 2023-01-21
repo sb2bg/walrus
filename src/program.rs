@@ -3,6 +3,8 @@ use crate::grammar::ProgramParser;
 use crate::interpreter::{Interpreter, InterpreterResult};
 use crate::source_ref::{OwnedSourceRef, SourceRef};
 use crate::value::ValueKind;
+use crate::vm::compiler::BytecodeEmitter;
+use crate::vm::VM;
 use log::debug;
 use std::collections::HashSet;
 use std::fs;
@@ -35,11 +37,12 @@ impl Program {
             parser_err_mapper(err, &self.source_ref.src, &self.source_ref.filename)
         })?;
 
-        debug!("AST > {:?}", ast);
+        let mut compiler = BytecodeEmitter::new();
+        compiler.emit(*ast);
+        let instruction_set = compiler.instruction_set();
 
-        let mut interpreter = Interpreter::new(SourceRef::from(&self.source_ref), self);
-        let result = interpreter.interpret(*ast)?;
-        debug!("Result > {:?}", result);
+        let mut vm = VM::new(SourceRef::from(&self.source_ref), instruction_set);
+        let result = vm.run()?;
 
         Ok(result)
     }
