@@ -916,12 +916,6 @@ impl<'a> Interpreter<'a> {
 
     fn equal(&self, left: ValueKind, right: ValueKind) -> InterpreterResult {
         match (left, right) {
-            (ValueKind::String(a), ValueKind::String(b)) => {
-                let a_str = Scope::get_string(a)?;
-                let b_str = Scope::get_string(b)?;
-
-                Ok(ValueKind::Bool(a_str == b_str))
-            }
             (ValueKind::Dict(a), ValueKind::Dict(b)) => {
                 let a_dict = Scope::get_dict(a)?;
                 let b_dict = Scope::get_dict(b)?;
@@ -952,12 +946,6 @@ impl<'a> Interpreter<'a> {
 
     fn not_equal(&self, left: ValueKind, right: ValueKind) -> InterpreterResult {
         match (left, right) {
-            (ValueKind::String(a), ValueKind::String(b)) => {
-                let a_str = Scope::get_string(a)?;
-                let b_str = Scope::get_string(b)?;
-
-                Ok(ValueKind::Bool(a_str != b_str))
-            }
             (ValueKind::Dict(a), ValueKind::Dict(b)) => {
                 let a_dict = Scope::get_dict(a)?;
                 let b_dict = Scope::get_dict(b)?;
