@@ -1,7 +1,6 @@
 use crate::ast::Node;
 use crate::error::WalrusError;
-use crate::interpreter::{Interpreter, InterpreterResult};
-use crate::span::Span;
+use crate::rust_function::RustFunction;
 use crate::value::{HeapValue, ValueKind};
 use crate::WalrusResult;
 use rustc_hash::FxHashMap;
@@ -14,12 +13,6 @@ new_key_type! {
     pub struct FuncKey;
     pub struct RustFuncKey;
 }
-
-pub type RustFunction = (
-    fn(Vec<ValueKind>, interpreter: &Interpreter, span: Span) -> InterpreterResult,
-    Option<usize>,
-    String,
-);
 
 // todo: maybe instead of this, we can use a single slotmap
 // and use a different enum to differentiate between the
