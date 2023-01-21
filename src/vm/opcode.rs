@@ -1,4 +1,5 @@
 use crate::span::Span;
+use std::fmt::{Display, Formatter};
 
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -14,9 +15,40 @@ pub enum Opcode {
     Power,
     Negate,
     Not,
+    Equal,
+    NotEqual,
+    Greater,
+    GreaterEqual,
+    Less,
+    LessEqual,
+    And,
+    Or,
     Print,
     Println,
     Nop,
+}
+
+impl Display for Opcode {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Opcode::Multiply => write!(f, "*"),
+            Opcode::Divide => write!(f, "/"),
+            Opcode::Add => write!(f, "+"),
+            Opcode::Subtract => write!(f, "-"),
+            Opcode::Modulo => write!(f, "%"),
+            Opcode::Power => write!(f, "**"),
+            Opcode::Not => write!(f, "not"),
+            Opcode::Equal => write!(f, "=="),
+            Opcode::NotEqual => write!(f, "!="),
+            Opcode::Greater => write!(f, ">"),
+            Opcode::GreaterEqual => write!(f, ">="),
+            Opcode::Less => write!(f, "<"),
+            Opcode::LessEqual => write!(f, "<="),
+            Opcode::And => write!(f, "and"),
+            Opcode::Or => write!(f, "or"),
+            _ => write!(f, "{:?}", self),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]

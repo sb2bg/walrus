@@ -1,6 +1,8 @@
-use crate::ast::{Node, NodeKind, Op};
+use crate::ast::{Node, NodeKind};
+use crate::vm::opcode::Opcode;
 use crate::span::{Span, Spanned};
 use crate::error::{RecoveredParseError, parse_int, parse_float, escape_string};
+use lalrpop_util::ErrorRecovery;
 
 grammar;
 
@@ -12,7 +14,7 @@ pub Program = Sp<Statements>;
 
 Statements: NodeKind = {
     TrailingDelim<Statement, ";"> => NodeKind::Statements(<>), // fixme: make so only certain statements require a trailing semicolon
-    => NodeKind::Void
+    => NodeKind::Void,
 }
 
 Statement: Box<Node> = {
@@ -58,36 +60,36 @@ Call = {
     Atom,
 };
 
-OrOp: Op = "or" => Op::Or;
-AndOp: Op = "and" => Op::And;
+OrOp: Opcode = "or" => Opcode::Or;
+AndOp: Opcode = "and" => Opcode::And;
 
-ComparisonOp: Op = {
-    "==" => Op::Equal,
-    "!=" => Op::NotEqual,
-    "<" => Op::Less,
-    ">" => Op::Greater,
-    "<=" => Op::LessEqual,
-    ">=" => Op::GreaterEqual,
+ComparisonOp: Opcode = {
+    "==" => Opcode::Equal,
+    "!=" => Opcode::NotEqual,
+    "<" => Opcode::Less,
+    ">" => Opcode::Greater,
+    "<=" => Opcode::LessEqual,
+    ">=" => Opcode::GreaterEqual,
 };
 
-ExprOp: Op = {
-    "+" => Op::Add,
-    "-" => Op::Sub,
+ExprOp: Opcode = {
+    "+" => Opcode::Add,
+    "-" => Opcode::Subtract,
 };
 
-FactorOp: Op = {
-    "*" => Op::Mul,
-    "/" => Op::Div,
-    "%" => Op::Mod,
+FactorOp: Opcode = {
+    "*" => Opcode::Multiply,
+    "/" => Opcode::Divide,
+    "%" => Opcode::Modulo,
 };
 
-UnaryOp: Op = {
-    "-" => Op::Sub,
-    "not" => Op::Not,
+UnaryOp: Opcode = {
+    "-" => Opcode::Negate,
+    "not" => Opcode::Not,
 };
 
-PowOp: Op = {
-    "**" => Op::Pow,
+PowOp: Opcode = {
+    "**" => Opcode::Power,
 };
 
 Atom: NodeKind = {
@@ -104,8 +106,7 @@ Atom: NodeKind = {
 	Paren<Expr>,
 };
 
-// todo: maybe add range syntax
-
+// todo: add exponentials and underscores
 Int: NodeKind = {
     StrSp<r"\d+"> =>? parse_int(<>, 10),
     StrSp<r"0x[0-9A-Fa-f]+"> =>? parse_int(<>, 16),
@@ -188,15 +189,15 @@ Extern: NodeKind = {
 
 Assign: NodeKind = {
     "let" <n: IdentStr> "=" <e: SpExpr> => NodeKind::Assign(n, e),
-    <n: StrSp<IdentStr>> "=" <e: SpExpr> => NodeKind::Reassign(n, e, Op::Equal),
-    <n: StrSp<IdentStr>> "+=" <e: SpExpr> => NodeKind::Reassign(n, e, Op::Add),
-    <n: StrSp<IdentStr>> "-=" <e: SpExpr> => NodeKind::Reassign(n, e, Op::Sub),
-    <n: StrSp<IdentStr>> "*=" <e: SpExpr> => NodeKind::Reassign(n, e, Op::Mul),
-    <n: StrSp<IdentStr>> "/=" <e: SpExpr> => NodeKind::Reassign(n, e, Op::Div),
-    <n: StrSp<IdentStr>> "%=" <e: SpExpr> => NodeKind::Reassign(n, e, Op::Mod),
-    <n: StrSp<IdentStr>> "**=" <e: SpExpr> => NodeKind::Reassign(n, e, Op::Pow),
-    <n: StrSp<IdentStr>> "or=" <e: SpExpr> => NodeKind::Reassign(n, e, Op::Or),
-    <n: StrSp<IdentStr>> "and=" <e: SpExpr> => NodeKind::Reassign(n, e, Op::And),
+    <n: StrSp<IdentStr>> "=" <e: SpExpr> => NodeKind::Reassign(n, e, Opcode::Equal),
+    <n: StrSp<IdentStr>> "+=" <e: SpExpr> => NodeKind::Reassign(n, e, Opcode::Add),
+    <n: StrSp<IdentStr>> "-=" <e: SpExpr> => NodeKind::Reassign(n, e, Opcode::Subtract),
+    <n: StrSp<IdentStr>> "*=" <e: SpExpr> => NodeKind::Reassign(n, e, Opcode::Multiply),
+    <n: StrSp<IdentStr>> "/=" <e: SpExpr> => NodeKind::Reassign(n, e, Opcode::Divide),
+    <n: StrSp<IdentStr>> "%=" <e: SpExpr> => NodeKind::Reassign(n, e, Opcode::Modulo),
+    <n: StrSp<IdentStr>> "**=" <e: SpExpr> => NodeKind::Reassign(n, e, Opcode::Power),
+    <n: StrSp<IdentStr>> "or=" <e: SpExpr> => NodeKind::Reassign(n, e, Opcode::Or),
+    <n: StrSp<IdentStr>> "and=" <e: SpExpr> => NodeKind::Reassign(n, e, Opcode::And),
     <n: Sp<Atom>> "[" <i: SpExpr> "]" "=" <e: SpExpr> => NodeKind::IndexAssign(n, i, e), // fixme: add ops, make x[n][m] work
 };
 

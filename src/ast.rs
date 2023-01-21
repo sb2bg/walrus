@@ -1,4 +1,5 @@
 use crate::span::{Span, Spanned};
+use crate::vm::opcode::Opcode;
 use float_ord::FloatOrd;
 use std::fmt::{Debug, Display, Formatter};
 
@@ -17,11 +18,11 @@ pub enum NodeKind {
     List(Vec<Box<Node>>),
     Bool(bool),
     Dict(Vec<(Box<Node>, Box<Node>)>),
-    BinOp(Box<Node>, Op, Box<Node>),
-    UnaryOp(Op, Box<Node>),
+    BinOp(Box<Node>, Opcode, Box<Node>),
+    UnaryOp(Opcode, Box<Node>),
     Ident(String),
     Assign(String, Box<Node>),
-    Reassign(Spanned<String>, Box<Node>, Op),
+    Reassign(Spanned<String>, Box<Node>, Opcode),
     IndexAssign(Box<Node>, Box<Node>, Box<Node>),
     FunctionCall(Box<Node>, Vec<Box<Node>>),
     Index(Box<Node>, Box<Node>),
@@ -105,47 +106,6 @@ impl Display for NodeKind {
             NodeKind::Range(_, _) => write!(f, "Range"),
             NodeKind::Defer(_) => write!(f, "Defer"),
             NodeKind::Void => write!(f, "Void"),
-        }
-    }
-}
-
-#[derive(Debug, PartialEq, Eq, Hash, Copy, Clone)]
-pub enum Op {
-    Mul,
-    Div,
-    Add,
-    Sub,
-    Mod,
-    Pow,
-    Not,
-    Equal,
-    NotEqual,
-    Greater,
-    GreaterEqual,
-    Less,
-    LessEqual,
-    And,
-    Or,
-}
-
-impl Display for Op {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Op::Mul => write!(f, "*"),
-            Op::Div => write!(f, "/"),
-            Op::Add => write!(f, "+"),
-            Op::Sub => write!(f, "-"),
-            Op::Mod => write!(f, "%"),
-            Op::Pow => write!(f, "**"),
-            Op::Not => write!(f, "not"),
-            Op::Equal => write!(f, "=="),
-            Op::NotEqual => write!(f, "!="),
-            Op::Greater => write!(f, ">"),
-            Op::GreaterEqual => write!(f, ">="),
-            Op::Less => write!(f, "<"),
-            Op::LessEqual => write!(f, "<="),
-            Op::And => write!(f, "and"),
-            Op::Or => write!(f, "or"),
         }
     }
 }

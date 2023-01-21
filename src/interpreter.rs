@@ -1,4 +1,4 @@
-use crate::ast::{Node, NodeKind, Op};
+use crate::ast::{Node, NodeKind};
 use crate::error::WalrusError;
 use crate::program::Program;
 use crate::range::RangeValue;
@@ -6,6 +6,7 @@ use crate::scope::Scope;
 use crate::source_ref::SourceRef;
 use crate::span::{Span, Spanned};
 use crate::value::{HeapValue, ValueKind};
+use crate::vm::opcode::Opcode;
 use float_ord::FloatOrd;
 use log::debug;
 use rustc_hash::FxHashMap;
@@ -127,42 +128,48 @@ impl<'a> Interpreter<'a> {
         Ok(ValueKind::Void)
     }
 
-    fn visit_bin_op(&mut self, left: Node, op: Op, right: Node, span: Span) -> InterpreterResult {
+    fn visit_bin_op(
+        &mut self,
+        left: Node,
+        op: Opcode,
+        right: Node,
+        span: Span,
+    ) -> InterpreterResult {
         let left_val = self.interpret(left)?;
         let right_val = self.interpret(right)?;
 
         match op {
-            Op::Add => self.add(left_val, right_val, span),
-            Op::Sub => self.sub(left_val, right_val, span),
-            Op::Mul => self.mul(left_val, right_val, span),
-            Op::Div => self.div(left_val, right_val, span),
-            Op::Mod => self.rem(left_val, right_val, span),
-            Op::Pow => self.pow(left_val, right_val, span),
-            Op::Equal => self.equal(left_val, right_val),
-            Op::NotEqual => self.not_equal(left_val, right_val),
-            Op::Less => self.less(left_val, right_val, span),
-            Op::LessEqual => self.less_equal(left_val, right_val, span),
-            Op::Greater => self.greater(left_val, right_val, span),
-            Op::GreaterEqual => self.greater_equal(left_val, right_val, span),
-            Op::And => self.and(left_val, right_val, span),
-            Op::Or => self.or(left_val, right_val, span),
-            Op::Not => Err(WalrusError::UnknownError {
-                message: format!("Operator '{}' requires one operand", op),
-            })?,
+            Opcode::Add => self.add(left_val, right_val, span),
+            Opcode::Subtract => self.sub(left_val, right_val, span),
+            Opcode::Multiply => self.mul(left_val, right_val, span),
+            Opcode::Divide => self.div(left_val, right_val, span),
+            Opcode::Modulo => self.rem(left_val, right_val, span),
+            Opcode::Power => self.pow(left_val, right_val, span),
+            Opcode::Equal => self.equal(left_val, right_val),
+            Opcode::NotEqual => self.not_equal(left_val, right_val),
+            Opcode::Less => self.less(left_val, right_val, span),
+            Opcode::LessEqual => self.less_equal(left_val, right_val, span),
+            Opcode::Greater => self.greater(left_val, right_val, span),
+            Opcode::GreaterEqual => self.greater_equal(left_val, right_val, span),
+            Opcode::And => self.and(left_val, right_val, span),
+            Opcode::Or => self.or(left_val, right_val, span),
+            _ => Err(WalrusError::UnknownError {
+                message: format!("Unknown binary operator {}", op),
+            }),
         }
         // fixme: the spans can cause the error span to sometimes be greater than the actual span of the
         // operation taking place because the spans get extended to the left and right of the operation
         // as we traverse the tree. its not a huge deal but it would be nice to fix
     }
 
-    fn visit_unary_op(&mut self, op: Op, value: Node, span: Span) -> InterpreterResult {
+    fn visit_unary_op(&mut self, op: Opcode, value: Node, span: Span) -> InterpreterResult {
         let right_res = self.interpret(value)?;
 
         match op {
-            Op::Sub => self.neg(right_res, span),
-            Op::Not => self.not(right_res, span),
+            Opcode::Subtract => self.neg(right_res, span),
+            Opcode::Not => self.not(right_res, span),
             _ => Err(WalrusError::UnknownError {
-                message: "Invalid unary operator".into(),
+                message: format!("Invalid unary operator {}", op),
             })?,
         }
     }
@@ -198,7 +205,7 @@ impl<'a> Interpreter<'a> {
     fn visit_fn_def(&mut self, name: String, args: Vec<String>, body: Node) -> InterpreterResult {
         let value = Scope::heap_alloc(HeapValue::Function((name.clone(), args, body)));
 
-        self.scope.define(name, value);
+        self.scope.assign(name, value);
         Ok(ValueKind::Void)
     }
 
@@ -247,7 +254,7 @@ impl<'a> Interpreter<'a> {
 
     fn visit_assign(&mut self, name: String, value: Node) -> InterpreterResult {
         let value = self.interpret(value)?;
-        self.scope.define(name, value);
+        self.scope.assign(name, value);
 
         Ok(ValueKind::Void)
     }
@@ -256,21 +263,21 @@ impl<'a> Interpreter<'a> {
         &mut self,
         ident: Spanned<String>,
         value: Node,
-        op: Op,
+        op: Opcode,
         span: Span,
     ) -> InterpreterResult {
         let new_value = self.interpret(value)?;
         let old_value = self.visit_variable(ident.value(), ident.span())?;
 
         let new_value = match op {
-            Op::Add => self.add(old_value, new_value, span)?,
-            Op::Sub => self.sub(old_value, new_value, span)?,
-            Op::Mul => self.mul(old_value, new_value, span)?,
-            Op::Div => self.div(old_value, new_value, span)?,
-            Op::Mod => self.rem(old_value, new_value, span)?,
-            Op::Pow => self.pow(old_value, new_value, span)?,
-            Op::Or => self.or(old_value, new_value, span)?,
-            Op::And => self.and(old_value, new_value, span)?,
+            Opcode::Add => self.add(old_value, new_value, span)?,
+            Opcode::Subtract => self.sub(old_value, new_value, span)?,
+            Opcode::Multiply => self.mul(old_value, new_value, span)?,
+            Opcode::Divide => self.div(old_value, new_value, span)?,
+            Opcode::Modulo => self.rem(old_value, new_value, span)?,
+            Opcode::Power => self.pow(old_value, new_value, span)?,
+            Opcode::Or => self.or(old_value, new_value, span)?,
+            Opcode::And => self.and(old_value, new_value, span)?,
             _ => new_value,
         };
 
@@ -362,7 +369,7 @@ impl<'a> Interpreter<'a> {
                 let mut sub_interpreter = self.create_child(function.0.clone()); // todo: clone
 
                 for (name, value) in function.1.iter().zip(args) {
-                    sub_interpreter.scope.define(name.clone(), value); // todo: clone
+                    sub_interpreter.scope.assign(name.clone(), value); // todo: clone
                 }
 
                 // todo: I'm pretty sure this clone is required but see if we can avoid it
@@ -593,7 +600,7 @@ impl<'a> Interpreter<'a> {
                     if sub_interpreter.scope.is_defined(&name) {
                         sub_interpreter.scope.reassign(&name, *value).unwrap_or(());
                     } else {
-                        sub_interpreter.scope.define(name.clone(), *value);
+                        sub_interpreter.scope.assign(name.clone(), *value);
                     };
 
                     sub_interpreter.interpret(body.clone())?;
@@ -610,11 +617,11 @@ impl<'a> Interpreter<'a> {
                     if sub_interpreter.scope.is_defined(&name) {
                         sub_interpreter.scope.reassign(&name, *key).unwrap_or(());
                     } else {
-                        sub_interpreter.scope.define(name.clone(), *key);
+                        sub_interpreter.scope.assign(name.clone(), *key);
                     };
 
                     // fixme: this gets overwritten, we need to support destructuring
-                    sub_interpreter.scope.define(name.clone(), *value);
+                    sub_interpreter.scope.assign(name.clone(), *value);
                     sub_interpreter.interpret(body.clone())?;
                 }
 
@@ -634,7 +641,7 @@ impl<'a> Interpreter<'a> {
                             )
                             .unwrap_or(());
                     } else {
-                        sub_interpreter.scope.define(
+                        sub_interpreter.scope.assign(
                             name.clone(),
                             Scope::heap_alloc(HeapValue::String(character.to_string())),
                         );
@@ -652,7 +659,7 @@ impl<'a> Interpreter<'a> {
                     let mut sub_interpreter = self.create_child("for_range".to_string());
                     sub_interpreter
                         .scope
-                        .define(name.clone(), ValueKind::Int(i));
+                        .assign(name.clone(), ValueKind::Int(i));
 
                     sub_interpreter.interpret(body.clone())?;
                 }
@@ -809,7 +816,7 @@ impl<'a> Interpreter<'a> {
 
                 Ok(Scope::heap_alloc(HeapValue::Dict(a_dict)))
             }
-            (a, b) => Err(self.construct_err(Op::Add, a, b, span)),
+            (a, b) => Err(self.construct_err(Opcode::Add, a, b, span)),
         }
     }
 
@@ -819,7 +826,7 @@ impl<'a> Interpreter<'a> {
             (ValueKind::Float(FloatOrd(a)), ValueKind::Float(FloatOrd(b))) => {
                 Ok(ValueKind::Float(FloatOrd(a - b)))
             }
-            (a, b) => Err(self.construct_err(Op::Sub, a, b, span)),
+            (a, b) => Err(self.construct_err(Opcode::Subtract, a, b, span)),
         }
     }
 
@@ -829,7 +836,7 @@ impl<'a> Interpreter<'a> {
             (ValueKind::Float(FloatOrd(a)), ValueKind::Float(FloatOrd(b))) => {
                 Ok(ValueKind::Float(FloatOrd(a * b)))
             }
-            (a, b) => Err(self.construct_err(Op::Mul, a, b, span)),
+            (a, b) => Err(self.construct_err(Opcode::Multiply, a, b, span)),
         }
     }
 
@@ -858,7 +865,7 @@ impl<'a> Interpreter<'a> {
                     Ok(ValueKind::Float(FloatOrd(a / b)))
                 }
             }
-            (a, b) => Err(self.construct_err(Op::Div, a, b, span)),
+            (a, b) => Err(self.construct_err(Opcode::Divide, a, b, span)),
         }
     }
 
@@ -886,7 +893,7 @@ impl<'a> Interpreter<'a> {
                     Ok(ValueKind::Float(FloatOrd(a % b)))
                 }
             }
-            (a, b) => Err(self.construct_err(Op::Mod, a, b, span)),
+            (a, b) => Err(self.construct_err(Opcode::Modulo, a, b, span)),
         }
     }
 
@@ -896,7 +903,7 @@ impl<'a> Interpreter<'a> {
             (ValueKind::Float(FloatOrd(a)), ValueKind::Float(FloatOrd(b))) => {
                 Ok(ValueKind::Float(FloatOrd(a.powf(b))))
             }
-            (a, b) => Err(self.construct_err(Op::Pow, a, b, span)),
+            (a, b) => Err(self.construct_err(Opcode::Power, a, b, span)),
         }
     }
 
@@ -905,7 +912,7 @@ impl<'a> Interpreter<'a> {
             ValueKind::Int(a) => Ok(ValueKind::Int(-a)),
             ValueKind::Float(FloatOrd(a)) => Ok(ValueKind::Float(FloatOrd(-a))),
             value => Err(WalrusError::InvalidUnaryOperation {
-                op: Op::Sub,
+                op: Opcode::Subtract,
                 operand: value.get_type().to_string(),
                 span,
                 src: self.source_ref.source().to_string(),
@@ -980,7 +987,7 @@ impl<'a> Interpreter<'a> {
             (ValueKind::Float(FloatOrd(a)), ValueKind::Float(FloatOrd(b))) => {
                 Ok(ValueKind::Bool(a < b))
             }
-            (a, b) => Err(self.construct_err(Op::Less, a, b, span)),
+            (a, b) => Err(self.construct_err(Opcode::Less, a, b, span)),
         }
     }
 
@@ -990,7 +997,7 @@ impl<'a> Interpreter<'a> {
             (ValueKind::Float(FloatOrd(a)), ValueKind::Float(FloatOrd(b))) => {
                 Ok(ValueKind::Bool(a <= b))
             }
-            (a, b) => Err(self.construct_err(Op::LessEqual, a, b, span)),
+            (a, b) => Err(self.construct_err(Opcode::LessEqual, a, b, span)),
         }
     }
 
@@ -1000,7 +1007,7 @@ impl<'a> Interpreter<'a> {
             (ValueKind::Float(FloatOrd(a)), ValueKind::Float(FloatOrd(b))) => {
                 Ok(ValueKind::Bool(a > b))
             }
-            (a, b) => Err(self.construct_err(Op::Greater, a, b, span)),
+            (a, b) => Err(self.construct_err(Opcode::Greater, a, b, span)),
         }
     }
 
@@ -1010,21 +1017,21 @@ impl<'a> Interpreter<'a> {
             (ValueKind::Float(FloatOrd(a)), ValueKind::Float(FloatOrd(b))) => {
                 Ok(ValueKind::Bool(a >= b))
             }
-            (a, b) => Err(self.construct_err(Op::GreaterEqual, a, b, span)),
+            (a, b) => Err(self.construct_err(Opcode::GreaterEqual, a, b, span)),
         }
     }
 
     fn and(&self, left: ValueKind, right: ValueKind, span: Span) -> InterpreterResult {
         match (left, right) {
             (ValueKind::Bool(a), ValueKind::Bool(b)) => Ok(ValueKind::Bool(a && b)),
-            (a, b) => Err(self.construct_err(Op::And, a, b, span)),
+            (a, b) => Err(self.construct_err(Opcode::And, a, b, span)),
         }
     }
 
     fn or(&self, left: ValueKind, right: ValueKind, span: Span) -> InterpreterResult {
         match (left, right) {
             (ValueKind::Bool(a), ValueKind::Bool(b)) => Ok(ValueKind::Bool(a || b)),
-            (a, b) => Err(self.construct_err(Op::Or, a, b, span)),
+            (a, b) => Err(self.construct_err(Opcode::Or, a, b, span)),
         }
     }
 
@@ -1032,7 +1039,7 @@ impl<'a> Interpreter<'a> {
         match value {
             ValueKind::Bool(a) => Ok(ValueKind::Bool(!a)),
             value => Err(WalrusError::InvalidUnaryOperation {
-                op: Op::Not,
+                op: Opcode::Not,
                 operand: value.get_type().to_string(),
                 span,
                 src: self.source_ref.source().to_string(),
@@ -1054,7 +1061,13 @@ impl<'a> Interpreter<'a> {
         }
     }
 
-    fn construct_err(&self, op: Op, left: ValueKind, right: ValueKind, span: Span) -> WalrusError {
+    fn construct_err(
+        &self,
+        op: Opcode,
+        left: ValueKind,
+        right: ValueKind,
+        span: Span,
+    ) -> WalrusError {
         WalrusError::InvalidOperation {
             op,
             left: left.get_type().to_string(),
