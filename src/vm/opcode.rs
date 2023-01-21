@@ -5,6 +5,9 @@ use std::fmt::{Display, Formatter};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Opcode {
     LoadConst(usize), // usize pads the enum by 8 bytes
+    True,
+    False,
+    Void,
     Return,
     Pop,
     Add,
