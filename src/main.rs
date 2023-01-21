@@ -4,6 +4,7 @@ mod error;
 mod interpreter;
 mod program;
 mod range;
+mod rust_function;
 mod scope;
 mod source_ref;
 mod span;
