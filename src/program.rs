@@ -38,7 +38,7 @@ impl Program {
         })?;
 
         let mut compiler = BytecodeEmitter::new();
-        compiler.emit(*ast);
+        compiler.emit(*ast)?;
         let instruction_set = compiler.instruction_set();
 
         let mut vm = VM::new(SourceRef::from(&self.source_ref), instruction_set);
