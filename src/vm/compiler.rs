@@ -3,6 +3,9 @@ use crate::scope::Scope;
 use crate::value::{HeapValue, ValueKind};
 use crate::vm::instruction_set::InstructionSet;
 use crate::vm::opcode::{Instruction, Opcode};
+use crate::WalrusResult;
+use rustc_hash::FxHashMap;
+use std::hash::BuildHasherDefault;
 
 pub struct BytecodeEmitter {
     instructions: InstructionSet,
@@ -15,7 +18,8 @@ impl BytecodeEmitter {
         }
     }
 
-    pub fn emit(&mut self, node: Node) {
+    pub fn emit(&mut self, node: Node) -> WalrusResult<()> {
+        let kind = node.kind().to_string();
         let span = *node.span();
 
         match node.into_kind() {
@@ -29,6 +33,11 @@ impl BytecodeEmitter {
                 self.instructions
                     .push(Instruction::new(Opcode::LoadConst(index), span));
             }
+            NodeKind::Bool(value) => {
+                let index = self.instructions.push_constant(ValueKind::Bool(value));
+                self.instructions
+                    .push(Instruction::new(Opcode::LoadConst(index), span));
+            }
             NodeKind::String(value) => {
                 let index = self
                     .instructions
@@ -37,13 +46,31 @@ impl BytecodeEmitter {
                     .push(Instruction::new(Opcode::LoadConst(index), span));
             }
             NodeKind::List(nodes) => {
+                let cap = nodes.len();
+
                 for node in nodes {
-                    self.emit(*node);
+                    self.emit(*node)?;
                 }
 
                 let index = self
                     .instructions
-                    .push_constant(Scope::heap_alloc(HeapValue::List(Vec::new())));
+                    .push_constant(Scope::heap_alloc(HeapValue::List(Vec::with_capacity(cap))));
+                self.instructions
+                    .push(Instruction::new(Opcode::LoadConst(index), span));
+            }
+            NodeKind::Dict(nodes) => {
+                let cap = nodes.len();
+
+                for (key, value) in nodes {
+                    self.emit(*key)?;
+                    self.emit(*value)?;
+                }
+
+                let index = self
+                    .instructions
+                    .push_constant(Scope::heap_alloc(HeapValue::Dict(
+                        FxHashMap::with_capacity_and_hasher(2, BuildHasherDefault::default()),
+                    )));
                 self.instructions
                     .push(Instruction::new(Opcode::LoadConst(index), span));
             }
@@ -52,61 +79,42 @@ impl BytecodeEmitter {
                     .push(Instruction::new(Opcode::LoadConst(0), span));
             }
             NodeKind::BinOp(left, op, right) => {
-                self.emit(*left);
-                self.emit(*right);
+                self.emit(*left)?;
+                self.emit(*right)?;
 
-                match op {
-                    crate::ast::Op::Add => {
-                        self.instructions.push(Instruction::new(Opcode::Add, span));
-                    }
-                    crate::ast::Op::Sub => {
-                        self.instructions
-                            .push(Instruction::new(Opcode::Subtract, span));
-                    }
-                    crate::ast::Op::Mul => {
-                        self.instructions
-                            .push(Instruction::new(Opcode::Multiply, span));
-                    }
-                    crate::ast::Op::Div => {
-                        self.instructions
-                            .push(Instruction::new(Opcode::Divide, span));
-                    }
-                    crate::ast::Op::Mod => {
-                        self.instructions
-                            .push(Instruction::new(Opcode::Modulo, span));
-                    }
-                    crate::ast::Op::Pow => {
-                        self.instructions
-                            .push(Instruction::new(Opcode::Power, span));
-                    }
-                    _ => unimplemented!(),
-                }
+                self.instructions.push(Instruction::new(op, span));
+            }
+            NodeKind::UnaryOp(op, node) => {
+                self.emit(*node)?;
+                self.instructions.push(Instruction::new(op, span));
             }
             NodeKind::Println(node) => {
-                self.emit(*node);
+                self.emit(*node)?;
 
                 self.instructions
                     .push(Instruction::new(Opcode::Println, span));
             }
             NodeKind::Print(node) => {
-                self.emit(*node);
+                self.emit(*node)?;
 
                 self.instructions
                     .push(Instruction::new(Opcode::Print, span));
             }
             NodeKind::Statements(nodes) => {
                 for node in nodes {
-                    self.emit(*node);
+                    self.emit(*node)?;
                 }
             }
             NodeKind::Return(node) => {
-                self.emit(*node);
+                self.emit(*node)?;
 
                 self.instructions
                     .push(Instruction::new(Opcode::Return, span));
             }
-            _ => unimplemented!(),
+            _ => unimplemented!("{}", kind),
         }
+
+        Ok(())
     }
 
     pub fn instruction_set(self) -> InstructionSet {
