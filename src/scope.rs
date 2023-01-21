@@ -1,6 +1,7 @@
-use crate::arenas::{DictKey, FuncKey, ListKey, RustFuncKey, RustFunction, ValueHolder};
+use crate::arenas::{DictKey, FuncKey, ListKey, RustFuncKey, ValueHolder};
 use crate::ast::Node;
 use crate::error::WalrusError;
+use crate::rust_function::RustFunction;
 use crate::value::{HeapValue, ValueKind};
 use crate::WalrusResult;
 use once_cell::sync::Lazy;
@@ -34,9 +35,11 @@ impl Scope {
 
         builtins.insert(
             "input".to_string(),
-            Self::heap_alloc(HeapValue::RustFunction((
-                |args, interpreter, _| {
-                    print!("{}", interpreter.stringify(args[0])?);
+            Self::heap_alloc(HeapValue::RustFunction(RustFunction::new(
+                "input".to_string(),
+                Some(1),
+                |args, _, _| {
+                    print!("{}", args[0].stringify()?);
                     std::io::stdout()
                         .flush()
                         .map_err(|source| WalrusError::IOError { source })?;
@@ -48,15 +51,15 @@ impl Scope {
 
                     Ok(Self::heap_alloc(HeapValue::String(input)))
                 },
-                Some(1),
-                "input".to_string(),
             ))),
         );
 
         builtins.insert(
             "len".to_string(),
-            Self::heap_alloc(HeapValue::RustFunction((
-                |args, interpreter, span| match args[0] {
+            Self::heap_alloc(HeapValue::RustFunction(RustFunction::new(
+                "len".to_string(),
+                Some(1),
+                |args, source_ref, span| match args[0] {
                     ValueKind::String(key) => {
                         Ok(ValueKind::Int(Self::get_string(key)?.len() as i64))
                     }
@@ -65,12 +68,10 @@ impl Scope {
                     _ => Err(WalrusError::NoLength {
                         type_name: args[0].get_type().to_string(),
                         span,
-                        src: interpreter.source_ref().source().to_string(),
-                        filename: interpreter.source_ref().filename().to_string(),
+                        src: source_ref.source().to_string(),
+                        filename: source_ref.filename().to_string(),
                     }),
                 },
-                Some(1),
-                "len".to_string(),
             ))),
         );
 
