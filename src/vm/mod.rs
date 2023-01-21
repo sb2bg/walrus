@@ -41,9 +41,8 @@ impl<'a> VM<'a> {
             self.ip += 1;
 
             match opcode {
-                Opcode::Constant => {
-                    let byte = self.read_u8();
-                    self.stack.push(self.is.get_constant(byte as usize));
+                Opcode::Constant(index) => {
+                    self.stack.push(self.is.get_constant(index));
                 }
                 Opcode::Pop => {
                     self.pop(opcode, span)?;
@@ -225,12 +224,6 @@ impl<'a> VM<'a> {
             src: self.source_ref.source().to_string(),
             filename: self.source_ref.filename().to_string(),
         })
-    }
-
-    fn read_u8(&mut self) -> u8 {
-        let byte = self.is.get(self.ip).byte();
-        self.ip += 1;
-        byte
     }
 
     fn stack_trace(&self) {
