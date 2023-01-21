@@ -1,16 +1,10 @@
-use crate::arenas::{DictKey, FuncKey, ListKey, RustFuncKey, ValueHolder};
-use crate::ast::Node;
+use crate::arenas::{HeapValue, Resolve};
 use crate::error::WalrusError;
 use crate::rust_function::RustFunction;
-use crate::value::{HeapValue, ValueKind};
-use crate::WalrusResult;
-use once_cell::sync::Lazy;
+use crate::value::ValueKind;
 use rustc_hash::FxHashMap;
 use std::io::Write;
 use std::ptr::NonNull;
-use string_interner::DefaultSymbol;
-
-static mut ARENA: Lazy<ValueHolder> = Lazy::new(ValueHolder::new);
 
 #[derive(Debug)]
 pub struct Scope {
@@ -35,7 +29,7 @@ impl Scope {
 
         builtins.insert(
             "input".to_string(),
-            Self::heap_alloc(HeapValue::RustFunction(RustFunction::new(
+            HeapValue::RustFunction(RustFunction::new(
                 "input".to_string(),
                 Some(1),
                 |args, _, _| {
@@ -49,22 +43,21 @@ impl Scope {
                         .read_line(&mut input)
                         .map_err(|source| WalrusError::IOError { source })?;
 
-                    Ok(Self::heap_alloc(HeapValue::String(input)))
+                    Ok(HeapValue::String(input).alloc())
                 },
-            ))),
+            ))
+            .alloc(),
         );
 
         builtins.insert(
             "len".to_string(),
-            Self::heap_alloc(HeapValue::RustFunction(RustFunction::new(
+            HeapValue::RustFunction(RustFunction::new(
                 "len".to_string(),
                 Some(1),
                 |args, source_ref, span| match args[0] {
-                    ValueKind::String(key) => {
-                        Ok(ValueKind::Int(Self::get_string(key)?.len() as i64))
-                    }
-                    ValueKind::List(key) => Ok(ValueKind::Int(Self::get_list(key)?.len() as i64)),
-                    ValueKind::Dict(key) => Ok(ValueKind::Int(Self::get_dict(key)?.len() as i64)),
+                    ValueKind::String(key) => Ok(ValueKind::Int(key.resolve()?.len() as i64)),
+                    ValueKind::List(key) => Ok(ValueKind::Int(key.resolve()?.len() as i64)),
+                    ValueKind::Dict(key) => Ok(ValueKind::Int(key.resolve()?.len() as i64)),
                     _ => Err(WalrusError::NoLength {
                         type_name: args[0].get_type().to_string(),
                         span,
@@ -72,7 +65,8 @@ impl Scope {
                         filename: source_ref.filename().to_string(),
                     }),
                 },
-            ))),
+            ))
+            .alloc(),
         );
 
         builtins
@@ -95,10 +89,6 @@ impl Scope {
                 _ => None,
             }
         }
-    }
-
-    pub fn heap_alloc(value: HeapValue) -> ValueKind {
-        unsafe { ARENA.alloc(value) }
     }
 
     pub fn assign(&mut self, name: String, value: ValueKind) {
@@ -127,38 +117,6 @@ impl Scope {
                 _ => Err(name),
             }
         }
-    }
-
-    pub fn get_rust_function<'a>(key: RustFuncKey) -> WalrusResult<&'a RustFunction> {
-        unsafe { ARENA.get_rust_function(key) }
-    }
-
-    pub fn get_mut_dict<'a>(key: DictKey) -> WalrusResult<&'a mut FxHashMap<ValueKind, ValueKind>> {
-        unsafe { ARENA.get_mut_dict(key) }
-    }
-
-    pub fn get_dict<'a>(key: DictKey) -> WalrusResult<&'a FxHashMap<ValueKind, ValueKind>> {
-        unsafe { ARENA.get_dict(key) }
-    }
-
-    pub fn get_mut_list<'a>(key: ListKey) -> WalrusResult<&'a mut Vec<ValueKind>> {
-        unsafe { ARENA.get_mut_list(key) }
-    }
-
-    pub fn get_list<'a>(key: ListKey) -> WalrusResult<&'a Vec<ValueKind>> {
-        unsafe { ARENA.get_list(key) }
-    }
-
-    pub fn get_string<'a>(key: DefaultSymbol) -> WalrusResult<&'a str> {
-        unsafe { ARENA.get_string(key) }
-    }
-
-    pub fn get_function<'a>(key: FuncKey) -> WalrusResult<&'a (String, Vec<String>, Node)> {
-        unsafe { ARENA.get_function(key) }
-    }
-
-    pub fn free(value: ValueKind) -> bool {
-        unsafe { ARENA.free(value) }
     }
 
     // todo: make this print the right way around and do better than just a string

@@ -1,23 +1,11 @@
-use crate::arenas::{DictKey, FuncKey, ListKey, RustFuncKey};
-use crate::ast::Node;
+use crate::arenas::{DictKey, FuncKey, ListKey, Resolve, RustFuncKey};
 use crate::range::RangeValue;
-use crate::rust_function::RustFunction;
-use crate::scope::Scope;
 use crate::WalrusResult;
 use float_ord::FloatOrd;
-use rustc_hash::FxHashMap;
 use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::Hash;
 use string_interner::DefaultSymbol;
-
-pub enum HeapValue {
-    List(Vec<ValueKind>),
-    Dict(FxHashMap<ValueKind, ValueKind>),
-    Function((String, Vec<String>, Node)),
-    RustFunction(RustFunction),
-    String(String),
-}
 
 #[derive(Debug, PartialEq, Eq, Copy, Clone, Hash)]
 pub enum ValueKind {
@@ -56,9 +44,9 @@ impl ValueKind {
             ValueKind::Float(FloatOrd(f)) => f.to_string(),
             ValueKind::Bool(b) => b.to_string(),
             ValueKind::Range(r) => r.to_string(),
-            ValueKind::String(s) => Scope::get_string(s)?.to_string(),
+            ValueKind::String(s) => s.resolve()?.to_string(),
             ValueKind::List(l) => {
-                let list = Scope::get_list(l)?;
+                let list = l.resolve()?;
                 let mut s = String::new();
 
                 s.push('[');
@@ -74,7 +62,7 @@ impl ValueKind {
                 s
             }
             ValueKind::Dict(d) => {
-                let dict = Scope::get_dict(d)?;
+                let dict = d.resolve()?;
                 let mut s = String::new();
 
                 s.push('{');
@@ -92,7 +80,7 @@ impl ValueKind {
                 s
             }
             ValueKind::Function(f) => {
-                let (name, args, _) = Scope::get_function(f)?;
+                let (name, args, _) = f.resolve()?;
                 let mut s = String::new();
 
                 s.push_str("function ");
@@ -110,7 +98,7 @@ impl ValueKind {
                 s
             }
             ValueKind::RustFunction(r) => {
-                let rust_func = Scope::get_rust_function(r)?;
+                let rust_func = r.resolve()?;
                 let mut s = String::new();
 
                 s.push_str("rust_function ");

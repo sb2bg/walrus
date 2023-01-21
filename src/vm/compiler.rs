@@ -1,11 +1,10 @@
+use crate::arenas::HeapValue;
 use crate::ast::{Node, NodeKind};
-use crate::scope::Scope;
-use crate::value::{HeapValue, ValueKind};
+use crate::value::ValueKind;
 use crate::vm::instruction_set::InstructionSet;
 use crate::vm::opcode::{Instruction, Opcode};
 use crate::WalrusResult;
 use rustc_hash::FxHashMap;
-use std::hash::BuildHasherDefault;
 
 pub struct BytecodeEmitter {
     instructions: InstructionSet,
@@ -34,14 +33,21 @@ impl BytecodeEmitter {
                     .push(Instruction::new(Opcode::LoadConst(index), span));
             }
             NodeKind::Bool(value) => {
-                let index = self.instructions.push_constant(ValueKind::Bool(value));
-                self.instructions
-                    .push(Instruction::new(Opcode::LoadConst(index), span));
+                self.instructions.push(Instruction::new(
+                    if value { Opcode::True } else { Opcode::False },
+                    span,
+                ));
             }
             NodeKind::String(value) => {
+                // fixme: I need a new ValueHolder that stores strings instead of interning them
+                // we should use a variant of the below code: but for now we do something else
+                // let index = self.instructions.push_constant(ValueKind::String(value));
+                // self.instructions
+                //     .push(Instruction::new(Opcode::LoadConst(index), span));
+
                 let index = self
                     .instructions
-                    .push_constant(Scope::heap_alloc(HeapValue::String(value)));
+                    .push_constant(HeapValue::String(value).alloc());
                 self.instructions
                     .push(Instruction::new(Opcode::LoadConst(index), span));
             }
@@ -54,7 +60,7 @@ impl BytecodeEmitter {
 
                 let index = self
                     .instructions
-                    .push_constant(Scope::heap_alloc(HeapValue::List(Vec::with_capacity(cap))));
+                    .push_constant(HeapValue::List(Vec::with_capacity(cap)).alloc());
                 self.instructions
                     .push(Instruction::new(Opcode::LoadConst(index), span));
             }
@@ -66,17 +72,15 @@ impl BytecodeEmitter {
                     self.emit(*value)?;
                 }
 
-                let index = self
-                    .instructions
-                    .push_constant(Scope::heap_alloc(HeapValue::Dict(
-                        FxHashMap::with_capacity_and_hasher(2, BuildHasherDefault::default()),
-                    )));
+                let index = self.instructions.push_constant(
+                    HeapValue::Dict(FxHashMap::with_capacity_and_hasher(cap, Default::default()))
+                        .alloc(),
+                );
                 self.instructions
                     .push(Instruction::new(Opcode::LoadConst(index), span));
             }
             NodeKind::Void => {
-                self.instructions
-                    .push(Instruction::new(Opcode::LoadConst(0), span));
+                self.instructions.push(Instruction::new(Opcode::Void, span));
             }
             NodeKind::BinOp(left, op, right) => {
                 self.emit(*left)?;

@@ -1,3 +1,4 @@
+use crate::arenas::{Free, HeapValue, Resolve, ResolveMut};
 use crate::ast::{Node, NodeKind};
 use crate::error::WalrusError;
 use crate::program::Program;
@@ -5,7 +6,7 @@ use crate::range::RangeValue;
 use crate::scope::Scope;
 use crate::source_ref::SourceRef;
 use crate::span::{Span, Spanned};
-use crate::value::{HeapValue, ValueKind};
+use crate::value::ValueKind;
 use crate::vm::opcode::Opcode;
 use float_ord::FloatOrd;
 use log::debug;
@@ -59,7 +60,7 @@ impl<'a> Interpreter<'a> {
             NodeKind::Int(num) => Ok(ValueKind::Int(num)),
             NodeKind::Float(num) => Ok(ValueKind::Float(num)),
             NodeKind::Bool(boolean) => Ok(ValueKind::Bool(boolean)),
-            NodeKind::String(string) => Ok(Scope::heap_alloc(HeapValue::String(string))),
+            NodeKind::String(string) => Ok(HeapValue::String(string).alloc()),
             NodeKind::Dict(dict) => Ok(self.visit_dict(dict)?),
             NodeKind::List(list) => Ok(self.visit_list(list)?),
             NodeKind::FunctionDefinition(name, args, body) => {
@@ -181,7 +182,7 @@ impl<'a> Interpreter<'a> {
             map.insert(self.interpret(*key)?, self.interpret(*value)?);
         }
 
-        Ok(Scope::heap_alloc(HeapValue::Dict(map)))
+        Ok(HeapValue::Dict(map).alloc())
     }
 
     fn visit_list(&mut self, list: Vec<Box<Node>>) -> InterpreterResult {
@@ -191,19 +192,17 @@ impl<'a> Interpreter<'a> {
             vec.push(self.interpret(*node)?);
         }
 
-        Ok(Scope::heap_alloc(HeapValue::List(vec)))
+        Ok(HeapValue::List(vec).alloc())
     }
 
     fn visit_anon_fn_def(&mut self, args: Vec<String>, body: Node) -> InterpreterResult {
         let fn_name = format!("anon_{}", Uuid::new_v4());
 
-        Ok(Scope::heap_alloc(HeapValue::Function((
-            fn_name, args, body,
-        ))))
+        Ok(HeapValue::Function((fn_name, args, body)).alloc())
     }
 
     fn visit_fn_def(&mut self, name: String, args: Vec<String>, body: Node) -> InterpreterResult {
-        let value = Scope::heap_alloc(HeapValue::Function((name.clone(), args, body)));
+        let value = HeapValue::Function((name.clone(), args, body)).alloc();
 
         self.scope.assign(name, value);
         Ok(ValueKind::Void)
@@ -322,9 +321,9 @@ impl<'a> Interpreter<'a> {
 
     fn visit_free(&mut self, value: Node) -> InterpreterResult {
         let span = *value.span();
-        let result = self.interpret(value)?;
+        let mut result = self.interpret(value)?;
 
-        if !Scope::free(result) {
+        if !result.free() {
             Err(WalrusError::FailedFree {
                 span,
                 src: self.source_ref.source().into(),
@@ -351,7 +350,7 @@ impl<'a> Interpreter<'a> {
 
         match value {
             ValueKind::Function(f) => {
-                let function = Scope::get_function(f)?;
+                let function = f.resolve()?;
 
                 if function.1.len() != args.len() {
                     Err(WalrusError::InvalidArgCount {
@@ -376,7 +375,7 @@ impl<'a> Interpreter<'a> {
                 Ok(sub_interpreter.interpret(function.2.clone())?)
             }
             ValueKind::RustFunction(f) => {
-                let function = Scope::get_rust_function(f)?;
+                let function = f.resolve()?;
 
                 if let Some(rust_args) = function.args() {
                     if rust_args != args.len() {
@@ -410,7 +409,7 @@ impl<'a> Interpreter<'a> {
 
         match value {
             ValueKind::List(l) => {
-                let list = Scope::get_list(l)?;
+                let list = l.resolve()?;
 
                 match index {
                     // todo: make sure all these usize to i64 and vice versa conversions are safe
@@ -462,7 +461,7 @@ impl<'a> Interpreter<'a> {
                         }
 
                         let sublist = list[start as usize..(end + 1) as usize].to_vec();
-                        Ok(Scope::heap_alloc(HeapValue::List(sublist)))
+                        Ok(HeapValue::List(sublist).alloc())
                     }
                     _ => Err(WalrusError::InvalidIndexType {
                         non_indexable: value.get_type().to_string(),
@@ -474,7 +473,7 @@ impl<'a> Interpreter<'a> {
                 }
             }
             ValueKind::Dict(d) => {
-                let dict = Scope::get_dict(d)?;
+                let dict = d.resolve()?;
 
                 // fixme: this doesn't work because it's comparing pointers instead of values
                 // so when the variable is on the heap, it will be different. the only way to
@@ -489,7 +488,7 @@ impl<'a> Interpreter<'a> {
                 }
             }
             ValueKind::String(s) => {
-                let string = Scope::get_string(s)?;
+                let string = s.resolve()?;
 
                 match index {
                     ValueKind::Int(n) => {
@@ -507,9 +506,7 @@ impl<'a> Interpreter<'a> {
 
                         let index = index as usize;
 
-                        Ok(Scope::heap_alloc(HeapValue::String(
-                            (&string[index..index + 1]).to_string(),
-                        )))
+                        Ok(HeapValue::String((string[index..index + 1]).to_string()).alloc())
                     }
                     // fixme: this is a exact copy of the above code, make a function for this
                     ValueKind::Range(range) => {
@@ -545,7 +542,7 @@ impl<'a> Interpreter<'a> {
                         }
 
                         let substring = string[start as usize..(end + 1) as usize].to_string();
-                        Ok(Scope::heap_alloc(HeapValue::String(substring)))
+                        Ok(HeapValue::String(substring).alloc())
                     }
                     _ => Err(WalrusError::InvalidIndexType {
                         non_indexable: value.get_type().to_string(),
@@ -589,7 +586,7 @@ impl<'a> Interpreter<'a> {
         // encountered in the body of the for loop.
         match value {
             ValueKind::List(l) => {
-                let list = Scope::get_list(l)?;
+                let list = l.resolve()?;
 
                 for value in list {
                     // fixme: this is here because I need to be able to put values in the scope
@@ -609,7 +606,7 @@ impl<'a> Interpreter<'a> {
                 Ok(ValueKind::Void)
             }
             ValueKind::Dict(d) => {
-                let dict = Scope::get_dict(d)?;
+                let dict = d.resolve()?;
 
                 for (key, value) in dict {
                     let mut sub_interpreter = self.create_child("for_dict".to_string());
@@ -628,22 +625,19 @@ impl<'a> Interpreter<'a> {
                 Ok(ValueKind::Void)
             }
             ValueKind::String(s) => {
-                let string = Scope::get_string(s)?;
+                let string = s.resolve()?;
 
                 for character in string.chars() {
                     let mut sub_interpreter = self.create_child("for_string".to_string());
                     if sub_interpreter.scope.is_defined(&name) {
                         sub_interpreter
                             .scope
-                            .reassign(
-                                &name,
-                                Scope::heap_alloc(HeapValue::String(character.to_string())),
-                            )
+                            .reassign(&name, HeapValue::String(character.to_string()).alloc())
                             .unwrap_or(());
                     } else {
                         sub_interpreter.scope.assign(
                             name.clone(),
-                            Scope::heap_alloc(HeapValue::String(character.to_string())),
+                            HeapValue::String(character.to_string()).alloc(),
                         );
                     };
                     sub_interpreter.interpret(body.clone())?;
@@ -695,7 +689,7 @@ impl<'a> Interpreter<'a> {
 
         match value {
             ValueKind::List(l) => {
-                let list = Scope::get_mut_list(l)?;
+                let list = l.resolve_mut()?;
 
                 match index {
                     ValueKind::Int(n) => {
@@ -724,7 +718,7 @@ impl<'a> Interpreter<'a> {
                 }
             }
             ValueKind::Dict(d) => {
-                let dict = Scope::get_mut_dict(d)?;
+                let dict = d.resolve_mut()?;
                 dict.insert(index, new_value);
 
                 Ok(ValueKind::Void)
@@ -795,26 +789,25 @@ impl<'a> Interpreter<'a> {
                 Ok(ValueKind::Float(FloatOrd(a + b)))
             }
             (ValueKind::String(a), ValueKind::String(b)) => {
-                let mut a_str = Scope::get_string(a)?.to_string();
-                let b_str = Scope::get_string(b)?;
+                let mut a_str = a.resolve()?.to_string();
+                let b_str = b.resolve()?;
                 a_str.push_str(b_str);
 
-                Ok(Scope::heap_alloc(HeapValue::String(a_str)))
+                Ok(HeapValue::String(a_str).alloc())
             }
             (ValueKind::List(a), ValueKind::List(b)) => {
-                let mut a_list = Scope::get_list(a)?.clone();
-                let b_list = Scope::get_list(b)?;
+                let mut a_list = a.resolve()?.to_vec();
+                let b_list = b.resolve()?;
                 a_list.extend(b_list);
 
-                Ok(Scope::heap_alloc(HeapValue::List(a_list)))
+                Ok(HeapValue::List(a_list).alloc())
             }
             (ValueKind::Dict(a), ValueKind::Dict(b)) => {
-                let mut a_dict = Scope::get_dict(a)?.clone();
-                let b_dict = Scope::get_dict(b)?;
-
+                let mut a_dict = a.resolve()?.clone();
+                let b_dict = b.resolve()?;
                 a_dict.extend(b_dict);
 
-                Ok(Scope::heap_alloc(HeapValue::Dict(a_dict)))
+                Ok(HeapValue::Dict(a_dict).alloc())
             }
             (a, b) => Err(self.construct_err(Opcode::Add, a, b, span)),
         }
@@ -924,20 +917,20 @@ impl<'a> Interpreter<'a> {
     fn equal(&self, left: ValueKind, right: ValueKind) -> InterpreterResult {
         match (left, right) {
             (ValueKind::Dict(a), ValueKind::Dict(b)) => {
-                let a_dict = Scope::get_dict(a)?;
-                let b_dict = Scope::get_dict(b)?;
+                let a_dict = a.resolve()?;
+                let b_dict = b.resolve()?;
 
                 Ok(ValueKind::Bool(a_dict == b_dict))
             }
             (ValueKind::List(a), ValueKind::List(b)) => {
-                let a_list = Scope::get_list(a)?;
-                let b_list = Scope::get_list(b)?;
+                let a_list = a.resolve()?;
+                let b_list = b.resolve()?;
 
                 Ok(ValueKind::Bool(a_list == b_list))
             }
             (ValueKind::Function(a), ValueKind::Function(b)) => {
-                let a_func = Scope::get_function(a)?;
-                let b_func = Scope::get_function(b)?;
+                let a_func = a.resolve()?;
+                let b_func = b.resolve()?;
 
                 Ok(ValueKind::Bool(a_func == b_func))
             }
@@ -954,20 +947,20 @@ impl<'a> Interpreter<'a> {
     fn not_equal(&self, left: ValueKind, right: ValueKind) -> InterpreterResult {
         match (left, right) {
             (ValueKind::Dict(a), ValueKind::Dict(b)) => {
-                let a_dict = Scope::get_dict(a)?;
-                let b_dict = Scope::get_dict(b)?;
+                let a_dict = a.resolve()?;
+                let b_dict = b.resolve()?;
 
                 Ok(ValueKind::Bool(a_dict != b_dict))
             }
             (ValueKind::List(a), ValueKind::List(b)) => {
-                let a_list = Scope::get_list(a)?;
-                let b_list = Scope::get_list(b)?;
+                let a_list = a.resolve()?;
+                let b_list = b.resolve()?;
 
                 Ok(ValueKind::Bool(a_list != b_list))
             }
             (ValueKind::Function(a), ValueKind::Function(b)) => {
-                let a_func = Scope::get_function(a)?;
-                let b_func = Scope::get_function(b)?;
+                let a_func = a.resolve()?;
+                let b_func = b.resolve()?;
 
                 Ok(ValueKind::Bool(a_func != b_func))
             }
