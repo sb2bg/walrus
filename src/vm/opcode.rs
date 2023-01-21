@@ -3,7 +3,7 @@ use crate::span::Span;
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Opcode {
-    Constant(usize),
+    LoadConst(usize), // usize pads the enum by 8 bytes
     Return,
     Pop,
     Add,
