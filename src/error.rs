@@ -1,4 +1,4 @@
-use crate::ast::{NodeKind, Op};
+use crate::ast::NodeKind;
 use crate::span::{Span, Spanned};
 use crate::vm::opcode::Opcode;
 use float_ord::FloatOrd;
@@ -109,7 +109,7 @@ pub enum WalrusError {
         get_line(src, filename, *span)
     )]
     InvalidOperation {
-        op: Op,
+        op: Opcode,
         left: String,
         right: String,
         span: Span,
@@ -122,7 +122,7 @@ pub enum WalrusError {
         get_line(src, filename, *span)
     )]
     InvalidUnaryOperation {
-        op: Op,
+        op: Opcode,
         operand: String,
         span: Span,
         src: String,
