@@ -42,6 +42,7 @@ impl InstructionSet {
         }
 
         debug!("| == disassemble ==");
+        debug!("| sizeof(instructions) = {}", self.instructions.len());
 
         for (i, instruction) in self.instructions.iter().enumerate() {
             debug!("| {:04} {:?}", i, instruction.opcode());

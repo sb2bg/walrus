@@ -41,8 +41,9 @@ impl<'a> VM<'a> {
             self.ip += 1;
 
             match opcode {
-                Opcode::Constant(index) => {
-                    self.stack.push(self.is.get_constant(index));
+                Opcode::Constant => {
+                    let byte = self.read_u8();
+                    self.stack.push(self.is.get_constant(byte as usize));
                 }
                 Opcode::Pop => {
                     self.pop(opcode, span)?;
@@ -79,7 +80,7 @@ impl<'a> VM<'a> {
 
                             self.stack.push(Scope::heap_alloc(HeapValue::Dict(a)));
                         }
-                        _ => return Err(self.construct_err(Op::Add, a, b, span)),
+                        _ => return Err(self.construct_err(Op::Add, a, Some(b), span)),
                     }
                 }
                 Opcode::Subtract => {
@@ -93,7 +94,7 @@ impl<'a> VM<'a> {
                         (ValueKind::Float(FloatOrd(a)), ValueKind::Float(FloatOrd(b))) => {
                             self.stack.push(ValueKind::Float(FloatOrd(a - b)));
                         }
-                        _ => return Err(self.construct_err(Op::Sub, a, b, span)),
+                        _ => return Err(self.construct_err(Op::Sub, a, Some(b), span)),
                     }
                 }
                 Opcode::Multiply => {
@@ -107,7 +108,7 @@ impl<'a> VM<'a> {
                         (ValueKind::Float(FloatOrd(a)), ValueKind::Float(FloatOrd(b))) => {
                             self.stack.push(ValueKind::Float(FloatOrd(a * b)));
                         }
-                        _ => return Err(self.construct_err(Op::Mul, a, b, span)),
+                        _ => return Err(self.construct_err(Op::Mul, a, Some(b), span)),
                     }
                 }
                 Opcode::Divide => {
@@ -121,7 +122,7 @@ impl<'a> VM<'a> {
                         (ValueKind::Float(FloatOrd(a)), ValueKind::Float(FloatOrd(b))) => {
                             self.stack.push(ValueKind::Float(FloatOrd(a / b)));
                         }
-                        _ => return Err(self.construct_err(Op::Div, a, b, span)),
+                        _ => return Err(self.construct_err(Op::Div, a, Some(b), span)),
                     }
                 }
                 Opcode::Power => {
@@ -135,7 +136,7 @@ impl<'a> VM<'a> {
                         (ValueKind::Float(FloatOrd(a)), ValueKind::Float(FloatOrd(b))) => {
                             self.stack.push(ValueKind::Float(FloatOrd(a.powf(b))));
                         }
-                        _ => return Err(self.construct_err(Op::Pow, a, b, span)),
+                        _ => return Err(self.construct_err(Op::Pow, a, Some(b), span)),
                     }
                 }
                 Opcode::Modulo => {
@@ -149,7 +150,7 @@ impl<'a> VM<'a> {
                         (ValueKind::Float(FloatOrd(a)), ValueKind::Float(FloatOrd(b))) => {
                             self.stack.push(ValueKind::Float(FloatOrd(a % b)));
                         }
-                        _ => return Err(self.construct_err(Op::Mod, a, b, span)),
+                        _ => return Err(self.construct_err(Op::Mod, a, Some(b), span)),
                     }
                 }
                 Opcode::Negate => {
@@ -162,15 +163,7 @@ impl<'a> VM<'a> {
                         ValueKind::Float(FloatOrd(a)) => {
                             self.stack.push(ValueKind::Float(FloatOrd(-a)));
                         }
-                        _ => {
-                            return Err(WalrusError::InvalidUnaryOperation {
-                                op: Op::Sub,
-                                operand: a.get_type().to_string(),
-                                span,
-                                src: self.source_ref.source().to_string(),
-                                filename: self.source_ref.filename().to_string(),
-                            })
-                        }
+                        _ => return Err(self.construct_err(Op::Sub, a, None, span)),
                     }
                 }
                 Opcode::Not => {
@@ -180,15 +173,7 @@ impl<'a> VM<'a> {
                         ValueKind::Bool(a) => {
                             self.stack.push(ValueKind::Bool(!a));
                         }
-                        _ => {
-                            return Err(WalrusError::InvalidUnaryOperation {
-                                op: Op::Not,
-                                operand: a.get_type().to_string(),
-                                span,
-                                src: self.source_ref.source().to_string(),
-                                filename: self.source_ref.filename().to_string(),
-                            })
-                        }
+                        _ => return Err(self.construct_err(Op::Not, a, None, span)),
                     }
                 }
                 Opcode::Print => {
@@ -203,20 +188,29 @@ impl<'a> VM<'a> {
                     let a = self.pop(opcode, span)?;
                     return Ok(a);
                 }
+                Opcode::Nop => {}
             }
-
-            self.stack_trace();
         }
     }
 
-    fn construct_err(&self, op: Op, left: ValueKind, right: ValueKind, span: Span) -> WalrusError {
-        WalrusError::InvalidOperation {
-            op,
-            left: left.get_type().to_string(),
-            right: right.get_type().to_string(),
-            span,
-            src: self.source_ref.source().to_string(),
-            filename: self.source_ref.filename().to_string(),
+    fn construct_err(&self, op: Op, a: ValueKind, b: Option<ValueKind>, span: Span) -> WalrusError {
+        if let Some(b) = b {
+            WalrusError::InvalidOperation {
+                op,
+                left: a.get_type().to_string(),
+                right: b.get_type().to_string(),
+                span,
+                src: self.source_ref.source().to_string(),
+                filename: self.source_ref.filename().to_string(),
+            }
+        } else {
+            WalrusError::InvalidUnaryOperation {
+                op,
+                operand: a.get_type().to_string(),
+                span,
+                src: self.source_ref.source().to_string(),
+                filename: self.source_ref.filename().to_string(),
+            }
         }
     }
 
@@ -231,6 +225,12 @@ impl<'a> VM<'a> {
             src: self.source_ref.source().to_string(),
             filename: self.source_ref.filename().to_string(),
         })
+    }
+
+    fn read_u8(&mut self) -> u8 {
+        let byte = self.is.get(self.ip).byte();
+        self.ip += 1;
+        byte
     }
 
     fn stack_trace(&self) {
