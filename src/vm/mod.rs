@@ -1,5 +1,6 @@
 use crate::arenas::{HeapValue, Resolve, ResolveMut};
 use crate::error::WalrusError;
+use crate::range::RangeValue;
 use crate::source_ref::SourceRef;
 use crate::span::Span;
 use crate::value::ValueKind;
@@ -73,6 +74,37 @@ impl<'a> VM<'a> {
 
                     self.push(value);
                 }
+                Opcode::Range => {
+                    let left = self.pop(opcode, span)?;
+                    let right = self.pop(opcode, span)?;
+
+                    // fixme: the spans are wrong here
+                    match (left, right) {
+                        (ValueKind::Void, ValueKind::Void) => {
+                            self.push(ValueKind::Range(RangeValue::new(0, span, -1, span)));
+                        }
+                        (ValueKind::Void, ValueKind::Int(right)) => {
+                            self.push(ValueKind::Range(RangeValue::new(0, span, right, span)));
+                        }
+                        (ValueKind::Int(left), ValueKind::Void) => {
+                            self.push(ValueKind::Range(RangeValue::new(left, span, -1, span)));
+                        }
+                        (ValueKind::Int(left), ValueKind::Int(right)) => {
+                            self.push(ValueKind::Range(RangeValue::new(left, span, right, span)));
+                        }
+                        // fixme: this is a catch all for now, break it into
+                        // errors for left and right and then both
+                        (left, right) => {
+                            return Err(WalrusError::TypeMismatch {
+                                expected: "int".to_string(),
+                                found: format!("{} and {}", left.get_type(), right.get_type()),
+                                span,
+                                src: self.source_ref.source().into(),
+                                filename: self.source_ref.filename().into(),
+                            });
+                        }
+                    }
+                }
                 Opcode::True => self.push(ValueKind::Bool(true)),
                 Opcode::False => self.push(ValueKind::Bool(false)),
                 Opcode::Void => self.push(ValueKind::Void),
@@ -91,11 +123,14 @@ impl<'a> VM<'a> {
                             self.push(ValueKind::Float(FloatOrd(a + b)));
                         }
                         (ValueKind::String(a), ValueKind::String(b)) => {
-                            let mut a = a.resolve()?.to_string();
+                            let a = a.resolve()?;
                             let b = b.resolve()?;
-                            a.push_str(b);
 
-                            self.push(HeapValue::String(a).alloc());
+                            let mut s = String::with_capacity(a.len() + b.len());
+                            s.push_str(a);
+                            s.push_str(b);
+
+                            self.push(HeapValue::String(s).alloc());
                         }
                         (ValueKind::List(a), ValueKind::List(b)) => {
                             let mut a = a.resolve()?.to_vec();
@@ -105,7 +140,7 @@ impl<'a> VM<'a> {
                             self.push(HeapValue::List(a).alloc());
                         }
                         (ValueKind::Dict(a), ValueKind::Dict(b)) => {
-                            let mut a = a.resolve()?.to_owned();
+                            let mut a = a.resolve()?.clone();
                             let b = b.resolve()?;
                             a.extend(b);
 
@@ -345,6 +380,33 @@ impl<'a> VM<'a> {
                         }
                         (ValueKind::Float(FloatOrd(a)), ValueKind::Float(FloatOrd(b))) => {
                             self.push(ValueKind::Bool(a <= b));
+                        }
+                        _ => return Err(self.construct_err(opcode, a, Some(b), span)),
+                    }
+                }
+                Opcode::Index => {
+                    let b = self.pop(opcode, span)?;
+                    let a = self.pop(opcode, span)?;
+
+                    match (a, b) {
+                        (ValueKind::List(a), ValueKind::Int(b)) => {
+                            let a = a.resolve()?;
+                            let b = b as usize;
+
+                            if b >= a.len() {
+                                todo!("Index out of bounds");
+                            }
+
+                            self.push(a[b]);
+                        }
+                        (ValueKind::Dict(a), b) => {
+                            let a = a.resolve()?;
+
+                            if let Some(value) = a.get(&b) {
+                                self.push(value.clone());
+                            } else {
+                                todo!("Key not found");
+                            }
                         }
                         _ => return Err(self.construct_err(opcode, a, Some(b), span)),
                     }
