@@ -5,7 +5,7 @@ use float_ord::FloatOrd;
 use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::Hash;
-use string_interner::DefaultSymbol;
+use strena::Symbol;
 
 #[derive(Debug, PartialEq, Eq, Copy, Clone, Hash)]
 pub enum ValueKind {
@@ -14,7 +14,7 @@ pub enum ValueKind {
     Float(FloatOrd<f64>),
     Bool(bool),
     Range(RangeValue),
-    String(DefaultSymbol),
+    String(Symbol),
     List(ListKey),
     Dict(DictKey),
     Function(FuncKey),
