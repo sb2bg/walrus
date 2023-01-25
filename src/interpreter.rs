@@ -365,6 +365,8 @@ impl<'a> Interpreter<'a> {
 
                 // fixme: this creates a double nested interpreter child because statements also creates a new child
                 // for now this is okay but for performance reasons we should probably avoid this
+                // todo: I think I should make a new child and give ownership of the child interpreter to the function
+                // object
                 let mut sub_interpreter = self.create_child(function.0.clone()); // todo: clone
 
                 for (name, value) in function.1.iter().zip(args) {
