@@ -39,12 +39,6 @@ impl BytecodeEmitter {
                 ));
             }
             NodeKind::String(value) => {
-                // fixme: I need a new ValueHolder that stores strings instead of interning them
-                // we should use a variant of the below code: but for now we do something else
-                // let index = self.instructions.push_constant(ValueKind::String(value));
-                // self.instructions
-                //     .push(Instruction::new(Opcode::LoadConst(index), span));
-
                 let index = self
                     .instructions
                     .push_constant(HeapValue::String(value).alloc());
@@ -79,6 +73,22 @@ impl BytecodeEmitter {
                 self.instructions
                     .push(Instruction::new(Opcode::LoadConst(index), span));
             }
+            NodeKind::Range(left, right) => {
+                if let Some(left) = left {
+                    self.emit(*left)?;
+                } else {
+                    self.instructions.push(Instruction::new(Opcode::Void, span));
+                }
+
+                if let Some(right) = right {
+                    self.emit(*right)?;
+                } else {
+                    self.instructions.push(Instruction::new(Opcode::Void, span));
+                }
+
+                self.instructions
+                    .push(Instruction::new(Opcode::Range, span));
+            }
             NodeKind::Void => {
                 self.instructions.push(Instruction::new(Opcode::Void, span));
             }
@@ -90,7 +100,15 @@ impl BytecodeEmitter {
             }
             NodeKind::UnaryOp(op, node) => {
                 self.emit(*node)?;
+
                 self.instructions.push(Instruction::new(op, span));
+            }
+            NodeKind::Index(node, index) => {
+                self.emit(*node)?;
+                self.emit(*index)?;
+
+                self.instructions
+                    .push(Instruction::new(Opcode::Index, span));
             }
             NodeKind::Println(node) => {
                 self.emit(*node)?;
