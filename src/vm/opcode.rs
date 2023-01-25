@@ -5,6 +5,7 @@ use std::fmt::{Display, Formatter};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Opcode {
     LoadConst(usize), // usize pads the enum by 8 bytes
+    Range,
     True,
     False,
     Void,
@@ -28,6 +29,7 @@ pub enum Opcode {
     Or,
     Print,
     Println,
+    Index,
     Nop,
 }
 
