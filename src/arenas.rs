@@ -6,7 +6,7 @@ use crate::WalrusResult;
 use once_cell::sync::Lazy;
 use rustc_hash::FxHashMap;
 use slotmap::{new_key_type, DenseSlotMap};
-use string_interner::{DefaultSymbol, StringInterner};
+use strena::{Interner, Symbol};
 
 static mut ARENA: Lazy<ValueHolder> = Lazy::new(ValueHolder::new);
 
@@ -21,7 +21,7 @@ static mut ARENA: Lazy<ValueHolder> = Lazy::new(ValueHolder::new);
 pub struct ValueHolder {
     dict_slotmap: DenseSlotMap<DictKey, FxHashMap<ValueKind, ValueKind>>,
     list_slotmap: DenseSlotMap<ListKey, Vec<ValueKind>>,
-    string_interner: StringInterner,
+    string_interner: Interner,
     function_slotmap: DenseSlotMap<FuncKey, (String, Vec<String>, Node)>,
     rust_function_slotmap: DenseSlotMap<RustFuncKey, RustFunction>,
 }
@@ -31,7 +31,7 @@ impl ValueHolder {
         Self {
             dict_slotmap: DenseSlotMap::with_key(),
             list_slotmap: DenseSlotMap::with_key(),
-            string_interner: StringInterner::default(), // todo: use FxHasher
+            string_interner: Interner::default(), // todo: use FxHasher
             function_slotmap: DenseSlotMap::with_key(),
             rust_function_slotmap: DenseSlotMap::with_key(),
         }
@@ -61,7 +61,7 @@ impl ValueHolder {
                 ValueKind::RustFunction(self.rust_function_slotmap.insert(rust_func))
             }
             HeapValue::String(string) => {
-                ValueKind::String(self.string_interner.get_or_intern(string))
+                ValueKind::String(self.string_interner.get_or_insert(&string))
             }
         }
     }
@@ -89,7 +89,7 @@ impl ValueHolder {
         Self::check(self.list_slotmap.get(key))
     }
 
-    pub fn get_string(&self, key: DefaultSymbol) -> WalrusResult<&str> {
+    pub fn get_string(&self, key: Symbol) -> WalrusResult<&str> {
         Self::check(self.string_interner.resolve(key))
     }
 
@@ -177,7 +177,7 @@ impl<'a> Resolve<'a> for RustFuncKey {
     }
 }
 
-impl<'a> Resolve<'a> for DefaultSymbol {
+impl<'a> Resolve<'a> for Symbol {
     type Output = &'a str;
 
     fn resolve(self) -> WalrusResult<Self::Output> {
