@@ -38,6 +38,9 @@ struct Args {
     #[clap(help = "The script file to run", index = 1)]
     file: Option<PathBuf>,
 
+    #[clap(short = 'i', long = "interpreted", help = "Run with the interpreter")]
+    interpreted: bool,
+
     #[clap(short = 'd', long = "debug", help = "Enable debug mode")]
     debug: bool,
 
@@ -70,13 +73,13 @@ fn main() {
 fn try_main() -> WalrusResult<()> {
     let args = Args::parse();
     setup_logger(args.debug)?;
-    create_shell(args.file)?;
+    create_shell(args.file, args.interpreted)?;
     Ok(())
 }
 
-pub fn create_shell(file: Option<PathBuf>) -> InterpreterResult {
+pub fn create_shell(file: Option<PathBuf>, interpreted: bool) -> InterpreterResult {
     match file {
-        Some(file) => Ok(Program::new(file, None)?.execute_file()?),
+        Some(file) => Ok(Program::new(file, None)?.execute_file(interpreted)?),
         None => Ok(Program::new(PathBuf::from("fixme"), None)?.execute_repl()?), // fixme: make path optional
     }
 }

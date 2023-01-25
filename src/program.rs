@@ -26,7 +26,7 @@ impl Program {
         })
     }
 
-    pub fn execute_file(&mut self) -> InterpreterResult {
+    pub fn execute_file(&mut self, interpreted: bool) -> InterpreterResult {
         debug!(
             "Read {} bytes from '{}'",
             self.source_ref.src.len(),
@@ -37,12 +37,17 @@ impl Program {
             parser_err_mapper(err, &self.source_ref.src, &self.source_ref.filename)
         })?;
 
-        let mut compiler = BytecodeEmitter::new();
-        compiler.emit(*ast)?;
-        let instruction_set = compiler.instruction_set();
+        let borrowed_source_ref = SourceRef::from(&self.source_ref);
 
-        let mut vm = VM::new(SourceRef::from(&self.source_ref), instruction_set);
-        let result = vm.run()?;
+        let result = if interpreted {
+            let mut interpreter = Interpreter::new(borrowed_source_ref, self);
+            interpreter.interpret(*ast)?
+        } else {
+            let mut emitter = BytecodeEmitter::new();
+            emitter.emit(*ast)?;
+            let mut vm = VM::new(borrowed_source_ref, emitter.instruction_set());
+            vm.run()?
+        };
 
         Ok(result)
     }
@@ -90,7 +95,7 @@ impl Program {
 
         // fixme: don't pass None
         let mut program = Program::new(PathBuf::from(module_name), None)?;
-        let result = program.execute_file()?;
+        let result = program.execute_file(false)?; // todo: pass interpreted flag
 
         self.loaded_modules.insert(module_name.to_string());
 
