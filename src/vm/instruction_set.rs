@@ -2,6 +2,7 @@ use crate::value::ValueKind;
 use crate::vm::opcode::Instruction;
 use log::debug;
 
+#[derive(Default)]
 pub struct InstructionSet {
     instructions: Vec<Instruction>,
     constants: Vec<ValueKind>,
@@ -34,6 +35,10 @@ impl InstructionSet {
 
     pub fn len(&self) -> usize {
         self.instructions.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.instructions.is_empty()
     }
 
     pub fn disassemble(&self) {
