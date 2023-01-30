@@ -8,6 +8,7 @@ use crate::source_ref::SourceRef;
 use crate::span::{Span, Spanned};
 use crate::value::ValueKind;
 use crate::vm::opcode::Opcode;
+use crate::WalrusResult;
 use float_ord::FloatOrd;
 use log::debug;
 use rustc_hash::FxHashMap;
@@ -20,7 +21,7 @@ pub struct Interpreter<'a> {
     is_returning: bool,
 }
 
-pub type InterpreterResult = Result<ValueKind, WalrusError>;
+pub type InterpreterResult = WalrusResult<ValueKind>;
 
 impl<'a> Interpreter<'a> {
     pub fn new(source_ref: SourceRef<'a>, program: &'a Program) -> Self {
@@ -30,10 +31,6 @@ impl<'a> Interpreter<'a> {
             program,
             is_returning: false,
         }
-    }
-
-    pub fn source_ref(&self) -> SourceRef<'a> {
-        self.source_ref
     }
 
     // for REPL to use
@@ -114,11 +111,11 @@ impl<'a> Interpreter<'a> {
     }
 
     // fixme: returns in blocks that aren't immediately in a function don't return from the function, but from the block
-    fn visit_statements(&mut self, nodes: Vec<Box<Node>>) -> InterpreterResult {
+    fn visit_statements(&mut self, nodes: Vec<Node>) -> InterpreterResult {
         let mut sub_interpreter = self.create_child("name".to_string()); // fixme: should be name of func, for loop, etc
 
         for node in nodes {
-            let res = sub_interpreter.interpret(*node)?;
+            let res = sub_interpreter.interpret(node)?;
 
             if sub_interpreter.is_returning {
                 self.is_returning = true;
@@ -175,21 +172,21 @@ impl<'a> Interpreter<'a> {
         }
     }
 
-    fn visit_dict(&mut self, dict: Vec<(Box<Node>, Box<Node>)>) -> InterpreterResult {
+    fn visit_dict(&mut self, dict: Vec<(Node, Node)>) -> InterpreterResult {
         let mut map = FxHashMap::default();
 
         for (key, value) in dict {
-            map.insert(self.interpret(*key)?, self.interpret(*value)?);
+            map.insert(self.interpret(key)?, self.interpret(value)?);
         }
 
         Ok(HeapValue::Dict(map).alloc())
     }
 
-    fn visit_list(&mut self, list: Vec<Box<Node>>) -> InterpreterResult {
+    fn visit_list(&mut self, list: Vec<Node>) -> InterpreterResult {
         let mut vec = vec![];
 
         for node in list {
-            vec.push(self.interpret(*node)?);
+            vec.push(self.interpret(node)?);
         }
 
         Ok(HeapValue::List(vec).alloc())
@@ -334,18 +331,13 @@ impl<'a> Interpreter<'a> {
         Ok(ValueKind::Void)
     }
 
-    fn visit_fn_call(
-        &mut self,
-        value: Node,
-        args: Vec<Box<Node>>,
-        span: Span,
-    ) -> InterpreterResult {
+    fn visit_fn_call(&mut self, value: Node, args: Vec<Node>, span: Span) -> InterpreterResult {
         let fn_span = *value.span();
         let value = self.interpret(value)?;
 
         let args = args
             .into_iter()
-            .map(|arg| self.interpret(*arg))
+            .map(|arg| self.interpret(arg))
             .collect::<Result<Vec<_>, _>>()?;
 
         match value {
@@ -683,7 +675,6 @@ impl<'a> Interpreter<'a> {
         index: Node,
         new_value: Node,
     ) -> InterpreterResult {
-        let value_span = *value.span();
         let value = self.interpret(value)?;
         let index_span = *index.span();
         let index = self.interpret(index)?;
