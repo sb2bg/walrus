@@ -1,7 +1,7 @@
 use std::fmt::Display;
 use std::ops::Range;
 
-#[derive(Debug, PartialEq, Eq, Copy, Clone)]
+#[derive(Default, Debug, PartialEq, Eq, Copy, Clone)]
 pub struct Span(pub usize, pub usize);
 
 impl Display for Span {
@@ -13,12 +13,6 @@ impl Display for Span {
 impl Span {
     pub fn extend(self, other: Span) -> Span {
         Span(self.0.min(other.0), self.1.max(other.1))
-    }
-}
-
-impl Default for Span {
-    fn default() -> Self {
-        Span(0, 0)
     }
 }
 
