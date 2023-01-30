@@ -23,7 +23,7 @@ pub fn parse_int<T>(
 ) -> Result<NodeKind, ParseError<usize, T, RecoveredParseError>> {
     let num = i64::from_str_radix(
         if base == 10 {
-            &spanned.value()
+            spanned.value()
         } else {
             &spanned.value()[2..]
         },
@@ -43,7 +43,7 @@ pub fn parse_int<T>(
 pub fn parse_float<T>(
     spanned: Spanned<String>,
 ) -> Result<NodeKind, ParseError<usize, T, RecoveredParseError>> {
-    let num = f64::from_str(&spanned.value()).map_err(|_| {
+    let num = f64::from_str(spanned.value()).map_err(|_| {
         let span = spanned.span();
 
         ParseError::User {
@@ -57,7 +57,7 @@ pub fn parse_float<T>(
 pub fn escape_string<T>(
     spanned: Spanned<String>,
 ) -> Result<NodeKind, ParseError<usize, T, RecoveredParseError>> {
-    match unescape(&spanned.value()) {
+    match unescape(spanned.value()) {
         Ok(s) => Ok(NodeKind::String(s)),
         Err(err) => {
             let span = spanned.span();
@@ -75,6 +75,7 @@ pub fn escape_string<T>(
 }
 
 // todo: accept &str instead of String, and source_refs when possible
+// fixme: lower error size
 #[derive(Error, Debug)]
 pub enum WalrusError {
     #[error("Unknown error '{message}'. Please report this bug with the following information: Glass Version = '{}', Git Revision = '{}'", env!("CARGO_PKG_VERSION"), git_version!(fallback = "flamegraph"))]
