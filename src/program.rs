@@ -21,7 +21,7 @@ impl Program {
     pub fn new(file: PathBuf, parser: Option<ProgramParser>) -> Result<Self, WalrusError> {
         Ok(Self {
             source_ref: get_source(file)?,
-            parser: parser.unwrap_or_else(|| ProgramParser::new()),
+            parser: parser.unwrap_or_else(ProgramParser::new),
             loaded_modules: HashSet::new(),
         })
     }
@@ -41,10 +41,10 @@ impl Program {
 
         let result = if interpreted {
             let mut interpreter = Interpreter::new(borrowed_source_ref, self);
-            interpreter.interpret(*ast)?
+            interpreter.interpret(ast)?
         } else {
             let mut emitter = BytecodeEmitter::new();
-            emitter.emit(*ast)?;
+            emitter.emit(ast)?;
             let mut vm = VM::new(borrowed_source_ref, emitter.instruction_set());
             vm.run()?
         };
@@ -78,7 +78,7 @@ impl Program {
 
             debug!("AST > {:?}", ast);
 
-            let result = interpreter.interpret(*ast)?;
+            let result = interpreter.interpret(ast)?;
             debug!("Result > {:?}", result);
 
             println!("{}: {}", line, result);
@@ -103,7 +103,7 @@ impl Program {
     }
 }
 
-fn get_source<'a>(file: PathBuf) -> Result<OwnedSourceRef, WalrusError> {
+fn get_source(file: PathBuf) -> Result<OwnedSourceRef, WalrusError> {
     let filename = file.to_string_lossy();
 
     let src = fs::read_to_string(&file).map_err(|_| WalrusError::FileNotFound {
