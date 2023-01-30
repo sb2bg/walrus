@@ -1,7 +1,7 @@
 use crate::span::Span;
 use std::hash::{Hash, Hasher};
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug)]
 pub struct RangeValue {
     start: i64,
     start_span: Span,
@@ -15,6 +15,14 @@ impl Hash for RangeValue {
         self.end.hash(state);
     }
 }
+
+impl PartialEq for RangeValue {
+    fn eq(&self, other: &Self) -> bool {
+        self.start == other.start && self.end == other.end
+    }
+}
+
+impl Eq for RangeValue {}
 
 impl RangeValue {
     pub fn new(start: i64, start_span: Span, end: i64, end_span: Span) -> Self {
