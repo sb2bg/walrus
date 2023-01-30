@@ -38,6 +38,21 @@ impl ValueKind {
         }
     }
 
+    pub fn is_truthy(&self) -> WalrusResult<bool> {
+        Ok(match self {
+            ValueKind::Void => false,
+            ValueKind::Bool(b) => *b,
+            ValueKind::Int(i) => *i != 0,
+            ValueKind::Float(FloatOrd(f)) => *f != 0.0,
+            ValueKind::String(s) => !s.resolve()?.is_empty(),
+            ValueKind::List(l) => !l.resolve()?.is_empty(),
+            ValueKind::Dict(d) => !d.resolve()?.is_empty(),
+            ValueKind::Range(r) => !r.is_empty(),
+            ValueKind::Function(_) => true,
+            ValueKind::RustFunction(_) => true,
+        })
+    }
+
     pub fn stringify(self) -> WalrusResult<String> {
         Ok(match self {
             ValueKind::Int(i) => i.to_string(),
@@ -84,7 +99,7 @@ impl ValueKind {
                 let mut s = String::new();
 
                 s.push_str("function ");
-                s.push_str(&name);
+                s.push_str(name);
                 s.push('(');
 
                 for (i, arg) in args.iter().enumerate() {
