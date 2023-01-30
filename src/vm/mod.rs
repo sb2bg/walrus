@@ -9,6 +9,7 @@ use crate::WalrusResult;
 use float_ord::FloatOrd;
 use instruction_set::InstructionSet;
 use log::{debug, log_enabled};
+use rustc_hash::FxHashMap;
 
 pub mod compiler;
 pub mod instruction_set;
@@ -43,36 +44,31 @@ impl<'a> VM<'a> {
 
             match opcode {
                 Opcode::LoadConst(index) => {
-                    let value = match self.is.get_constant(index) {
-                        // todo: make own Opcode for list and dict
-                        ValueKind::List(key) => {
-                            let list = key.resolve_mut()?;
+                    self.push(self.is.get_constant(index));
+                }
+                Opcode::List(cap) => {
+                    let mut list = Vec::with_capacity(cap);
 
-                            for _ in 0..list.capacity() {
-                                list.push(self.pop(opcode, span)?);
-                            }
+                    for _ in 0..cap {
+                        list.push(self.pop(opcode, span)?);
+                    }
 
-                            list.reverse(); // todo: can we avoid this?
+                    // todo: can we avoid the reverse here?
+                    list.reverse();
 
-                            ValueKind::List(key)
-                        }
-                        ValueKind::Dict(key) => {
-                            let dict = key.resolve_mut()?;
+                    self.push(HeapValue::List(list).alloc());
+                }
+                Opcode::Dict(cap) => {
+                    let mut dict = FxHashMap::default();
 
-                            // fixme: this is wrong
-                            for _ in 0..dict.len() {
-                                let value = self.pop(opcode, span)?;
-                                let key = self.pop(opcode, span)?;
+                    for _ in 0..cap {
+                        let value = self.pop(opcode, span)?;
+                        let key = self.pop(opcode, span)?;
 
-                                dict.insert(key, value);
-                            }
+                        dict.insert(key, value);
+                    }
 
-                            ValueKind::Dict(key)
-                        }
-                        value => value,
-                    };
-
-                    self.push(value);
+                    self.push(HeapValue::Dict(dict).alloc());
                 }
                 Opcode::Range => {
                     let left = self.pop(opcode, span)?;
@@ -391,19 +387,30 @@ impl<'a> VM<'a> {
                     match (a, b) {
                         (ValueKind::List(a), ValueKind::Int(b)) => {
                             let a = a.resolve()?;
-                            let b = b as usize;
+                            let mut b = b;
+                            let original = b;
 
-                            if b >= a.len() {
-                                todo!("Index out of bounds");
+                            if b < 0 {
+                                b += a.len() as i64;
                             }
 
-                            self.push(a[b]);
+                            if b < 0 || b >= a.len() as i64 {
+                                return Err(WalrusError::IndexOutOfBounds {
+                                    index: original,
+                                    len: a.len(),
+                                    span,
+                                    src: self.source_ref.source().to_string(),
+                                    filename: self.source_ref.filename().to_string(),
+                                });
+                            }
+
+                            self.push(a[b as usize]);
                         }
                         (ValueKind::Dict(a), b) => {
                             let a = a.resolve()?;
 
                             if let Some(value) = a.get(&b) {
-                                self.push(value.clone());
+                                self.push(*value);
                             } else {
                                 todo!("Key not found");
                             }
@@ -478,20 +485,5 @@ impl<'a> VM<'a> {
         for (i, frame) in self.stack.iter().enumerate() {
             debug!("| {}: {}", i, frame);
         }
-    }
-
-    fn is_truthy(&self, value: ValueKind) -> WalrusResult<bool> {
-        Ok(match value {
-            ValueKind::Bool(b) => b,
-            ValueKind::Int(i) => i != 0,
-            ValueKind::Float(FloatOrd(f)) => f != 0.0,
-            ValueKind::String(s) => !s.resolve()?.is_empty(),
-            ValueKind::List(l) => !l.resolve()?.is_empty(),
-            ValueKind::Dict(d) => !d.resolve()?.is_empty(),
-            ValueKind::Function(_) => true,
-            ValueKind::Void => false,
-            ValueKind::Range(range) => !range.is_empty(),
-            ValueKind::RustFunction(_) => true,
-        })
     }
 }

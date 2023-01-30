@@ -4,8 +4,8 @@ use crate::value::ValueKind;
 use crate::vm::instruction_set::InstructionSet;
 use crate::vm::opcode::{Instruction, Opcode};
 use crate::WalrusResult;
-use rustc_hash::FxHashMap;
 
+#[derive(Default)]
 pub struct BytecodeEmitter {
     instructions: InstructionSet,
 }
@@ -49,29 +49,22 @@ impl BytecodeEmitter {
                 let cap = nodes.len();
 
                 for node in nodes {
-                    self.emit(*node)?;
+                    self.emit(node)?;
                 }
 
-                let index = self
-                    .instructions
-                    .push_constant(HeapValue::List(Vec::with_capacity(cap)).alloc());
                 self.instructions
-                    .push(Instruction::new(Opcode::LoadConst(index), span));
+                    .push(Instruction::new(Opcode::List(cap), span));
             }
             NodeKind::Dict(nodes) => {
                 let cap = nodes.len();
 
                 for (key, value) in nodes {
-                    self.emit(*key)?;
-                    self.emit(*value)?;
+                    self.emit(key)?;
+                    self.emit(value)?;
                 }
 
-                let index = self.instructions.push_constant(
-                    HeapValue::Dict(FxHashMap::with_capacity_and_hasher(cap, Default::default()))
-                        .alloc(),
-                );
                 self.instructions
-                    .push(Instruction::new(Opcode::LoadConst(index), span));
+                    .push(Instruction::new(Opcode::Dict(cap), span));
             }
             NodeKind::Range(left, right) => {
                 if let Some(left) = left {
@@ -124,7 +117,7 @@ impl BytecodeEmitter {
             }
             NodeKind::Statements(nodes) => {
                 for node in nodes {
-                    self.emit(*node)?;
+                    self.emit(node)?;
                 }
             }
             NodeKind::Return(node) => {
