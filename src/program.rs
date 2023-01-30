@@ -1,3 +1,10 @@
+use std::collections::HashSet;
+use std::fs;
+use std::io::{stdout, BufRead, Write};
+use std::path::PathBuf;
+
+use log::debug;
+
 use crate::error::{parser_err_mapper, WalrusError};
 use crate::grammar::ProgramParser;
 use crate::interpreter::{Interpreter, InterpreterResult};
@@ -5,57 +12,70 @@ use crate::source_ref::{OwnedSourceRef, SourceRef};
 use crate::value::ValueKind;
 use crate::vm::compiler::BytecodeEmitter;
 use crate::vm::VM;
-use log::debug;
-use std::collections::HashSet;
-use std::fs;
-use std::io::{stdout, BufRead, Write};
-use std::path::PathBuf;
 
 pub struct Program {
-    source_ref: OwnedSourceRef,
+    source_ref: Option<OwnedSourceRef>,
     parser: ProgramParser,
+    interpreted: bool,
     loaded_modules: HashSet<String>,
 }
 
 impl Program {
-    pub fn new(file: PathBuf, parser: Option<ProgramParser>) -> Result<Self, WalrusError> {
+    pub fn new(
+        file: Option<PathBuf>,
+        parser: Option<ProgramParser>,
+        interpreted: bool,
+    ) -> Result<Self, WalrusError> {
+        let source_ref = match file {
+            Some(file) => Some(get_source(file)?),
+            None => None,
+        };
+
         Ok(Self {
-            source_ref: get_source(file)?,
+            source_ref,
             parser: parser.unwrap_or_else(ProgramParser::new),
             loaded_modules: HashSet::new(),
+            interpreted,
         })
     }
 
-    pub fn execute_file(&mut self, interpreted: bool) -> InterpreterResult {
+    pub fn execute(&mut self) -> InterpreterResult {
+        let source_ref = match &self.source_ref {
+            Some(source_ref) => SourceRef::from(source_ref),
+            None => return self.execute_repl(),
+        };
+
         debug!(
             "Read {} bytes from '{}'",
-            self.source_ref.src.len(),
-            self.source_ref.filename
+            source_ref.source().len(),
+            source_ref.filename()
         );
 
-        let ast = self.parser.parse(&self.source_ref.src).map_err(|err| {
-            parser_err_mapper(err, &self.source_ref.src, &self.source_ref.filename)
-        })?;
+        let ast = self
+            .parser
+            .parse(source_ref.source())
+            .map_err(|err| parser_err_mapper(err, source_ref.source(), source_ref.filename()))?;
 
-        let borrowed_source_ref = SourceRef::from(&self.source_ref);
-
-        let result = if interpreted {
-            let mut interpreter = Interpreter::new(borrowed_source_ref, self);
+        let result = if self.interpreted {
+            let mut interpreter = Interpreter::new(source_ref, self);
             interpreter.interpret(ast)?
         } else {
             let mut emitter = BytecodeEmitter::new();
             emitter.emit(ast)?;
-            let mut vm = VM::new(borrowed_source_ref, emitter.instruction_set());
+            let mut vm = VM::new(source_ref, emitter.instruction_set());
             vm.run()?
         };
 
         Ok(result)
     }
 
-    pub fn execute_repl(&mut self) -> InterpreterResult {
-        let mut interpreter = Interpreter::new(SourceRef::from(&self.source_ref), self);
+    const REPL_FILENAME: &'static str = "<repl>";
+
+    // todo: newline support and other advanced repl features
+    fn execute_repl(&mut self) -> InterpreterResult {
         let mut input = String::new();
-        let mut line = 1;
+        // todo: find a way to pass source and update it
+        let mut interpreter = Interpreter::new(SourceRef::new("", Self::REPL_FILENAME), self);
 
         loop {
             prompt()?;
@@ -74,16 +94,13 @@ impl Program {
             let ast = self
                 .parser
                 .parse(&input)
-                .map_err(|err| parser_err_mapper(err, &input, &self.source_ref.filename))?;
+                .map_err(|err| parser_err_mapper(err, &input, Self::REPL_FILENAME))?;
 
             debug!("AST > {:?}", ast);
 
             let result = interpreter.interpret(ast)?;
             debug!("Result > {:?}", result);
 
-            println!("{}: {}", line, result);
-
-            line += 1;
             input.clear();
         }
     }
@@ -94,8 +111,8 @@ impl Program {
         }
 
         // fixme: don't pass None
-        let mut program = Program::new(PathBuf::from(module_name), None)?;
-        let result = program.execute_file(false)?; // todo: pass interpreted flag
+        let mut program = Program::new(Some(PathBuf::from(module_name)), None, self.interpreted)?;
+        let result = program.execute()?;
 
         self.loaded_modules.insert(module_name.to_string());
 

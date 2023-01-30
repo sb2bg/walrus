@@ -1,3 +1,15 @@
+use std::panic;
+use std::path::PathBuf;
+
+use clap::Parser as ClapParser;
+use lalrpop_util::lalrpop_mod;
+use log::LevelFilter;
+use simplelog::SimpleLogger;
+
+use crate::error::WalrusError;
+use crate::interpreter::InterpreterResult;
+use crate::program::Program;
+
 mod arenas;
 mod ast;
 mod error;
@@ -10,16 +22,6 @@ mod source_ref;
 mod span;
 mod value;
 pub mod vm;
-
-use crate::error::WalrusError;
-use crate::interpreter::InterpreterResult;
-use crate::program::Program;
-use clap::Parser as ClapParser;
-use lalrpop_util::lalrpop_mod;
-use log::LevelFilter;
-use simplelog::SimpleLogger;
-use std::panic;
-use std::path::PathBuf;
 
 #[cfg(not(feature = "dhat-heap"))]
 #[global_allocator]
@@ -78,10 +80,7 @@ fn try_main() -> WalrusResult<()> {
 }
 
 pub fn create_shell(file: Option<PathBuf>, interpreted: bool) -> InterpreterResult {
-    match file {
-        Some(file) => Ok(Program::new(file, None)?.execute_file(interpreted)?),
-        None => Ok(Program::new(PathBuf::from("fixme"), None)?.execute_repl()?), // fixme: make path optional
-    }
+    Program::new(file, None, interpreted)?.execute()
 }
 
 fn setup_logger(debug: bool) -> WalrusResult<()> {
