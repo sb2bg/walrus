@@ -30,7 +30,7 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 #[global_allocator]
 static ALLOC: dhat::Alloc = dhat::Alloc;
 
-lalrpop_mod!(pub grammar);
+lalrpop_mod!(#[allow(clippy::all)] pub grammar);
 
 #[derive(ClapParser, Debug)]
 #[clap(author, version, about, long_about = None)]
