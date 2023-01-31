@@ -1,4 +1,10 @@
-use crate::arenas::{HeapValue, Resolve, ResolveMut};
+use float_ord::FloatOrd;
+use log::{debug, log_enabled};
+use rustc_hash::FxHashMap;
+
+use instruction_set::InstructionSet;
+
+use crate::arenas::HeapValue;
 use crate::error::WalrusError;
 use crate::range::RangeValue;
 use crate::source_ref::SourceRef;
@@ -6,10 +12,6 @@ use crate::span::Span;
 use crate::value::ValueKind;
 use crate::vm::opcode::Opcode;
 use crate::WalrusResult;
-use float_ord::FloatOrd;
-use instruction_set::InstructionSet;
-use log::{debug, log_enabled};
-use rustc_hash::FxHashMap;
 
 pub mod compiler;
 pub mod instruction_set;
@@ -46,6 +48,11 @@ impl<'a> VM<'a> {
                 Opcode::LoadConst(index) => {
                     self.push(self.is.get_constant(index));
                 }
+                Opcode::Load(symbol) => {
+                    let ident = self.is.get_heap().get_string(symbol)?;
+
+                    // todo: push the value from the scope
+                }
                 Opcode::List(cap) => {
                     let mut list = Vec::with_capacity(cap);
 
@@ -56,7 +63,8 @@ impl<'a> VM<'a> {
                     // todo: can we avoid the reverse here?
                     list.reverse();
 
-                    self.push(HeapValue::List(list).alloc());
+                    let value = self.is.get_heap_mut().push(HeapValue::List(list));
+                    self.push(value);
                 }
                 Opcode::Dict(cap) => {
                     let mut dict = FxHashMap::default();
@@ -68,7 +76,8 @@ impl<'a> VM<'a> {
                         dict.insert(key, value);
                     }
 
-                    self.push(HeapValue::Dict(dict).alloc());
+                    let value = self.is.get_heap_mut().push(HeapValue::Dict(dict));
+                    self.push(value);
                 }
                 Opcode::Range => {
                     let left = self.pop(opcode, span)?;
@@ -119,28 +128,31 @@ impl<'a> VM<'a> {
                             self.push(ValueKind::Float(FloatOrd(a + b)));
                         }
                         (ValueKind::String(a), ValueKind::String(b)) => {
-                            let a = a.resolve()?;
-                            let b = b.resolve()?;
+                            let a = self.is.get_heap().get_string(a)?;
+                            let b = self.is.get_heap().get_string(b)?;
 
                             let mut s = String::with_capacity(a.len() + b.len());
                             s.push_str(a);
                             s.push_str(b);
 
-                            self.push(HeapValue::String(s).alloc());
+                            let value = self.is.get_heap_mut().push(HeapValue::String(s));
+                            self.push(value);
                         }
                         (ValueKind::List(a), ValueKind::List(b)) => {
-                            let mut a = a.resolve()?.to_vec();
-                            let b = b.resolve()?;
+                            let mut a = self.is.get_heap().get_list(a)?.to_vec();
+                            let b = self.is.get_heap().get_list(b)?;
                             a.extend(b);
 
-                            self.push(HeapValue::List(a).alloc());
+                            let value = self.is.get_heap_mut().push(HeapValue::List(a));
+                            self.push(value);
                         }
                         (ValueKind::Dict(a), ValueKind::Dict(b)) => {
-                            let mut a = a.resolve()?.clone();
-                            let b = b.resolve()?;
+                            let mut a = self.is.get_heap().get_dict(a)?.clone();
+                            let b = self.is.get_heap().get_dict(b)?;
                             a.extend(b);
 
-                            self.push(HeapValue::Dict(a).alloc());
+                            let value = self.is.get_heap_mut().push(HeapValue::Dict(a));
+                            self.push(value);
                         }
                         _ => return Err(self.construct_err(opcode, a, Some(b), span)),
                     }
@@ -266,20 +278,20 @@ impl<'a> VM<'a> {
 
                     match (a, b) {
                         (ValueKind::List(a), ValueKind::List(b)) => {
-                            let a = a.resolve()?;
-                            let b = b.resolve()?;
+                            let a = self.is.get_heap().get_list(a)?;
+                            let b = self.is.get_heap().get_list(b)?;
 
                             self.push(ValueKind::Bool(a == b));
                         }
                         (ValueKind::Dict(a), ValueKind::Dict(b)) => {
-                            let a = a.resolve()?;
-                            let b = b.resolve()?;
+                            let a = self.is.get_heap().get_dict(a)?;
+                            let b = self.is.get_heap().get_dict(b)?;
 
                             self.push(ValueKind::Bool(a == b));
                         }
                         (ValueKind::Function(a), ValueKind::Function(b)) => {
-                            let a_func = a.resolve()?;
-                            let b_func = b.resolve()?;
+                            let a_func = self.is.get_heap().get_function(a)?;
+                            let b_func = self.is.get_heap().get_function(b)?;
 
                             self.push(ValueKind::Bool(a_func == b_func));
                         }
@@ -298,20 +310,20 @@ impl<'a> VM<'a> {
 
                     match (a, b) {
                         (ValueKind::List(a), ValueKind::List(b)) => {
-                            let a = a.resolve()?;
-                            let b = b.resolve()?;
+                            let a = self.is.get_heap().get_list(a)?;
+                            let b = self.is.get_heap().get_list(b)?;
 
                             self.push(ValueKind::Bool(a != b));
                         }
                         (ValueKind::Dict(a), ValueKind::Dict(b)) => {
-                            let a = a.resolve()?;
-                            let b = b.resolve()?;
+                            let a = self.is.get_heap().get_dict(a)?;
+                            let b = self.is.get_heap().get_dict(b)?;
 
                             self.push(ValueKind::Bool(a != b));
                         }
                         (ValueKind::Function(a), ValueKind::Function(b)) => {
-                            let a_func = a.resolve()?;
-                            let b_func = b.resolve()?;
+                            let a_func = self.is.get_heap().get_function(a)?;
+                            let b_func = self.is.get_heap().get_function(b)?;
 
                             self.push(ValueKind::Bool(a_func != b_func));
                         }
@@ -386,7 +398,29 @@ impl<'a> VM<'a> {
 
                     match (a, b) {
                         (ValueKind::List(a), ValueKind::Int(b)) => {
-                            let a = a.resolve()?;
+                            let a = self.is.get_heap().get_list(a)?;
+                            let mut b = b;
+                            let original = b;
+
+                            // todo: merge code with other index ops
+                            if b < 0 {
+                                b += a.len() as i64;
+                            }
+
+                            if b < 0 || b >= a.len() as i64 {
+                                return Err(WalrusError::IndexOutOfBounds {
+                                    index: original,
+                                    len: a.len(),
+                                    span,
+                                    src: self.source_ref.source().to_string(),
+                                    filename: self.source_ref.filename().to_string(),
+                                });
+                            }
+
+                            self.push(a[b as usize]);
+                        }
+                        (ValueKind::String(a), ValueKind::Int(b)) => {
+                            let a = self.is.get_heap().get_string(a)?;
                             let mut b = b;
                             let original = b;
 
@@ -404,14 +438,20 @@ impl<'a> VM<'a> {
                                 });
                             }
 
-                            self.push(a[b as usize]);
+                            let b = b as usize;
+                            let res = a[b..b + 1].to_string();
+                            let value = self.is.get_heap_mut().push(HeapValue::String(res));
+
+                            self.push(value);
                         }
                         (ValueKind::Dict(a), b) => {
-                            let a = a.resolve()?;
+                            let a = self.is.get_heap().get_dict(a)?;
 
                             if let Some(value) = a.get(&b) {
                                 self.push(*value);
                             } else {
+                                // fixme: sometimes this throws even when the objects are equal because
+                                // we are comparing the arena keys and not the values
                                 todo!("Key not found");
                             }
                         }
@@ -420,11 +460,11 @@ impl<'a> VM<'a> {
                 }
                 Opcode::Print => {
                     let a = self.pop(opcode, span)?;
-                    print!("{}", a.stringify()?);
+                    print!("{}", self.is.stringify(a)?);
                 }
                 Opcode::Println => {
                     let a = self.pop(opcode, span)?;
-                    println!("{}", a.stringify()?);
+                    println!("{}", self.is.stringify(a)?);
                 }
                 Opcode::Return => {
                     let a = self.pop(opcode, span)?;

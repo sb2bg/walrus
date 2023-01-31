@@ -1,11 +1,15 @@
+use log::debug;
+
+use crate::arenas::ValueHolder;
 use crate::value::ValueKind;
 use crate::vm::opcode::Instruction;
-use log::debug;
+use crate::WalrusResult;
 
 #[derive(Default)]
 pub struct InstructionSet {
     instructions: Vec<Instruction>,
     constants: Vec<ValueKind>,
+    heap: ValueHolder,
 }
 
 impl InstructionSet {
@@ -13,6 +17,7 @@ impl InstructionSet {
         Self {
             instructions: Vec::new(),
             constants: Vec::new(),
+            heap: ValueHolder::new(),
         }
     }
 
@@ -31,6 +36,14 @@ impl InstructionSet {
 
     pub fn get_constant(&self, index: usize) -> ValueKind {
         self.constants[index]
+    }
+
+    pub fn get_heap_mut(&mut self) -> &mut ValueHolder {
+        &mut self.heap
+    }
+
+    pub fn get_heap(&self) -> &ValueHolder {
+        &self.heap
     }
 
     pub fn len(&self) -> usize {
@@ -52,6 +65,10 @@ impl InstructionSet {
         for (i, _) in self.instructions.iter().enumerate() {
             self.disassemble_single(i);
         }
+    }
+
+    pub fn stringify(&self, value: ValueKind) -> WalrusResult<String> {
+        self.heap.stringify(value)
     }
 
     pub fn disassemble_single(&self, index: usize) {

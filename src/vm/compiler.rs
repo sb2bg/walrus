@@ -39,9 +39,11 @@ impl BytecodeEmitter {
                 ));
             }
             NodeKind::String(value) => {
-                let index = self
+                let value = self
                     .instructions
-                    .push_constant(HeapValue::String(value).alloc());
+                    .get_heap_mut()
+                    .push(HeapValue::String(value));
+                let index = self.instructions.push_constant(value);
                 self.instructions
                     .push(Instruction::new(Opcode::LoadConst(index), span));
             }
@@ -114,6 +116,12 @@ impl BytecodeEmitter {
 
                 self.instructions
                     .push(Instruction::new(Opcode::Print, span));
+            }
+            NodeKind::Ident(name) => {
+                let symbol = self.instructions.get_heap_mut().push_ident(&name);
+
+                self.instructions
+                    .push(Instruction::new(Opcode::Load(symbol), span));
             }
             NodeKind::Statements(nodes) => {
                 for node in nodes {

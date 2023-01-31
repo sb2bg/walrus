@@ -1,10 +1,13 @@
-use crate::span::Span;
 use std::fmt::{Display, Formatter};
+use strena::Symbol;
+
+use crate::span::Span;
 
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Opcode {
     LoadConst(usize), // usize pads the enum by 8 bytes
+    Load(Symbol),
     List(usize),
     Dict(usize),
     Range,
