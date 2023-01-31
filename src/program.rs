@@ -11,6 +11,7 @@ use crate::interpreter::{Interpreter, InterpreterResult};
 use crate::source_ref::{OwnedSourceRef, SourceRef};
 use crate::value::ValueKind;
 use crate::vm::compiler::BytecodeEmitter;
+use crate::vm::opcode::Opcode;
 use crate::vm::VM;
 
 pub struct Program {
@@ -60,6 +61,8 @@ impl Program {
             let mut interpreter = Interpreter::new(source_ref, self);
             interpreter.interpret(ast)?
         } else {
+            debug!("Size of Opcode = {}", std::mem::size_of::<Opcode>());
+
             let mut emitter = BytecodeEmitter::new();
             emitter.emit(ast)?;
             let mut vm = VM::new(source_ref, emitter.instruction_set());
