@@ -1,14 +1,16 @@
-use crate::ast::Node;
-use crate::error::WalrusError;
-use crate::rust_function::RustFunction;
-use crate::value::ValueKind;
-use crate::WalrusResult;
+use float_ord::FloatOrd;
 use once_cell::sync::Lazy;
 use rustc_hash::FxHashMap;
 use slotmap::{new_key_type, DenseSlotMap};
 use strena::{Interner, Symbol};
 
-static mut ARENA: Lazy<ValueHolder> = Lazy::new(ValueHolder::new);
+use crate::ast::Node;
+use crate::error::WalrusError;
+use crate::rust_function::RustFunction;
+use crate::value::ValueKind;
+use crate::WalrusResult;
+
+pub static mut ARENA: Lazy<ValueHolder> = Lazy::new(ValueHolder::new);
 
 // todo: maybe instead of this, we can use a single slotmap
 // and use a different enum to differentiate between the
@@ -18,6 +20,7 @@ static mut ARENA: Lazy<ValueHolder> = Lazy::new(ValueHolder::new);
 // and then just clone everything and the copy types would just
 // be copied and the rc types would be cloned
 // todo: maybe use a different arena library, DenseSlotMap is mid-performance
+#[derive(Default)]
 pub struct ValueHolder {
     dict_slotmap: DenseSlotMap<DictKey, FxHashMap<ValueKind, ValueKind>>,
     list_slotmap: DenseSlotMap<ListKey, Vec<ValueKind>>,
@@ -52,7 +55,8 @@ impl ValueHolder {
         }
     }
 
-    pub fn alloc(&mut self, value: HeapValue) -> ValueKind {
+    // todo: split this into multiple functions for each type
+    pub fn push(&mut self, value: HeapValue) -> ValueKind {
         match value {
             HeapValue::List(list) => ValueKind::List(self.list_slotmap.insert(list)),
             HeapValue::Dict(dict) => ValueKind::Dict(self.dict_slotmap.insert(dict)),
@@ -64,6 +68,10 @@ impl ValueHolder {
                 ValueKind::String(self.string_interner.get_or_insert(&string))
             }
         }
+    }
+
+    pub fn push_ident(&mut self, ident: &str) -> Symbol {
+        self.string_interner.get_or_insert(ident)
     }
 
     pub fn get_rust_function(&self, key: RustFuncKey) -> WalrusResult<&RustFunction> {
@@ -102,6 +110,77 @@ impl ValueHolder {
             message: "Attempt to access released memory".into(), // fixme: use correct AccessReleasedMemory error
         })
     }
+
+    pub fn stringify(&self, value: ValueKind) -> WalrusResult<String> {
+        Ok(match value {
+            ValueKind::Int(i) => i.to_string(),
+            ValueKind::Float(FloatOrd(f)) => f.to_string(),
+            ValueKind::Bool(b) => b.to_string(),
+            ValueKind::Range(r) => r.to_string(),
+            ValueKind::String(s) => self.get_string(s)?.to_string(),
+            ValueKind::List(l) => {
+                let list = self.get_list(l)?;
+                let mut s = String::new();
+
+                s.push('[');
+
+                for (i, &item) in list.iter().enumerate() {
+                    if i > 0 {
+                        s.push_str(", ");
+                    }
+                    s.push_str(&self.stringify(item)?);
+                }
+
+                s.push(']');
+                s
+            }
+            ValueKind::Dict(d) => {
+                let dict = self.get_dict(d)?;
+                let mut s = String::new();
+
+                s.push('{');
+
+                for (i, (&key, &value)) in dict.iter().enumerate() {
+                    if i > 0 {
+                        s.push_str(", ");
+                    }
+                    s.push_str(&self.stringify(key)?);
+                    s.push_str(": ");
+                    s.push_str(&self.stringify(value)?);
+                }
+
+                s.push('}');
+                s
+            }
+            ValueKind::Function(f) => {
+                let (name, args, _) = self.get_function(f)?;
+                let mut s = String::new();
+
+                s.push_str("function ");
+                s.push_str(name);
+                s.push('(');
+
+                for (i, arg) in args.iter().enumerate() {
+                    if i > 0 {
+                        s.push_str(", ");
+                    }
+                    s.push_str(arg);
+                }
+
+                s.push(')');
+                s
+            }
+            ValueKind::RustFunction(r) => {
+                let rust_func = self.get_rust_function(r)?;
+                let mut s = String::new();
+
+                s.push_str("rust_function ");
+                s.push_str(rust_func.name());
+                s
+            }
+            ValueKind::Void => "void".to_string(),
+        })
+    }
 }
 
 pub enum HeapValue {
@@ -114,7 +193,7 @@ pub enum HeapValue {
 
 impl HeapValue {
     pub fn alloc(self) -> ValueKind {
-        unsafe { ARENA.alloc(self) }
+        unsafe { ARENA.push(self) }
     }
 }
 
