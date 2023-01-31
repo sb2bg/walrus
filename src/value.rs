@@ -1,11 +1,13 @@
-use crate::arenas::{DictKey, FuncKey, ListKey, Resolve, RustFuncKey};
-use crate::range::RangeValue;
-use crate::WalrusResult;
-use float_ord::FloatOrd;
 use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::Hash;
+
+use float_ord::FloatOrd;
 use strena::Symbol;
+
+use crate::arenas::{DictKey, FuncKey, ListKey, Resolve, RustFuncKey};
+use crate::range::RangeValue;
+use crate::WalrusResult;
 
 #[derive(Debug, PartialEq, Eq, Copy, Clone, Hash)]
 pub enum ValueKind {
@@ -38,12 +40,12 @@ impl ValueKind {
         }
     }
 
-    pub fn is_truthy(&self) -> WalrusResult<bool> {
+    pub fn is_truthy(self) -> WalrusResult<bool> {
         Ok(match self {
             ValueKind::Void => false,
-            ValueKind::Bool(b) => *b,
-            ValueKind::Int(i) => *i != 0,
-            ValueKind::Float(FloatOrd(f)) => *f != 0.0,
+            ValueKind::Bool(b) => b,
+            ValueKind::Int(i) => i != 0,
+            ValueKind::Float(FloatOrd(f)) => f != 0.0,
             ValueKind::String(s) => !s.resolve()?.is_empty(),
             ValueKind::List(l) => !l.resolve()?.is_empty(),
             ValueKind::Dict(d) => !d.resolve()?.is_empty(),
