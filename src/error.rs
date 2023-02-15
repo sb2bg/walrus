@@ -1,15 +1,17 @@
-use crate::ast::NodeKind;
-use crate::span::{Span, Spanned};
-use crate::vm::opcode::Opcode;
+use std::cmp::min;
+use std::str::FromStr;
+
 use float_ord::FloatOrd;
 use git_version::git_version;
 use lalrpop_util::lexer::Token;
 use lalrpop_util::ParseError;
 use line_span::{find_line_end, find_line_start};
 use snailquote::{unescape, UnescapeError};
-use std::cmp::min;
-use std::str::FromStr;
 use thiserror::Error;
+
+use crate::ast::NodeKind;
+use crate::span::{Span, Spanned};
+use crate::vm::opcode::Opcode;
 
 pub enum RecoveredParseError {
     NumberTooLarge(String, Span),
@@ -317,6 +319,16 @@ pub enum WalrusError {
         src: String,
         filename: String,
     },
+
+    #[error("Cannot redefine local variable with name '{name}' at {}",
+        get_line(src, filename, *span)
+    )]
+    RedefinedLocal {
+        name: String,
+        span: Span,
+        src: String,
+        filename: String,
+    },
 }
 
 pub fn parser_err_mapper(
@@ -370,7 +382,8 @@ pub fn parser_err_mapper(
 
 // i dont know if this is the best place to put this comment but:
 // fixme: if the error span starts on a different line than where the error is, the wrong line will be printed.
-// should probably fix this by printing all of the lines contained in the span
+// should probably fix this by printing all of the lines contained in the spans
+// todo: use codespan_reporting? https://github.com/brendanzab/codespan
 fn get_line<'a>(src: &'a str, filename: &'a str, span: Span) -> String {
     let start = find_line_start(src, span.0);
     let end = find_line_end(src, span.0);
