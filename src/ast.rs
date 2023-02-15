@@ -44,6 +44,7 @@ pub enum NodeKind {
     Free(Box<Node>),
     Range(Option<Box<Node>>, Option<Box<Node>>),
     Defer(Box<Node>),
+    MemberAccess(Box<Node>, String),
     Break,
     Continue,
     Void,
@@ -105,6 +106,7 @@ impl Display for NodeKind {
             NodeKind::IndexAssign(_, _, _) => write!(f, "IndexAssign"),
             NodeKind::Range(_, _) => write!(f, "Range"),
             NodeKind::Defer(_) => write!(f, "Defer"),
+            NodeKind::MemberAccess(_, _) => write!(f, "MemberAccess"),
             NodeKind::Void => write!(f, "Void"),
         }
     }
