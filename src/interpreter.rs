@@ -164,7 +164,7 @@ impl<'a> Interpreter<'a> {
         let right_res = self.interpret(value)?;
 
         match op {
-            Opcode::Subtract => self.neg(right_res, span),
+            Opcode::Negate => self.neg(right_res, span),
             Opcode::Not => self.not(right_res, span),
             _ => Err(WalrusError::UnknownError {
                 message: format!("Invalid unary operator {}", op),
