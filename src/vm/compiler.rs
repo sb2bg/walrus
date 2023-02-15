@@ -1,19 +1,22 @@
 use crate::arenas::HeapValue;
 use crate::ast::{Node, NodeKind};
+use crate::error::WalrusError;
+use crate::source_ref::SourceRef;
 use crate::value::ValueKind;
 use crate::vm::instruction_set::InstructionSet;
 use crate::vm::opcode::{Instruction, Opcode};
 use crate::WalrusResult;
 
-#[derive(Default)]
-pub struct BytecodeEmitter {
+pub struct BytecodeEmitter<'a> {
     instructions: InstructionSet,
+    source_ref: SourceRef<'a>,
 }
 
-impl BytecodeEmitter {
-    pub fn new() -> Self {
+impl<'a> BytecodeEmitter<'a> {
+    pub fn new(source_ref: SourceRef<'a>) -> Self {
         Self {
             instructions: InstructionSet::new(),
+            source_ref,
         }
     }
 
@@ -118,10 +121,109 @@ impl BytecodeEmitter {
                     .push(Instruction::new(Opcode::Print, span));
             }
             NodeKind::Ident(name) => {
-                let symbol = self.instructions.get_heap_mut().push_ident(&name);
+                let index = match self.instructions.get_local(&name) {
+                    Some(index) => index,
+                    None => {
+                        return Err(WalrusError::UndefinedVariable {
+                            name,
+                            span,
+                            src: self.source_ref.source().to_string(),
+                            filename: self.source_ref.filename().to_string(),
+                        })
+                    }
+                };
 
                 self.instructions
-                    .push(Instruction::new(Opcode::Load(symbol), span));
+                    .push(Instruction::new(Opcode::Load(index), span));
+            }
+            NodeKind::Assign(name, node) => {
+                for local in self.instructions.local_iter().rev() {
+                    if local.depth() < self.instructions.local_depth() {
+                        break;
+                    }
+
+                    if local.name() == name {
+                        return Err(WalrusError::RedefinedLocal {
+                            name,
+                            span,
+                            src: self.source_ref.source().to_string(),
+                            filename: self.source_ref.filename().to_string(),
+                        });
+                    }
+                }
+
+                self.emit(*node)?;
+
+                let index = self.instructions.push_local(name);
+
+                self.instructions
+                    .push(Instruction::new(Opcode::Store(index), span));
+            }
+            NodeKind::Reassign(name, node, op) => {
+                let index = match self.instructions.get_local(name.value()) {
+                    Some(index) => index,
+                    None => {
+                        return Err(WalrusError::UndefinedVariable {
+                            name: name.value().to_string(),
+                            span,
+                            src: self.source_ref.source().to_string(),
+                            filename: self.source_ref.filename().to_string(),
+                        })
+                    }
+                };
+
+                match op {
+                    Opcode::Add => {
+                        self.instructions
+                            .push(Instruction::new(Opcode::Load(index), span));
+
+                        self.emit(*node)?;
+
+                        self.instructions.push(Instruction::new(Opcode::Add, span));
+                    }
+                    Opcode::Subtract => {
+                        self.instructions
+                            .push(Instruction::new(Opcode::Load(index), span));
+
+                        self.emit(*node)?;
+
+                        self.instructions
+                            .push(Instruction::new(Opcode::Subtract, span));
+                    }
+                    Opcode::Multiply => {
+                        self.instructions
+                            .push(Instruction::new(Opcode::Load(index), span));
+
+                        self.emit(*node)?;
+
+                        self.instructions
+                            .push(Instruction::new(Opcode::Multiply, span));
+                    }
+                    Opcode::Divide => {
+                        self.instructions
+                            .push(Instruction::new(Opcode::Load(index), span));
+
+                        self.emit(*node)?;
+
+                        self.instructions
+                            .push(Instruction::new(Opcode::Divide, span));
+                    }
+                    Opcode::Modulo => {
+                        self.instructions
+                            .push(Instruction::new(Opcode::Load(index), span));
+
+                        self.emit(*node)?;
+
+                        self.instructions
+                            .push(Instruction::new(Opcode::Modulo, span));
+                    }
+                    _ => {
+                        self.emit(*node)?;
+                    }
+                }
+
+                self.instructions
+                    .push(Instruction::new(Opcode::Reassign(index), span));
             }
             NodeKind::Statements(nodes) => {
                 for node in nodes {
@@ -141,6 +243,7 @@ impl BytecodeEmitter {
     }
 
     pub fn instruction_set(self) -> InstructionSet {
+        self.instructions.disassemble();
         self.instructions
     }
 }
