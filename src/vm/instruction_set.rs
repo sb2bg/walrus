@@ -3,12 +3,14 @@ use log::debug;
 use crate::arenas::ValueHolder;
 use crate::value::ValueKind;
 use crate::vm::opcode::Instruction;
+use crate::vm::symbol_table::{Local, SymbolTable};
 use crate::WalrusResult;
 
 #[derive(Default)]
 pub struct InstructionSet {
     instructions: Vec<Instruction>,
     constants: Vec<ValueKind>,
+    locals: SymbolTable,
     heap: ValueHolder,
 }
 
@@ -17,6 +19,7 @@ impl InstructionSet {
         Self {
             instructions: Vec::new(),
             constants: Vec::new(),
+            locals: SymbolTable::new(),
             heap: ValueHolder::new(),
         }
     }
@@ -44,6 +47,22 @@ impl InstructionSet {
 
     pub fn get_heap(&self) -> &ValueHolder {
         &self.heap
+    }
+
+    pub fn push_local(&mut self, name: String) -> usize {
+        self.locals.push(name)
+    }
+
+    pub fn get_local(&self, name: &str) -> Option<usize> {
+        self.locals.resolve(name)
+    }
+
+    pub fn local_iter(&self) -> impl DoubleEndedIterator<Item = &Local> {
+        self.locals.iter()
+    }
+
+    pub fn local_depth(&self) -> usize {
+        self.locals.depth()
     }
 
     pub fn len(&self) -> usize {
