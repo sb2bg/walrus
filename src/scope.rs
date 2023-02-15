@@ -1,10 +1,12 @@
+use std::io::Write;
+use std::ptr::NonNull;
+
+use rustc_hash::FxHashMap;
+
 use crate::arenas::{HeapValue, Resolve};
 use crate::error::WalrusError;
 use crate::rust_function::RustFunction;
 use crate::value::ValueKind;
-use rustc_hash::FxHashMap;
-use std::io::Write;
-use std::ptr::NonNull;
 
 #[derive(Debug)]
 pub struct Scope {
