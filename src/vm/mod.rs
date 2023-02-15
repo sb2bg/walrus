@@ -16,6 +16,7 @@ use crate::WalrusResult;
 pub mod compiler;
 pub mod instruction_set;
 pub mod opcode;
+mod symbol_table;
 
 pub struct VM<'a> {
     stack: Vec<ValueKind>,
@@ -36,7 +37,7 @@ impl<'a> VM<'a> {
 
     pub fn run(&mut self) -> WalrusResult<ValueKind> {
         loop {
-            self.is.disassemble_single(self.ip);
+            // self.is.disassemble_single(self.ip);
 
             let instruction = self.is.get(self.ip);
             let opcode = instruction.opcode();
@@ -48,10 +49,16 @@ impl<'a> VM<'a> {
                 Opcode::LoadConst(index) => {
                     self.push(self.is.get_constant(index));
                 }
-                Opcode::Load(symbol) => {
-                    let ident = self.is.get_heap().get_string(symbol)?;
-
-                    // todo: push the value from the scope
+                Opcode::Load(index) => {
+                    todo!("load")
+                }
+                Opcode::Store(index) => {
+                    let value = self.pop(opcode, span)?;
+                    todo!("store")
+                }
+                Opcode::Reassign(index) => {
+                    let value = self.pop(opcode, span)?;
+                    todo!("reassign")
                 }
                 Opcode::List(cap) => {
                     let mut list = Vec::with_capacity(cap);
@@ -506,6 +513,23 @@ impl<'a> VM<'a> {
 
     fn push(&mut self, value: ValueKind) {
         self.stack.push(value);
+    }
+
+    fn get(&self, index: usize) -> WalrusResult<&ValueKind> {
+        self.stack.get(index).ok_or(WalrusError::UnknownError {
+            message: "Failed to resolve local variable stack index".to_string(),
+        })
+    }
+
+    fn set(&mut self, index: usize, value: ValueKind) -> WalrusResult<()> {
+        if let Some(slot) = self.stack.get_mut(index) {
+            *slot = value;
+            Ok(())
+        } else {
+            Err(WalrusError::UnknownError {
+                message: "Failed to resolve local variable stack index".to_string(),
+            })
+        }
     }
 
     fn pop(&mut self, op: Opcode, span: Span) -> WalrusResult<ValueKind> {
