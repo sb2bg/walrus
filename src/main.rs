@@ -43,6 +43,12 @@ struct Args {
     #[clap(short = 'i', long = "interpreted", help = "Run with the interpreter")]
     interpreted: bool,
 
+    #[clap(short = 'c', long = "compile", help = "Compile the script to bytecode")]
+    compile: bool,
+
+    #[clap(long = "disassemble", help = "Print the bytecode disassembly")]
+    disassemble: bool,
+
     #[clap(short = 'd', long = "debug", help = "Enable debug mode")]
     debug: bool,
 
