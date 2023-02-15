@@ -63,7 +63,7 @@ impl Program {
         } else {
             debug!("Size of Opcode = {}", std::mem::size_of::<Opcode>());
 
-            let mut emitter = BytecodeEmitter::new();
+            let mut emitter = BytecodeEmitter::new(source_ref);
             emitter.emit(ast)?;
             let mut vm = VM::new(source_ref, emitter.instruction_set());
             vm.run()?
