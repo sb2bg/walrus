@@ -215,10 +215,10 @@ Continue: NodeKind = {
 };
 
 Import: NodeKind = {
-    "import" <p: IdentStr> => NodeKind::PackageImport(p, None),
     "import" <m: r#""[^"]*""#> => NodeKind::ModuleImport(m[1..m.len() - 1].to_string(), None),
-    "import" <p: IdentStr> "as" <a: IdentStr> => NodeKind::PackageImport(p, Some(a)),
     "import" <m: r#""[^"]*""#> "as" <a: IdentStr> => NodeKind::ModuleImport(m[1..m.len() - 1].to_string(), Some(a)),
+    "import" "@" <p: IdentStr> => NodeKind::PackageImport(p, None),
+    "import" "@" <p: IdentStr> "as" <a: IdentStr> => NodeKind::PackageImport(p, Some(a)),
 };
 
 Print: NodeKind = {
