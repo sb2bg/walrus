@@ -111,6 +111,7 @@ impl ValueHolder {
         })
     }
 
+    // todo: speed this up
     pub fn stringify(&self, value: ValueKind) -> WalrusResult<String> {
         Ok(match value {
             ValueKind::Int(i) => i.to_string(),
