@@ -1034,16 +1034,16 @@ impl<'a> Interpreter<'a> {
         }
     }
 
-    fn is_truthy(&self, value: ValueKind, span: Span) -> Result<bool, WalrusError> {
+    fn is_truthy(&self, value: ValueKind, span: Span) -> WalrusResult<bool> {
         match value {
             ValueKind::Bool(b) => Ok(b),
-            value => Err(WalrusError::TypeMismatch {
+            value => Err(Box::new(WalrusError::TypeMismatch {
                 expected: "bool".to_string(),
                 found: value.get_type().to_string(),
                 span,
                 src: self.source_ref.source().to_string(),
                 filename: self.source_ref.filename().to_string(),
-            }),
+            })),
         }
     }
 
