@@ -13,7 +13,7 @@ impl SymbolTable {
     }
 
     pub fn push(&mut self, name: String) -> usize {
-        self.locals.push(Local::new(name, self.depth, discriminant));
+        self.locals.push(Local::new(name, self.depth));
         self.locals.len() - 1
     }
 
