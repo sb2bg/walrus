@@ -1,5 +1,4 @@
 use std::fmt::{Display, Formatter};
-use strena::Symbol;
 
 use crate::span::Span;
 
