@@ -106,9 +106,11 @@ impl ValueHolder {
     }
 
     fn check<T>(result: Option<T>) -> WalrusResult<T> {
-        result.ok_or(Box::new(WalrusError::UnknownError {
-            message: "Attempt to access released memory".into(), // fixme: use correct AccessReleasedMemory error
-        }))
+        result.ok_or_else(|| {
+            Box::new(WalrusError::UnknownError {
+                message: "Attempt to access released memory".into(), // fixme: use correct AccessReleasedMemory error
+            })
+        })
     }
 
     // todo: speed this up
