@@ -27,7 +27,7 @@ impl Program {
         file: Option<PathBuf>,
         parser: Option<ProgramParser>,
         interpreted: bool,
-    ) -> Result<Self, WalrusError> {
+    ) -> WalrusResult<Self> {
         let source_ref = match file {
             Some(file) => Some(get_source(file)?),
             None => None,
