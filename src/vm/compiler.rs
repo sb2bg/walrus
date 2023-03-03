@@ -124,12 +124,12 @@ impl<'a> BytecodeEmitter<'a> {
                 let index = match self.instructions.get_local(&name) {
                     Some(index) => index,
                     None => {
-                        return Err(WalrusError::UndefinedVariable {
+                        return Err(Box::new(WalrusError::UndefinedVariable {
                             name,
                             span,
                             src: self.source_ref.source().to_string(),
                             filename: self.source_ref.filename().to_string(),
-                        })
+                        }))
                     }
                 };
 
@@ -143,12 +143,12 @@ impl<'a> BytecodeEmitter<'a> {
                     }
 
                     if local.name() == name {
-                        return Err(WalrusError::RedefinedLocal {
+                        return Err(Box::new(WalrusError::RedefinedLocal {
                             name,
                             span,
                             src: self.source_ref.source().to_string(),
                             filename: self.source_ref.filename().to_string(),
-                        });
+                        }));
                     }
                 }
 
@@ -163,12 +163,12 @@ impl<'a> BytecodeEmitter<'a> {
                 let index = match self.instructions.get_local(name.value()) {
                     Some(index) => index,
                     None => {
-                        return Err(WalrusError::UndefinedVariable {
+                        return Err(Box::new(WalrusError::UndefinedVariable {
                             name: name.value().to_string(),
                             span,
                             src: self.source_ref.source().to_string(),
                             filename: self.source_ref.filename().to_string(),
-                        })
+                        }))
                     }
                 };
 

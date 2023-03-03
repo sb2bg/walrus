@@ -13,6 +13,7 @@ use crate::value::ValueKind;
 use crate::vm::compiler::BytecodeEmitter;
 use crate::vm::opcode::Opcode;
 use crate::vm::VM;
+use crate::WalrusResult;
 
 pub struct Program {
     source_ref: Option<OwnedSourceRef>,
@@ -123,22 +124,24 @@ impl Program {
     }
 }
 
-fn get_source(file: PathBuf) -> Result<OwnedSourceRef, WalrusError> {
+fn get_source(file: PathBuf) -> WalrusResult<OwnedSourceRef> {
     let filename = file.to_string_lossy();
 
-    let src = fs::read_to_string(&file).map_err(|_| WalrusError::FileNotFound {
-        filename: filename.to_string(),
+    let src = fs::read_to_string(&file).map_err(|_| {
+        Box::new(WalrusError::FileNotFound {
+            filename: filename.to_string(),
+        })
     })?;
 
     Ok(OwnedSourceRef::new(src, filename.to_string()))
 }
 
-fn prompt() -> Result<(), WalrusError> {
+fn prompt() -> WalrusResult<()> {
     print!("> ");
 
     stdout()
         .flush()
-        .map_err(|source| WalrusError::IOError { source })?;
+        .map_err(|source| Box::new(WalrusError::IOError { source }))?;
 
     Ok(())
 }

@@ -90,9 +90,9 @@ impl<'a> Interpreter<'a> {
                 Ok(self.visit_index_assign(*value, *index, *new_value)?)
             }
             NodeKind::Range(start, end) => Ok(self.visit_range(start, end)?),
-            node => Err(WalrusError::UnknownError {
+            node => Err(Box::new(WalrusError::UnknownError {
                 message: format!("Unknown node: {:?}", node),
-            }),
+            })),
         };
 
         debug!("Interpreted: {:?}", res);
@@ -100,14 +100,14 @@ impl<'a> Interpreter<'a> {
     }
 
     fn visit_variable(&self, name: &str, span: Span) -> InterpreterResult {
-        self.scope
-            .get(name)
-            .ok_or_else(|| WalrusError::UndefinedVariable {
+        self.scope.get(name).ok_or_else(|| {
+            Box::new(WalrusError::UndefinedVariable {
                 name: name.to_string(),
                 span,
                 src: self.source_ref.source().into(),
                 filename: self.source_ref.filename().into(),
             })
+        })
     }
 
     // fixme: returns in blocks that aren't immediately in a function don't return from the function, but from the block
@@ -151,9 +151,9 @@ impl<'a> Interpreter<'a> {
             Opcode::GreaterEqual => self.greater_equal(left_val, right_val, span),
             Opcode::And => self.and(left_val, right_val, span),
             Opcode::Or => self.or(left_val, right_val, span),
-            _ => Err(WalrusError::UnknownError {
+            _ => Err(Box::new(WalrusError::UnknownError {
                 message: format!("Unknown binary operator {}", op),
-            }),
+            })),
         }
         // fixme: the spans can cause the error span to sometimes be greater than the actual span of the
         // operation taking place because the spans get extended to the left and right of the operation
@@ -294,12 +294,12 @@ impl<'a> Interpreter<'a> {
     fn visit_throw(&mut self, value: Node, span: Span) -> InterpreterResult {
         let value = self.interpret(value)?;
 
-        Err(WalrusError::Exception {
+        Err(Box::new(WalrusError::Exception {
             message: value.stringify()?,
             span,
             src: self.source_ref.source().into(),
             filename: self.source_ref.filename().into(),
-        })
+        }))
     }
 
     fn visit_print(&mut self, value: Node) -> InterpreterResult {
@@ -386,12 +386,12 @@ impl<'a> Interpreter<'a> {
 
                 function.call(args, self.source_ref, span)
             }
-            _ => Err(WalrusError::NotCallable {
+            _ => Err(Box::new(WalrusError::NotCallable {
                 value: value.get_type().to_string(),
                 span: fn_span,
                 src: self.source_ref.source().to_string(),
                 filename: self.source_ref.filename().to_string(),
-            }),
+            })),
         }
     }
 
@@ -457,13 +457,13 @@ impl<'a> Interpreter<'a> {
                         let sublist = list[start as usize..(end + 1) as usize].to_vec();
                         Ok(HeapValue::List(sublist).alloc())
                     }
-                    _ => Err(WalrusError::InvalidIndexType {
+                    _ => Err(Box::new(WalrusError::InvalidIndexType {
                         non_indexable: value.get_type().to_string(),
                         index_type: index.get_type().to_string(),
                         span: index_span,
                         src: self.source_ref.source().into(),
                         filename: self.source_ref.filename().into(),
-                    }),
+                    })),
                 }
             }
             ValueKind::Dict(d) => {
@@ -538,21 +538,21 @@ impl<'a> Interpreter<'a> {
                         let substring = string[start as usize..(end + 1) as usize].to_string();
                         Ok(HeapValue::String(substring).alloc())
                     }
-                    _ => Err(WalrusError::InvalidIndexType {
+                    _ => Err(Box::new(WalrusError::InvalidIndexType {
                         non_indexable: value.get_type().to_string(),
                         index_type: index.get_type().to_string(),
                         span: index_span,
                         src: self.source_ref.source().into(),
                         filename: self.source_ref.filename().into(),
-                    }),
+                    })),
                 }
             }
-            _ => Err(WalrusError::NotIndexable {
+            _ => Err(Box::new(WalrusError::NotIndexable {
                 value: value.get_type().to_string(),
                 span: value_span,
                 src: self.source_ref.source().into(),
                 filename: self.source_ref.filename().into(),
-            }),
+            })),
         }
     }
 
@@ -654,12 +654,12 @@ impl<'a> Interpreter<'a> {
 
                 Ok(ValueKind::Void)
             }
-            _ => Err(WalrusError::NotIterable {
+            _ => Err(Box::new(WalrusError::NotIterable {
                 type_name: value.get_type().to_string(),
                 span: value_span,
                 src: self.source_ref.source().into(),
                 filename: self.source_ref.filename().into(),
-            }),
+            })),
         }
     }
 
@@ -701,13 +701,13 @@ impl<'a> Interpreter<'a> {
                         list[index as usize] = new_value;
                         Ok(ValueKind::Void)
                     }
-                    _ => Err(WalrusError::InvalidIndexType {
+                    _ => Err(Box::new(WalrusError::InvalidIndexType {
                         non_indexable: value.get_type().to_string(),
                         index_type: index.get_type().to_string(),
                         span: index_span,
                         src: self.source_ref.source().into(),
                         filename: self.source_ref.filename().into(),
-                    }),
+                    })),
                 }
             }
             ValueKind::Dict(d) => {
@@ -716,13 +716,13 @@ impl<'a> Interpreter<'a> {
 
                 Ok(ValueKind::Void)
             }
-            _ => Err(WalrusError::InvalidIndexType {
+            _ => Err(Box::new(WalrusError::InvalidIndexType {
                 non_indexable: value.get_type().to_string(),
                 index_type: index.get_type().to_string(),
                 span: index_span,
                 src: self.source_ref.source().into(),
                 filename: self.source_ref.filename().into(),
-            }),
+            })),
         }
     }
 
@@ -751,27 +751,27 @@ impl<'a> Interpreter<'a> {
                     start, start_span, end, end_span,
                 ))) // todo: check if this is lossy
             }
-            (ValueKind::Int(_), end) => Err(WalrusError::TypeMismatch {
+            (ValueKind::Int(_), end) => Err(Box::new(WalrusError::TypeMismatch {
                 expected: "int".to_string(),
                 found: end.get_type().to_string(),
                 span: end_span,
                 src: self.source_ref.source().into(),
                 filename: self.source_ref.filename().into(),
-            }),
-            (start, ValueKind::Int(_)) => Err(WalrusError::TypeMismatch {
+            })),
+            (start, ValueKind::Int(_)) => Err(Box::new(WalrusError::TypeMismatch {
                 expected: "int".to_string(),
                 found: start.get_type().to_string(),
                 span: start_span,
                 src: self.source_ref.source().into(),
                 filename: self.source_ref.filename().into(),
-            }),
-            (start, end) => Err(WalrusError::TypeMismatch {
+            })),
+            (start, end) => Err(Box::new(WalrusError::TypeMismatch {
                 expected: "int".to_string(),
                 found: format!("{} and {}", start.get_type(), end.get_type()),
                 span: start_span.extend(end_span),
                 src: self.source_ref.source().into(),
                 filename: self.source_ref.filename().into(),
-            }),
+            })),
         }
     }
 
@@ -830,11 +830,11 @@ impl<'a> Interpreter<'a> {
         match (left, right) {
             (ValueKind::Int(a), ValueKind::Int(b)) => {
                 if b == 0 {
-                    Err(WalrusError::DivisionByZero {
+                    Err(Box::new(WalrusError::DivisionByZero {
                         span,
                         src: self.source_ref.source().into(),
                         filename: self.source_ref.filename().into(),
-                    })
+                    }))
                 } else {
                     Ok(ValueKind::Int(a / b))
                 }
@@ -842,11 +842,11 @@ impl<'a> Interpreter<'a> {
 
             (ValueKind::Float(FloatOrd(a)), ValueKind::Float(FloatOrd(b))) => {
                 if b == 0.0 {
-                    Err(WalrusError::DivisionByZero {
+                    Err(Box::new(WalrusError::DivisionByZero {
                         span,
                         src: self.source_ref.source().into(),
                         filename: self.source_ref.filename().into(),
-                    })
+                    }))
                 } else {
                     Ok(ValueKind::Float(FloatOrd(a / b)))
                 }
@@ -859,22 +859,22 @@ impl<'a> Interpreter<'a> {
         match (left, right) {
             (ValueKind::Int(a), ValueKind::Int(b)) => {
                 if b == 0 {
-                    Err(WalrusError::DivisionByZero {
+                    Err(Box::new(WalrusError::DivisionByZero {
                         span,
                         src: self.source_ref.source().into(),
                         filename: self.source_ref.filename().into(),
-                    })
+                    }))
                 } else {
                     Ok(ValueKind::Int(a % b))
                 }
             }
             (ValueKind::Float(FloatOrd(a)), ValueKind::Float(FloatOrd(b))) => {
                 if b == 0.0 {
-                    Err(WalrusError::DivisionByZero {
+                    Err(Box::new(WalrusError::DivisionByZero {
                         span,
                         src: self.source_ref.source().into(),
                         filename: self.source_ref.filename().into(),
-                    })
+                    }))
                 } else {
                     Ok(ValueKind::Float(FloatOrd(a % b)))
                 }
@@ -897,13 +897,13 @@ impl<'a> Interpreter<'a> {
         match value {
             ValueKind::Int(a) => Ok(ValueKind::Int(-a)),
             ValueKind::Float(FloatOrd(a)) => Ok(ValueKind::Float(FloatOrd(-a))),
-            value => Err(WalrusError::InvalidUnaryOperation {
+            value => Err(Box::new(WalrusError::InvalidUnaryOperation {
                 op: Opcode::Subtract,
                 operand: value.get_type().to_string(),
                 span,
                 src: self.source_ref.source().to_string(),
                 filename: self.source_ref.filename().to_string(),
-            }),
+            })),
         }
     }
 
@@ -1024,13 +1024,13 @@ impl<'a> Interpreter<'a> {
     fn not(&self, value: ValueKind, span: Span) -> InterpreterResult {
         match value {
             ValueKind::Bool(a) => Ok(ValueKind::Bool(!a)),
-            value => Err(WalrusError::InvalidUnaryOperation {
+            value => Err(Box::new(WalrusError::InvalidUnaryOperation {
                 op: Opcode::Not,
                 operand: value.get_type().to_string(),
                 span,
                 src: self.source_ref.source().to_string(),
                 filename: self.source_ref.filename().to_string(),
-            }),
+            })),
         }
     }
 
@@ -1053,14 +1053,14 @@ impl<'a> Interpreter<'a> {
         left: ValueKind,
         right: ValueKind,
         span: Span,
-    ) -> WalrusError {
-        WalrusError::InvalidOperation {
+    ) -> Box<WalrusError> {
+        Box::new(WalrusError::InvalidOperation {
             op,
             left: left.get_type().to_string(),
             right: right.get_type().to_string(),
             span,
             src: self.source_ref.source().to_string(),
             filename: self.source_ref.filename().to_string(),
-        }
+        })
     }
 }
