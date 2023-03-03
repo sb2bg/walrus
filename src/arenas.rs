@@ -105,10 +105,10 @@ impl ValueHolder {
         Self::check(self.function_slotmap.get(key))
     }
 
-    fn check<T>(result: Option<T>) -> Result<T, WalrusError> {
-        result.ok_or(WalrusError::UnknownError {
+    fn check<T>(result: Option<T>) -> WalrusResult<T> {
+        result.ok_or(Box::new(WalrusError::UnknownError {
             message: "Attempt to access released memory".into(), // fixme: use correct AccessReleasedMemory error
-        })
+        }))
     }
 
     // todo: speed this up

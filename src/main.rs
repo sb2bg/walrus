@@ -56,7 +56,7 @@ struct Args {
     verbose: bool,
 }
 
-type WalrusResult<T> = Result<T, WalrusError>;
+type WalrusResult<T> = Result<T, Box<WalrusError>>;
 
 fn main() {
     panic::set_hook(Box::new(|err| {
@@ -98,9 +98,9 @@ fn setup_logger(debug: bool) -> WalrusResult<()> {
 
     match SimpleLogger::init(level, simplelog::Config::default()) {
         Ok(_) => Ok(()),
-        Err(err) => Err(WalrusError::UnknownError {
+        Err(err) => Err(Box::new(WalrusError::UnknownError {
             message: err.to_string(),
-        }),
+        })),
     }
 }
 

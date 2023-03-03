@@ -60,12 +60,12 @@ impl Scope {
                     ValueKind::String(key) => Ok(ValueKind::Int(key.resolve()?.len() as i64)),
                     ValueKind::List(key) => Ok(ValueKind::Int(key.resolve()?.len() as i64)),
                     ValueKind::Dict(key) => Ok(ValueKind::Int(key.resolve()?.len() as i64)),
-                    _ => Err(WalrusError::NoLength {
+                    _ => Err(Box::new(WalrusError::NoLength {
                         type_name: args[0].get_type().to_string(),
                         span,
                         src: source_ref.source().to_string(),
                         filename: source_ref.filename().to_string(),
-                    }),
+                    })),
                 },
             ))
             .alloc(),

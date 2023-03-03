@@ -107,13 +107,13 @@ impl<'a> VM<'a> {
                         // fixme: this is a catch all for now, break it into
                         // errors for left and right and then both
                         (left, right) => {
-                            return Err(WalrusError::TypeMismatch {
+                            return Err(Box::new(WalrusError::TypeMismatch {
                                 expected: "int".to_string(),
                                 found: format!("{} and {}", left.get_type(), right.get_type()),
                                 span,
                                 src: self.source_ref.source().into(),
                                 filename: self.source_ref.filename().into(),
-                            });
+                            }));
                         }
                     }
                 }
@@ -415,13 +415,13 @@ impl<'a> VM<'a> {
                             }
 
                             if b < 0 || b >= a.len() as i64 {
-                                return Err(WalrusError::IndexOutOfBounds {
+                                return Err(Box::new(WalrusError::IndexOutOfBounds {
                                     index: original,
                                     len: a.len(),
                                     span,
                                     src: self.source_ref.source().to_string(),
                                     filename: self.source_ref.filename().to_string(),
-                                });
+                                }));
                             }
 
                             self.push(a[b as usize]);
@@ -436,13 +436,13 @@ impl<'a> VM<'a> {
                             }
 
                             if b < 0 || b >= a.len() as i64 {
-                                return Err(WalrusError::IndexOutOfBounds {
+                                return Err(Box::new(WalrusError::IndexOutOfBounds {
                                     index: original,
                                     len: a.len(),
                                     span,
                                     src: self.source_ref.source().to_string(),
                                     filename: self.source_ref.filename().to_string(),
-                                });
+                                }));
                             }
 
                             let b = b as usize;
@@ -490,8 +490,8 @@ impl<'a> VM<'a> {
         a: ValueKind,
         b: Option<ValueKind>,
         span: Span,
-    ) -> WalrusError {
-        if let Some(b) = b {
+    ) -> Box<WalrusError> {
+        Box::new(if let Some(b) = b {
             WalrusError::InvalidOperation {
                 op,
                 left: a.get_type().to_string(),
@@ -508,7 +508,7 @@ impl<'a> VM<'a> {
                 src: self.source_ref.source().to_string(),
                 filename: self.source_ref.filename().to_string(),
             }
-        }
+        })
     }
 
     fn push(&mut self, value: ValueKind) {
@@ -516,9 +516,11 @@ impl<'a> VM<'a> {
     }
 
     fn get(&self, index: usize) -> WalrusResult<&ValueKind> {
-        self.stack.get(index).ok_or(WalrusError::UnknownError {
-            message: "Failed to resolve local variable stack index".to_string(),
-        })
+        self.stack
+            .get(index)
+            .ok_or(Box::new(WalrusError::UnknownError {
+                message: "Failed to resolve local variable stack index".to_string(),
+            }))
     }
 
     fn set(&mut self, index: usize, value: ValueKind) -> WalrusResult<()> {
@@ -526,19 +528,21 @@ impl<'a> VM<'a> {
             *slot = value;
             Ok(())
         } else {
-            Err(WalrusError::UnknownError {
+            Err(Box::new(WalrusError::UnknownError {
                 message: "Failed to resolve local variable stack index".to_string(),
-            })
+            }))
         }
     }
 
     fn pop(&mut self, op: Opcode, span: Span) -> WalrusResult<ValueKind> {
-        self.stack.pop().ok_or(WalrusError::StackUnderflow {
-            op,
-            span,
-            src: self.source_ref.source().to_string(),
-            filename: self.source_ref.filename().to_string(),
-        })
+        self.stack
+            .pop()
+            .ok_or(Box::new(WalrusError::StackUnderflow {
+                op,
+                span,
+                src: self.source_ref.source().to_string(),
+                filename: self.source_ref.filename().to_string(),
+            }))
     }
 
     fn stack_trace(&self) {
