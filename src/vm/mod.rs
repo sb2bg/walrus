@@ -37,7 +37,7 @@ impl<'a> VM<'a> {
 
     pub fn run(&mut self) -> WalrusResult<ValueKind> {
         loop {
-            // self.is.disassemble_single(self.ip);
+            self.is.disassemble_single(self.ip);
 
             let instruction = self.is.get(self.ip);
             let opcode = instruction.opcode();
@@ -516,11 +516,11 @@ impl<'a> VM<'a> {
     }
 
     fn get(&self, index: usize) -> WalrusResult<&ValueKind> {
-        self.stack
-            .get(index)
-            .ok_or(Box::new(WalrusError::UnknownError {
+        self.stack.get(index).ok_or_else(|| {
+            Box::new(WalrusError::UnknownError {
                 message: "Failed to resolve local variable stack index".to_string(),
-            }))
+            })
+        })
     }
 
     fn set(&mut self, index: usize, value: ValueKind) -> WalrusResult<()> {
@@ -535,14 +535,14 @@ impl<'a> VM<'a> {
     }
 
     fn pop(&mut self, op: Opcode, span: Span) -> WalrusResult<ValueKind> {
-        self.stack
-            .pop()
-            .ok_or(Box::new(WalrusError::StackUnderflow {
+        self.stack.pop().ok_or_else(|| {
+            Box::new(WalrusError::StackUnderflow {
                 op,
                 span,
                 src: self.source_ref.source().to_string(),
                 filename: self.source_ref.filename().to_string(),
-            }))
+            })
+        })
     }
 
     fn stack_trace(&self) {
