@@ -53,12 +53,12 @@ impl InstructionSet {
         self.locals.push(name)
     }
 
-    pub fn get_local(&self, name: &str) -> Option<usize> {
-        self.locals.resolve(name)
+    pub fn resolve_index(&self, name: &str) -> Option<usize> {
+        self.locals.resolve_index(name)
     }
 
-    pub fn local_iter(&self) -> impl DoubleEndedIterator<Item = &Local> {
-        self.locals.iter()
+    pub fn resolve_depth(&self, name: &str) -> Option<usize> {
+        self.locals.resolve_depth(name)
     }
 
     pub fn local_depth(&self) -> usize {

@@ -121,8 +121,10 @@ impl<'a> BytecodeEmitter<'a> {
                     .push(Instruction::new(Opcode::Print, span));
             }
             NodeKind::Ident(name) => {
-                let index = match self.instructions.get_local(&name) {
-                    Some(index) => index,
+                let index = match self.instructions.resolve_index(&name) {
+                    Some(index) => {
+                        dbg!(index)
+                    }
                     None => {
                         return Err(WalrusError::UndefinedVariable {
                             name,
@@ -137,12 +139,8 @@ impl<'a> BytecodeEmitter<'a> {
                     .push(Instruction::new(Opcode::Load(index), span));
             }
             NodeKind::Assign(name, node) => {
-                for local in self.instructions.local_iter().rev() {
-                    if local.depth() < self.instructions.local_depth() {
-                        break;
-                    }
-
-                    if local.name() == name {
+                if let Some(depth) = self.instructions.resolve_depth(&name) {
+                    if depth <= self.instructions.local_depth() {
                         return Err(WalrusError::RedefinedLocal {
                             name,
                             span,
@@ -160,7 +158,7 @@ impl<'a> BytecodeEmitter<'a> {
                     .push(Instruction::new(Opcode::Store(index), span));
             }
             NodeKind::Reassign(name, node, op) => {
-                let index = match self.instructions.get_local(name.value()) {
+                let index = match self.instructions.resolve_index(name.value()) {
                     Some(index) => index,
                     None => {
                         return Err(WalrusError::UndefinedVariable {
@@ -243,7 +241,7 @@ impl<'a> BytecodeEmitter<'a> {
     }
 
     pub fn instruction_set(self) -> InstructionSet {
-        self.instructions.disassemble();
+        // self.instructions.disassemble();
         self.instructions
     }
 }
