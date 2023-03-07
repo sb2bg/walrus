@@ -1,15 +1,15 @@
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 #[derive(Debug, Default)]
 pub struct SymbolTable {
-    locals: HashMap<String, Vec<Local>>,
+    locals: FxHashMap<String, Vec<Local>>,
     depth: usize,
 }
 
 impl SymbolTable {
     pub fn new() -> Self {
         Self {
-            locals: HashMap::new(),
+            locals: FxHashMap::default(),
             depth: 0,
         }
     }
@@ -58,18 +58,6 @@ impl SymbolTable {
 
     pub fn clear(&mut self) {
         self.locals.clear();
-    }
-
-    pub fn len(&self) -> usize {
-        self.locals.values().map(Vec::len).sum()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.locals.is_empty()
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = &Local> {
-        self.locals.values().flatten()
     }
 }
 
