@@ -121,9 +121,10 @@ impl<'a> BytecodeEmitter<'a> {
                     .push(Instruction::new(Opcode::Print, span));
             }
             NodeKind::Ident(name) => {
-                let index = match self.instructions.resolve_index(&name) {
+                match self.instructions.resolve_index(&name) {
                     Some(index) => {
-                        dbg!(index)
+                        self.instructions
+                            .push(Instruction::new(Opcode::Load(index), span));
                     }
                     None => {
                         return Err(WalrusError::UndefinedVariable {
@@ -134,9 +135,6 @@ impl<'a> BytecodeEmitter<'a> {
                         })
                     }
                 };
-
-                self.instructions
-                    .push(Instruction::new(Opcode::Load(index), span));
             }
             NodeKind::Assign(name, node) => {
                 if let Some(depth) = self.instructions.resolve_depth(&name) {
