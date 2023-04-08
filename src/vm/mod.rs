@@ -23,12 +23,14 @@ pub struct VM<'a> {
     ip: usize,
     is: InstructionSet,
     source_ref: SourceRef<'a>,
+    locals: Vec<ValueKind>,
 }
 
 impl<'a> VM<'a> {
     pub fn new(source_ref: SourceRef<'a>, is: InstructionSet) -> Self {
         Self {
             stack: Vec::new(),
+            locals: Vec::new(),
             ip: 0,
             is,
             source_ref,
@@ -37,7 +39,7 @@ impl<'a> VM<'a> {
 
     pub fn run(&mut self) -> WalrusResult<ValueKind> {
         loop {
-            // self.is.disassemble_single(self.ip);
+            self.is.disassemble_single(self.ip);
 
             let instruction = self.is.get(self.ip);
             let opcode = instruction.opcode();
@@ -50,15 +52,11 @@ impl<'a> VM<'a> {
                     self.push(self.is.get_constant(index));
                 }
                 Opcode::Load(index) => {
-                    todo!("load")
+                    self.push(self.locals[self.locals.len() - index - 1]);
                 }
                 Opcode::Store(index) => {
                     let value = self.pop(opcode, span)?;
-                    todo!("store")
-                }
-                Opcode::Reassign(index) => {
-                    let value = self.pop(opcode, span)?;
-                    todo!("reassign")
+                    self.locals.insert(index, value);
                 }
                 Opcode::List(cap) => {
                     let mut list = Vec::with_capacity(cap);
@@ -122,6 +120,9 @@ impl<'a> VM<'a> {
                 Opcode::Void => self.push(ValueKind::Void),
                 Opcode::Pop => {
                     self.pop(opcode, span)?;
+                }
+                Opcode::PopLocal => {
+                    self.locals.pop();
                 }
                 Opcode::Add => {
                     let b = self.pop(opcode, span)?;
@@ -533,7 +534,7 @@ impl<'a> VM<'a> {
     }
 
     fn pop(&mut self, op: Opcode, span: Span) -> WalrusResult<ValueKind> {
-        self.stack.pop().ok_or(WalrusError::StackUnderflow {
+        self.stack.pop().ok_or_else(|| WalrusError::StackUnderflow {
             op,
             span,
             src: self.source_ref.source().to_string(),
