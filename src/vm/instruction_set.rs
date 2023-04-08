@@ -3,7 +3,7 @@ use log::debug;
 use crate::arenas::ValueHolder;
 use crate::value::ValueKind;
 use crate::vm::opcode::Instruction;
-use crate::vm::symbol_table::{Local, SymbolTable};
+use crate::vm::symbol_table::SymbolTable;
 use crate::WalrusResult;
 
 #[derive(Default)]
@@ -63,6 +63,14 @@ impl InstructionSet {
 
     pub fn local_depth(&self) -> usize {
         self.locals.depth()
+    }
+
+    pub fn inc_depth(&mut self) {
+        self.locals.inc_depth();
+    }
+
+    pub fn dec_depth(&mut self) -> usize {
+        self.locals.dec_depth()
     }
 
     pub fn len(&self) -> usize {
