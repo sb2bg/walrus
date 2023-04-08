@@ -40,9 +40,11 @@ impl SymbolTable {
         self.depth += 1;
     }
 
-    pub fn dec_depth(&mut self) {
+    pub fn dec_depth(&mut self) -> usize {
         self.depth -= 1;
+        let len = self.locals.len();
         self.locals.retain(|local| local.depth() <= self.depth);
+        len - self.locals.len()
     }
 
     pub fn clear(&mut self) {
