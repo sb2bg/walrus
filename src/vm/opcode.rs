@@ -7,7 +7,6 @@ pub enum Opcode {
     LoadConst(usize), // usize pads the enum by 8 bytes
     Load(usize),
     Store(usize),
-    Reassign(usize),
     List(usize),
     Dict(usize),
     Range,
@@ -16,6 +15,7 @@ pub enum Opcode {
     Void,
     Return,
     Pop,
+    PopLocal,
     Add,
     Subtract,
     Multiply,
