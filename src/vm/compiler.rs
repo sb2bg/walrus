@@ -150,10 +150,10 @@ impl<'a> BytecodeEmitter<'a> {
                 }
 
                 self.emit(*node)?;
-                let index = self.instructions.push_local(name);
+                self.instructions.push_local(name);
 
                 self.instructions
-                    .push(Instruction::new(Opcode::Store(index), span));
+                    .push(Instruction::new(Opcode::Store, span));
             }
             NodeKind::Reassign(name, node, op) => {
                 let index = match self.instructions.resolve_index(name.value()) {
@@ -219,7 +219,7 @@ impl<'a> BytecodeEmitter<'a> {
                 }
 
                 self.instructions
-                    .push(Instruction::new(Opcode::Store(index), span));
+                    .push(Instruction::new(Opcode::Reassign(index), span));
             }
             NodeKind::Statements(nodes) => {
                 for node in nodes {
