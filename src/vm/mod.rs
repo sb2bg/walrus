@@ -52,11 +52,17 @@ impl<'a> VM<'a> {
                     self.push(self.is.get_constant(index));
                 }
                 Opcode::Load(index) => {
-                    self.push(self.locals[self.locals.len() - index - 1]);
+                    let index = self.locals.len() - index - 1;
+                    self.push(self.locals[index]);
                 }
-                Opcode::Store(index) => {
+                Opcode::Store => {
                     let value = self.pop(opcode, span)?;
-                    self.locals.insert(index, value);
+                    self.locals.push(value);
+                }
+                Opcode::Reassign(index) => {
+                    let value = self.pop(opcode, span)?;
+                    let index = self.locals.len() - index - 1;
+                    self.locals[index] = value;
                 }
                 Opcode::List(cap) => {
                     let mut list = Vec::with_capacity(cap);
