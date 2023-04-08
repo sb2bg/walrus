@@ -49,8 +49,8 @@ impl InstructionSet {
         &self.heap
     }
 
-    pub fn push_local(&mut self, name: String) -> usize {
-        self.locals.push(name)
+    pub fn push_local(&mut self, name: String) {
+        self.locals.push(name);
     }
 
     pub fn resolve_index(&self, name: &str) -> Option<usize> {
