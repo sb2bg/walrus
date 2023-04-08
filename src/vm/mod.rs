@@ -52,7 +52,6 @@ impl<'a> VM<'a> {
                     self.push(self.is.get_constant(index));
                 }
                 Opcode::Load(index) => {
-                    let index = self.locals.len() - index - 1;
                     self.push(self.locals[index]);
                 }
                 Opcode::Store => {
@@ -61,7 +60,6 @@ impl<'a> VM<'a> {
                 }
                 Opcode::Reassign(index) => {
                     let value = self.pop(opcode, span)?;
-                    let index = self.locals.len() - index - 1;
                     self.locals[index] = value;
                 }
                 Opcode::List(cap) => {

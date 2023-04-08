@@ -29,6 +29,7 @@ impl SymbolTable {
             .iter()
             .rev()
             .position(|local| local.name() == name)
+            .map(|index| self.locals.len() - index - 1)
     }
 
     pub fn depth(&self) -> usize {
