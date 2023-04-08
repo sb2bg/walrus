@@ -2,6 +2,7 @@ use crate::arenas::HeapValue;
 use crate::ast::{Node, NodeKind};
 use crate::error::WalrusError;
 use crate::source_ref::SourceRef;
+use crate::span::Span;
 use crate::value::ValueKind;
 use crate::vm::instruction_set::InstructionSet;
 use crate::vm::opcode::{Instruction, Opcode};
@@ -138,7 +139,7 @@ impl<'a> BytecodeEmitter<'a> {
             }
             NodeKind::Assign(name, node) => {
                 if let Some(depth) = self.instructions.resolve_depth(&name) {
-                    if depth <= self.instructions.local_depth() {
+                    if depth >= self.instructions.local_depth() {
                         return Err(WalrusError::RedefinedLocal {
                             name,
                             span,
@@ -149,7 +150,6 @@ impl<'a> BytecodeEmitter<'a> {
                 }
 
                 self.emit(*node)?;
-
                 let index = self.instructions.push_local(name);
 
                 self.instructions
@@ -219,7 +219,7 @@ impl<'a> BytecodeEmitter<'a> {
                 }
 
                 self.instructions
-                    .push(Instruction::new(Opcode::Reassign(index), span));
+                    .push(Instruction::new(Opcode::Store(index), span));
             }
             NodeKind::Statements(nodes) => {
                 for node in nodes {
@@ -236,6 +236,19 @@ impl<'a> BytecodeEmitter<'a> {
         }
 
         Ok(())
+    }
+
+    fn inc_depth(&mut self) {
+        self.instructions.inc_depth();
+    }
+
+    fn dec_depth(&mut self, span: Span) {
+        let popped = self.instructions.dec_depth();
+
+        for _ in 0..popped {
+            self.instructions
+                .push(Instruction::new(Opcode::PopLocal, span));
+        }
     }
 
     pub fn instruction_set(self) -> InstructionSet {
