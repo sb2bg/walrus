@@ -222,9 +222,13 @@ impl<'a> BytecodeEmitter<'a> {
                     .push(Instruction::new(Opcode::Reassign(index), span));
             }
             NodeKind::Statements(nodes) => {
+                self.inc_depth();
+
                 for node in nodes {
                     self.emit(node)?;
                 }
+
+                self.dec_depth(span);
             }
             NodeKind::Return(node) => {
                 self.emit(*node)?;
