@@ -102,6 +102,56 @@ impl<'a> BytecodeEmitter<'a> {
 
                 self.instructions.push(Instruction::new(op, span));
             }
+            NodeKind::If(cond, then, otherwise) => {
+                self.emit(*cond)?;
+
+                let jump = self.instructions.len();
+
+                self.instructions
+                    .push(Instruction::new(Opcode::JumpIfFalse(0), span));
+
+                self.emit(*then)?;
+
+                let jump_else = self.instructions.len();
+
+                self.instructions
+                    .push(Instruction::new(Opcode::Jump(0), span));
+
+                self.instructions.set(
+                    jump,
+                    Instruction::new(Opcode::JumpIfFalse(self.instructions.len()), span),
+                );
+
+                if let Some(otherwise) = otherwise {
+                    self.emit(*otherwise)?;
+                }
+
+                self.instructions.set(
+                    jump_else,
+                    // todo: check if span is right
+                    Instruction::new(Opcode::Jump(self.instructions.len()), span),
+                );
+            }
+            NodeKind::While(cond, body) => {
+                let start = self.instructions.len();
+
+                self.emit(*cond)?;
+
+                let jump = self.instructions.len();
+
+                self.instructions
+                    .push(Instruction::new(Opcode::JumpIfFalse(0), span));
+
+                self.emit(*body)?;
+
+                self.instructions
+                    .push(Instruction::new(Opcode::Jump(start), span));
+
+                self.instructions.set(
+                    jump,
+                    Instruction::new(Opcode::JumpIfFalse(self.instructions.len()), span),
+                );
+            }
             NodeKind::Index(node, index) => {
                 self.emit(*node)?;
                 self.emit(*index)?;
