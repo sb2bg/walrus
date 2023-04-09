@@ -128,6 +128,16 @@ impl<'a> VM<'a> {
                 Opcode::PopLocal => {
                     self.locals.pop();
                 }
+                Opcode::JumpIfFalse(offset) => {
+                    let value = self.pop(opcode, span)?;
+
+                    if let ValueKind::Bool(false) = value {
+                        self.ip = offset;
+                    }
+                }
+                Opcode::Jump(offset) => {
+                    self.ip = offset;
+                }
                 Opcode::Add => {
                     let b = self.pop(opcode, span)?;
                     let a = self.pop(opcode, span)?;
