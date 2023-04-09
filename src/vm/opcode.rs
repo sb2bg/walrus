@@ -9,6 +9,8 @@ pub enum Opcode {
     List(usize),
     Dict(usize),
     Reassign(usize),
+    JumpIfFalse(usize),
+    Jump(usize),
     Store,
     Range,
     True,
