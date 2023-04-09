@@ -81,6 +81,10 @@ impl InstructionSet {
         self.instructions.is_empty()
     }
 
+    pub fn set(&mut self, index: usize, instruction: Instruction) {
+        self.instructions[index] = instruction;
+    }
+
     pub fn disassemble(&self) {
         if !log::log_enabled!(log::Level::Debug) {
             return;
