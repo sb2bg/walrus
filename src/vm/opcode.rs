@@ -19,7 +19,6 @@ pub enum Opcode {
     Void,
     Return,
     Pop,
-    PopLocal,
     Add,
     Subtract,
     Multiply,
