@@ -51,7 +51,9 @@ impl<'a> Interpreter<'a> {
         let span = *node.span();
 
         let res = match node.into_kind() {
-            NodeKind::Statements(nodes) => Ok(self.visit_statements(nodes)?),
+            NodeKind::Program(nodes) | NodeKind::Statements(nodes) => {
+                Ok(self.visit_statements(nodes)?)
+            }
             NodeKind::BinOp(left, op, right) => Ok(self.visit_bin_op(*left, op, *right, span)?),
             NodeKind::UnaryOp(op, value) => Ok(self.visit_unary_op(op, *value, span)?),
             NodeKind::Int(num) => Ok(ValueKind::Int(num)),
