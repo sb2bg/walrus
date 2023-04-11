@@ -26,6 +26,11 @@ impl<'a> BytecodeEmitter<'a> {
         let span = *node.span();
 
         match node.into_kind() {
+            NodeKind::Program(nodes) => {
+                for node in nodes {
+                    self.emit(node)?;
+                }
+            }
             NodeKind::Int(value) => {
                 let index = self.instructions.push_constant(ValueKind::Int(value));
                 self.instructions

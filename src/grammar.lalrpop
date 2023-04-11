@@ -11,7 +11,11 @@ extern {
 }
 
 pub Program: Node = {
-    Sp<Statements>,
+    Sp<ProgramStatements>,
+};
+
+pub ProgramStatements: NodeKind = {
+    Statement* => NodeKind::Program(<>),
 };
 
 pub Statements: NodeKind = {
