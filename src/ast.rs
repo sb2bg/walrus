@@ -11,6 +11,7 @@ pub struct Node {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NodeKind {
+    Program(Vec<Node>),
     Statements(Vec<Node>),
     Int(i64),
     Float(FloatOrd<f64>),
@@ -71,6 +72,7 @@ impl Node {
 impl Display for NodeKind {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         match self {
+            NodeKind::Program(_) => write!(f, "Program"),
             NodeKind::Statements(_) => write!(f, "Statements"),
             NodeKind::Int(_) => write!(f, "Int"),
             NodeKind::Float(_) => write!(f, "Float"),
