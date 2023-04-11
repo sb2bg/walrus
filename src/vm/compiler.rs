@@ -304,10 +304,8 @@ impl<'a> BytecodeEmitter<'a> {
     fn dec_depth(&mut self, span: Span) {
         let popped = self.instructions.dec_depth();
 
-        for _ in 0..popped {
-            self.instructions
-                .push(Instruction::new(Opcode::PopLocal, span));
-        }
+        self.instructions
+            .push(Instruction::new(Opcode::PopLocal(popped), span));
     }
 
     pub fn instruction_set(self) -> InstructionSet {

@@ -125,8 +125,10 @@ impl<'a> VM<'a> {
                 Opcode::Pop => {
                     self.pop(opcode, span)?;
                 }
-                Opcode::PopLocal => {
-                    self.locals.pop();
+                Opcode::PopLocal(num) => {
+                    for _ in 0..num {
+                        self.locals.pop();
+                    }
                 }
                 Opcode::JumpIfFalse(offset) => {
                     let value = self.pop(opcode, span)?;
