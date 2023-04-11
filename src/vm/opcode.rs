@@ -11,6 +11,7 @@ pub enum Opcode {
     Reassign(usize),
     JumpIfFalse(usize),
     Jump(usize),
+    PopLocal(usize),
     Store,
     Range,
     True,
