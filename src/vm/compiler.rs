@@ -32,12 +32,12 @@ impl<'a> BytecodeEmitter<'a> {
                 }
             }
             NodeKind::Int(value) => {
-                let index = self.instructions.push_constant(ValueKind::Int(value));
+                let index = self.instructions.push_constant(Value::Int(value));
                 self.instructions
                     .push(Instruction::new(Opcode::LoadConst(index), span));
             }
             NodeKind::Float(value) => {
-                let index = self.instructions.push_constant(ValueKind::Float(value));
+                let index = self.instructions.push_constant(Value::Float(value));
                 self.instructions
                     .push(Instruction::new(Opcode::LoadConst(index), span));
             }
