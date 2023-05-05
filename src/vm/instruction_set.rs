@@ -1,7 +1,9 @@
+use std::fmt::Display;
+
 use log::debug;
 
 use crate::arenas::ValueHolder;
-use crate::value::ValueKind;
+use crate::value::Value;
 use crate::vm::opcode::Instruction;
 use crate::vm::symbol_table::SymbolTable;
 use crate::WalrusResult;
@@ -49,8 +51,8 @@ impl InstructionSet {
         &self.heap
     }
 
-    pub fn push_local(&mut self, name: String) {
-        self.locals.push(name);
+    pub fn push_local(&mut self, name: String) -> usize {
+        self.locals.push(name)
     }
 
     pub fn resolve_index(&self, name: &str) -> Option<usize> {
@@ -98,11 +100,23 @@ impl InstructionSet {
         }
     }
 
-    pub fn stringify(&self, value: ValueKind) -> WalrusResult<String> {
+    pub fn stringify(&self, value: Value) -> WalrusResult<String> {
         self.heap.stringify(value)
     }
 
     pub fn disassemble_single(&self, index: usize) {
         debug!("| {index:03} {:?}", self.instructions[index].opcode(),);
+    }
+}
+
+impl Display for InstructionSet {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "| == disassemble ==")?;
+
+        for (i, _) in self.instructions.iter().enumerate() {
+            writeln!(f, "| {i:03} {:?}", self.instructions[i].opcode(),)?;
+        }
+
+        Ok(())
     }
 }
