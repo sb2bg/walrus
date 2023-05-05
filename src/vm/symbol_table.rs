@@ -12,8 +12,9 @@ impl SymbolTable {
         }
     }
 
-    pub fn push(&mut self, name: String) {
+    pub fn push(&mut self, name: String) -> usize {
         self.locals.push(Local::new(name, self.depth));
+        self.locals.len() - 1
     }
 
     pub fn resolve_depth(&self, name: &str) -> Option<usize> {
