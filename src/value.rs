@@ -10,7 +10,7 @@ use crate::range::RangeValue;
 use crate::WalrusResult;
 
 #[derive(Debug, PartialEq, Eq, Copy, Clone, Hash)]
-pub enum ValueKind {
+pub enum Value {
     // todo: consolidate ints and floats into single number type
     Int(i64),
     Float(FloatOrd<f64>),
@@ -24,45 +24,49 @@ pub enum ValueKind {
     Void,
 }
 
-impl ValueKind {
+impl Value {
     pub fn get_type(&self) -> &str {
         match self {
-            ValueKind::Int(_) => "int",
-            ValueKind::Float(_) => "float",
-            ValueKind::Bool(_) => "bool",
-            ValueKind::Range(_) => "range",
-            ValueKind::String(_) => "string",
-            ValueKind::List(_) => "list",
-            ValueKind::Dict(_) => "dict",
-            ValueKind::Function(..) => "function",
-            ValueKind::RustFunction(..) => "builtin_function",
-            ValueKind::Void => "void",
+            Value::Int(_) => "int",
+            Value::Float(_) => "float",
+            Value::Bool(_) => "bool",
+            Value::Range(_) => "range",
+            Value::String(_) => "string",
+            Value::List(_) => "list",
+            Value::Tuple(_) => "tuple",
+            Value::Dict(_) => "dict",
+            Value::Function(..) => "function",
+            Value::RustFunction(..) => "builtin_function",
+            Value::Iter(_) => "iter",
+            Value::Void => "void",
         }
     }
 
     pub fn is_truthy(self) -> WalrusResult<bool> {
         Ok(match self {
-            ValueKind::Void => false,
-            ValueKind::Bool(b) => b,
-            ValueKind::Int(i) => i != 0,
-            ValueKind::Float(FloatOrd(f)) => f != 0.0,
-            ValueKind::String(s) => !s.resolve()?.is_empty(),
-            ValueKind::List(l) => !l.resolve()?.is_empty(),
-            ValueKind::Dict(d) => !d.resolve()?.is_empty(),
-            ValueKind::Range(r) => !r.is_empty(),
-            ValueKind::Function(_) => true,
-            ValueKind::RustFunction(_) => true,
+            Value::Void => false,
+            Value::Bool(b) => b,
+            Value::Int(i) => i != 0,
+            Value::Float(FloatOrd(f)) => f != 0.0,
+            Value::String(s) => !s.resolve()?.is_empty(),
+            Value::List(l) => !l.resolve()?.is_empty(),
+            Value::Tuple(t) => !t.resolve()?.is_empty(),
+            Value::Dict(d) => !d.resolve()?.is_empty(),
+            Value::Range(r) => !r.is_empty(),
+            Value::Function(_) => true,
+            Value::RustFunction(_) => true,
+            Value::Iter(_) => true,
         })
     }
 
     pub fn stringify(self) -> WalrusResult<String> {
         Ok(match self {
-            ValueKind::Int(i) => i.to_string(),
-            ValueKind::Float(FloatOrd(f)) => f.to_string(),
-            ValueKind::Bool(b) => b.to_string(),
-            ValueKind::Range(r) => r.to_string(),
-            ValueKind::String(s) => s.resolve()?.to_string(),
-            ValueKind::List(l) => {
+            Value::Int(i) => i.to_string(),
+            Value::Float(FloatOrd(f)) => f.to_string(),
+            Value::Bool(b) => b.to_string(),
+            Value::Range(r) => r.to_string(),
+            Value::String(s) => s.resolve()?.to_string(),
+            Value::List(l) => {
                 let list = l.resolve()?;
                 let mut s = String::new();
 
@@ -78,7 +82,23 @@ impl ValueKind {
                 s.push(']');
                 s
             }
-            ValueKind::Dict(d) => {
+            Value::Tuple(t) => {
+                let tuple = t.resolve()?;
+                let mut s = String::new();
+
+                s.push('(');
+
+                for (i, item) in tuple.iter().enumerate() {
+                    if i > 0 {
+                        s.push_str(", ");
+                    }
+                    s.push_str(&item.stringify()?);
+                }
+
+                s.push(')');
+                s
+            }
+            Value::Dict(d) => {
                 let dict = d.resolve()?;
                 let mut s = String::new();
 
@@ -96,7 +116,7 @@ impl ValueKind {
                 s.push('}');
                 s
             }
-            ValueKind::Function(f) => {
+            Value::Function(f) => {
                 let (name, args, _) = f.resolve()?;
                 let mut s = String::new();
 
@@ -114,7 +134,7 @@ impl ValueKind {
                 s.push(')');
                 s
             }
-            ValueKind::RustFunction(r) => {
+            Value::RustFunction(r) => {
                 let rust_func = r.resolve()?;
                 let mut s = String::new();
 
@@ -122,25 +142,28 @@ impl ValueKind {
                 s.push_str(rust_func.name());
                 s
             }
-            ValueKind::Void => "void".to_string(),
+            Value::Iter(_) => "iter".to_string(),
+            Value::Void => "void".to_string(),
         })
     }
 }
 
 // fixme: maybe replace with a to_string method, not impl
-impl Display for ValueKind {
+impl Display for Value {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
-            ValueKind::Int(int) => write!(f, "{}", int),
-            ValueKind::Float(FloatOrd(float)) => write!(f, "{}", float),
-            ValueKind::Bool(bool) => write!(f, "{}", bool),
-            ValueKind::Range(range) => write!(f, "{}", range),
-            ValueKind::String(str) => write!(f, "{:?}", str),
-            ValueKind::List(list) => write!(f, "{:?}", list),
-            ValueKind::Dict(dict) => write!(f, "{:?}", dict),
-            ValueKind::Function(func) => write!(f, "{:?}", func),
-            ValueKind::RustFunction(rust_func) => write!(f, "{:?}", rust_func),
-            ValueKind::Void => write!(f, "void"),
+            Value::Int(int) => write!(f, "{}", int),
+            Value::Float(FloatOrd(float)) => write!(f, "{}", float),
+            Value::Bool(bool) => write!(f, "{}", bool),
+            Value::Range(range) => write!(f, "{}", range),
+            Value::String(str) => write!(f, "{:?}", str),
+            Value::List(list) => write!(f, "{:?}", list),
+            Value::Tuple(tuple) => write!(f, "{:?}", tuple),
+            Value::Dict(dict) => write!(f, "{:?}", dict),
+            Value::Function(func) => write!(f, "{:?}", func),
+            Value::RustFunction(rust_func) => write!(f, "{:?}", rust_func),
+            Value::Iter(iter) => write!(f, "{:?}", iter),
+            Value::Void => write!(f, "void"),
         }
     }
 }

@@ -6,13 +6,13 @@ use rustc_hash::FxHashMap;
 use crate::arenas::{HeapValue, Resolve};
 use crate::error::WalrusError;
 use crate::rust_function::RustFunction;
-use crate::value::ValueKind;
+use crate::value::Value;
 
 #[derive(Debug)]
 pub struct Scope {
     name: String,
     // todo: add line and file name for stack trace
-    vars: FxHashMap<String, ValueKind>,
+    vars: FxHashMap<String, Value>,
     parent: Option<NonNull<Scope>>,
 }
 
@@ -26,7 +26,7 @@ impl Scope {
     }
 
     // fixme: this feels janky
-    fn create_builtins() -> FxHashMap<String, ValueKind> {
+    fn create_builtins() -> FxHashMap<String, Value> {
         let mut builtins = FxHashMap::default();
 
         builtins.insert(
@@ -41,11 +41,12 @@ impl Scope {
                         .map_err(|source| WalrusError::IOError { source })?;
 
                     let mut input = String::new();
+
                     std::io::stdin()
                         .read_line(&mut input)
                         .map_err(|source| WalrusError::IOError { source })?;
 
-                    Ok(HeapValue::String(input).alloc())
+                    Ok(HeapValue::String(&input).alloc())
                 },
             ))
             .alloc(),
@@ -57,9 +58,9 @@ impl Scope {
                 "len".to_string(),
                 Some(1),
                 |args, source_ref, span| match args[0] {
-                    ValueKind::String(key) => Ok(ValueKind::Int(key.resolve()?.len() as i64)),
-                    ValueKind::List(key) => Ok(ValueKind::Int(key.resolve()?.len() as i64)),
-                    ValueKind::Dict(key) => Ok(ValueKind::Int(key.resolve()?.len() as i64)),
+                    Value::String(key) => Ok(Value::Int(key.resolve()?.len() as i64)),
+                    Value::List(key) => Ok(Value::Int(key.resolve()?.len() as i64)),
+                    Value::Dict(key) => Ok(Value::Int(key.resolve()?.len() as i64)),
                     _ => Err(WalrusError::NoLength {
                         type_name: args[0].get_type().to_string(),
                         span,
@@ -82,7 +83,7 @@ impl Scope {
         }
     }
 
-    pub fn get(&self, name: &str) -> Option<ValueKind> {
+    pub fn get(&self, name: &str) -> Option<Value> {
         if let Some(value) = self.vars.get(name) {
             Some(*value)
         } else {
@@ -93,7 +94,7 @@ impl Scope {
         }
     }
 
-    pub fn assign(&mut self, name: String, value: ValueKind) {
+    pub fn assign(&mut self, name: String, value: Value) {
         if name == "_" {
             return;
         }
@@ -105,7 +106,7 @@ impl Scope {
         self.get(name).is_some()
     }
 
-    pub fn reassign<'a>(&'a mut self, name: &'a str, value: ValueKind) -> Result<(), &'a str> {
+    pub fn reassign<'a>(&'a mut self, name: &'a str, value: Value) -> Result<(), &'a str> {
         if self.vars.contains_key(name) {
             if let Some((entry, _)) = self.vars.remove_entry(name) {
                 self.vars.insert(entry, value);

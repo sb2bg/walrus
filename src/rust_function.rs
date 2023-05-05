@@ -1,19 +1,19 @@
 use crate::interpreter::InterpreterResult;
 use crate::source_ref::SourceRef;
 use crate::span::Span;
-use crate::value::ValueKind;
+use crate::value::Value;
 
 pub struct RustFunction {
     name: String,
     args: Option<usize>,
-    func: fn(Vec<ValueKind>, SourceRef, span: Span) -> InterpreterResult,
+    func: fn(Vec<Value>, SourceRef, span: Span) -> InterpreterResult,
 }
 
 impl RustFunction {
     pub fn new(
         name: String,
         args: Option<usize>,
-        func: fn(Vec<ValueKind>, SourceRef, Span) -> InterpreterResult,
+        func: fn(Vec<Value>, SourceRef, Span) -> InterpreterResult,
     ) -> Self {
         Self { name, args, func }
     }
@@ -26,12 +26,7 @@ impl RustFunction {
         self.args
     }
 
-    pub fn call(
-        &self,
-        args: Vec<ValueKind>,
-        source_ref: SourceRef,
-        span: Span,
-    ) -> InterpreterResult {
+    pub fn call(&self, args: Vec<Value>, source_ref: SourceRef, span: Span) -> InterpreterResult {
         (self.func)(args, source_ref, span)
     }
 }
