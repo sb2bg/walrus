@@ -60,6 +60,15 @@ impl<'a> VM<'a> {
                     let value = self.pop(opcode, span)?;
                     self.locals.push(value);
                 }
+                Opcode::StoreAt(index) => {
+                    let value = self.pop(opcode, span)?;
+
+                    if index == self.locals.len() {
+                        self.locals.push(value);
+                    }
+
+                    self.locals[index] = value;
+                }
                 Opcode::Reassign(index) => {
                     let value = self.pop(opcode, span)?;
                     self.locals[index] = value;
@@ -142,6 +151,37 @@ impl<'a> VM<'a> {
                 Opcode::Jump(offset) => {
                     self.ip = offset;
                 }
+                Opcode::GetIter => {
+                    let value = self.pop(opcode, span)?;
+                    let iter = self.is.get_heap_mut().value_to_iter(value)?;
+                    self.push(iter);
+                }
+                Opcode::IterNext(offset) => {
+                    let iter = self.pop(opcode, span)?;
+
+                    match iter {
+                        Value::Iter(key) => unsafe {
+                            let mut ptr = NonNull::from(self.is.get_heap_mut());
+                            let iter = ptr.as_mut().get_mut_iter(key)?;
+
+                            if let Some(value) = iter.next(self.is.get_heap_mut()) {
+                                // fixme: if another value gets pushed on the stack, this will be wrong
+                                self.push(Value::Iter(key));
+                                self.push(value);
+                            } else {
+                                self.ip = offset;
+                            }
+                        },
+                        value => {
+                            return Err(WalrusError::NotIterable {
+                                type_name: value.get_type().to_string(),
+                                span,
+                                src: self.source_ref.source().into(),
+                                filename: self.source_ref.filename().into(),
+                            });
+                        }
+                    }
+                }
                 Opcode::Add => {
                     let b = self.pop(opcode, span)?;
                     let a = self.pop(opcode, span)?;
@@ -208,8 +248,16 @@ impl<'a> VM<'a> {
                         (Value::Float(FloatOrd(a)), Value::Float(FloatOrd(b))) => {
                             self.push(Value::Float(FloatOrd(a * b)));
                         }
-                        (ValueKind::Float(FloatOrd(a)), ValueKind::Float(FloatOrd(b))) => {
-                            self.push(ValueKind::Float(FloatOrd(a * b)));
+                        (Value::List(a), Value::Int(b)) | (Value::Int(b), Value::List(a)) => {
+                            let a = self.is.get_heap().get_list(a)?;
+                            let mut list = Vec::with_capacity(a.len() * b as usize);
+
+                            for _ in 0..b {
+                                list.extend(a);
+                            }
+
+                            let value = self.is.get_heap_mut().push(HeapValue::List(list));
+                            self.push(value);
                         }
                         _ => return Err(self.construct_err(opcode, a, Some(b), span)),
                     }
