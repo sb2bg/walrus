@@ -1,11 +1,12 @@
-use crate::span::Span;
 use std::hash::{Hash, Hasher};
+
+use crate::span::Span;
 
 #[derive(Copy, Clone, Debug)]
 pub struct RangeValue {
-    start: i64,
+    pub start: i64,
     start_span: Span,
-    end: i64,
+    pub end: i64,
     end_span: Span,
 }
 
