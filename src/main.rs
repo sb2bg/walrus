@@ -8,12 +8,13 @@ use simplelog::SimpleLogger;
 
 use crate::error::WalrusError;
 use crate::interpreter::InterpreterResult;
-use crate::program::Program;
+use crate::program::{Opts, Program};
 
 mod arenas;
 mod ast;
 mod error;
 mod interpreter;
+mod iter;
 mod program;
 mod range;
 mod rust_function;
@@ -81,12 +82,24 @@ fn main() {
 fn try_main() -> WalrusResult<()> {
     let args = Args::parse();
     setup_logger(args.debug)?;
-    create_shell(args.file, args.interpreted)?;
+
+    let opts = match (args.interpreted, args.disassemble) {
+        (true, false) => Opts::Interpret,
+        (false, true) => Opts::Disassemble,
+        (false, false) => Opts::Compile,
+        (true, true) => {
+            return Err(WalrusError::GenericError {
+                message: "Invalid combination of program arguments.".to_string(),
+            })
+        }
+    };
+
+    create_shell(args.file, opts)?;
     Ok(())
 }
 
-pub fn create_shell(file: Option<PathBuf>, interpreted: bool) -> InterpreterResult {
-    Program::new(file, None, interpreted)?.execute()
+pub fn create_shell(file: Option<PathBuf>, opts: Opts) -> InterpreterResult {
+    Program::new(file, None, opts)?.execute()
 }
 
 fn setup_logger(debug: bool) -> WalrusResult<()> {
