@@ -157,6 +157,32 @@ impl<'a> BytecodeEmitter<'a> {
                     Instruction::new(Opcode::JumpIfFalse(self.instructions.len()), span),
                 );
             }
+            NodeKind::For(name, iter, body) => {
+                self.emit(*iter)?;
+
+                self.instructions
+                    .push(Instruction::new(Opcode::GetIter, span));
+
+                let jump = self.instructions.len();
+
+                self.instructions
+                    .push(Instruction::new(Opcode::IterNext(0), span));
+
+                let index = self.instructions.push_local(name);
+
+                self.instructions
+                    .push(Instruction::new(Opcode::StoreAt(index), span));
+
+                self.emit(*body)?;
+
+                self.instructions
+                    .push(Instruction::new(Opcode::Jump(jump), span));
+
+                self.instructions.set(
+                    jump,
+                    Instruction::new(Opcode::IterNext(self.instructions.len()), span),
+                );
+            }
             NodeKind::Index(node, index) => {
                 self.emit(*node)?;
                 self.emit(*index)?;
