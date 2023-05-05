@@ -327,8 +327,10 @@ impl<'a> BytecodeEmitter<'a> {
     fn dec_depth(&mut self, span: Span) {
         let popped = self.instructions.dec_depth();
 
-        self.instructions
-            .push(Instruction::new(Opcode::PopLocal(popped), span));
+        if popped > 0 {
+            self.instructions
+                .push(Instruction::new(Opcode::PopLocal(popped), span));
+        }
     }
 
     fn define_variable(&mut self, name: String, span: Span) {
