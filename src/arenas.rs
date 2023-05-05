@@ -159,9 +159,10 @@ impl ValueHolder {
             Value::Range(range) => self.push(HeapValue::Iter(Box::new(RangeIter::new(range)))),
             Value::Iter(iter) => Value::Iter(iter),
             _ => {
-                return Err(WalrusError::GenericError {
+                return Err(WalrusError::TodoError {
+                    //todo
                     message: "TODO: implement error for not iterable".into(),
-                })
+                });
             }
         };
 
