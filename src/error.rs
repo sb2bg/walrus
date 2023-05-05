@@ -83,6 +83,13 @@ pub enum WalrusError {
     #[error("Unknown error '{message}'. Please report this bug with the following information: Glass Version = '{}', Git Revision = '{}'", env!("CARGO_PKG_VERSION"), git_version!(fallback = "flamegraph"))]
     UnknownError { message: String },
 
+    #[error("{message}")]
+    GenericError { message: String },
+
+    // temporary error for development
+    #[error("{message}")]
+    TodoError { message: String },
+
     #[error("IO error occurred while reading/writing")]
     IOError {
         #[from]
