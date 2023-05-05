@@ -5,9 +5,12 @@ use std::hash::Hash;
 use float_ord::FloatOrd;
 use strena::Symbol;
 
-use crate::arenas::{DictKey, FuncKey, ListKey, Resolve, RustFuncKey};
+use crate::arenas::{DictKey, FuncKey, IterKey, ListKey, Resolve, RustFuncKey, TupleKey};
+use crate::iter::ValueIterator;
 use crate::range::RangeValue;
 use crate::WalrusResult;
+
+pub type ValueIter = Box<dyn ValueIterator>;
 
 #[derive(Debug, PartialEq, Eq, Copy, Clone, Hash)]
 pub enum Value {
@@ -18,9 +21,11 @@ pub enum Value {
     Range(RangeValue),
     String(Symbol),
     List(ListKey),
+    Tuple(TupleKey),
     Dict(DictKey),
     Function(FuncKey),
     RustFunction(RustFuncKey),
+    Iter(IterKey),
     Void,
 }
 

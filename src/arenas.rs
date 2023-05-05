@@ -6,6 +6,7 @@ use strena::{Interner, Symbol};
 
 use crate::ast::Node;
 use crate::error::WalrusError;
+use crate::iter::{CollectionIter, DictIter, RangeIter, StrIter};
 use crate::rust_function::RustFunction;
 use crate::value::{Value, ValueIter};
 use crate::WalrusResult;
@@ -28,6 +29,7 @@ pub struct ValueHolder {
     string_interner: Interner,
     function_slotmap: DenseSlotMap<FuncKey, (String, Vec<String>, Node)>,
     rust_function_slotmap: DenseSlotMap<RustFuncKey, RustFunction>,
+    iter_slotmap: DenseSlotMap<IterKey, ValueIter>,
 }
 
 impl ValueHolder {
@@ -35,40 +37,61 @@ impl ValueHolder {
         Self {
             dict_slotmap: DenseSlotMap::with_key(),
             list_slotmap: DenseSlotMap::with_key(),
+            tuple_slotmap: DenseSlotMap::with_key(),
             string_interner: Interner::default(), // todo: use FxHasher
             function_slotmap: DenseSlotMap::with_key(),
             rust_function_slotmap: DenseSlotMap::with_key(),
+            iter_slotmap: DenseSlotMap::with_key(),
         }
     }
 
-    pub fn free(&mut self, key: ValueKind) -> bool {
+    pub fn free(&mut self, key: Value) -> bool {
         match key {
-            ValueKind::Dict(key) => self.dict_slotmap.remove(key).is_some(),
-            ValueKind::List(key) => self.list_slotmap.remove(key).is_some(),
-            ValueKind::String(key) => {
+            Value::Dict(key) => self.dict_slotmap.remove(key).is_some(),
+            Value::List(key) => self.list_slotmap.remove(key).is_some(),
+            Value::String(key) => {
                 // fixme: for now, no way to free strings
                 // self.string_interner.remove(key).is_some()
                 false
             }
-            ValueKind::Function(key) => self.function_slotmap.remove(key).is_some(),
-            ValueKind::RustFunction(key) => self.rust_function_slotmap.remove(key).is_some(),
+            Value::Function(key) => self.function_slotmap.remove(key).is_some(),
+            Value::RustFunction(key) => self.rust_function_slotmap.remove(key).is_some(),
+            Value::Tuple(key) => self.tuple_slotmap.remove(key).is_some(),
+            Value::Iter(key) => self.iter_slotmap.remove(key).is_some(),
             _ => false,
         }
     }
 
     // todo: split this into multiple functions for each type
-    pub fn push(&mut self, value: HeapValue) -> ValueKind {
+    pub fn push(&mut self, value: HeapValue) -> Value {
         match value {
-            HeapValue::List(list) => ValueKind::List(self.list_slotmap.insert(list)),
-            HeapValue::Dict(dict) => ValueKind::Dict(self.dict_slotmap.insert(dict)),
-            HeapValue::Function(func) => ValueKind::Function(self.function_slotmap.insert(func)),
+            HeapValue::List(list) => Value::List(self.list_slotmap.insert(list)),
+            HeapValue::Tuple(tuple) => Value::Tuple(self.tuple_slotmap.insert(tuple.to_vec())),
+            HeapValue::Dict(dict) => Value::Dict(self.dict_slotmap.insert(dict)),
+            HeapValue::Function(func) => Value::Function(self.function_slotmap.insert(func)),
             HeapValue::RustFunction(rust_func) => {
-                ValueKind::RustFunction(self.rust_function_slotmap.insert(rust_func))
+                Value::RustFunction(self.rust_function_slotmap.insert(rust_func))
             }
-            HeapValue::String(string) => {
-                ValueKind::String(self.string_interner.get_or_insert(&string))
-            }
+            HeapValue::String(string) => Value::String(self.string_interner.get_or_insert(string)),
+            HeapValue::Iter(iter) => Value::Iter(self.iter_slotmap.insert(iter)),
         }
+    }
+
+    pub fn is_truthy(&self, value: Value) -> WalrusResult<bool> {
+        Ok(match value {
+            Value::Bool(b) => b,
+            Value::Int(i) => i != 0,
+            Value::Float(f) => f != FloatOrd(0.0),
+            Value::String(s) => !self.get_string(s)?.is_empty(),
+            Value::List(l) => !self.get_list(l)?.is_empty(),
+            Value::Dict(d) => !self.get_dict(d)?.is_empty(),
+            Value::Tuple(t) => !self.get_tuple(t)?.is_empty(),
+            Value::Range(range) => !range.is_empty(),
+            Value::Function(_) => true,
+            Value::Iter(_) => true,
+            Value::RustFunction(_) => true,
+            Value::Void => false,
+        })
     }
 
     pub fn push_ident(&mut self, ident: &str) -> Symbol {
@@ -79,23 +102,24 @@ impl ValueHolder {
         Self::check(self.rust_function_slotmap.get(key))
     }
 
-    pub fn get_mut_dict(
-        &mut self,
-        key: DictKey,
-    ) -> WalrusResult<&mut FxHashMap<ValueKind, ValueKind>> {
+    pub fn get_mut_dict(&mut self, key: DictKey) -> WalrusResult<&mut FxHashMap<Value, Value>> {
         Self::check(self.dict_slotmap.get_mut(key))
     }
 
-    pub fn get_dict(&self, key: DictKey) -> WalrusResult<&FxHashMap<ValueKind, ValueKind>> {
+    pub fn get_dict(&self, key: DictKey) -> WalrusResult<&FxHashMap<Value, Value>> {
         Self::check(self.dict_slotmap.get(key))
     }
 
-    pub fn get_mut_list(&mut self, key: ListKey) -> WalrusResult<&mut Vec<ValueKind>> {
+    pub fn get_mut_list(&mut self, key: ListKey) -> WalrusResult<&mut Vec<Value>> {
         Self::check(self.list_slotmap.get_mut(key))
     }
 
-    pub fn get_list(&self, key: ListKey) -> WalrusResult<&Vec<ValueKind>> {
+    pub fn get_list(&self, key: ListKey) -> WalrusResult<&Vec<Value>> {
         Self::check(self.list_slotmap.get(key))
+    }
+
+    pub fn get_tuple(&self, key: TupleKey) -> WalrusResult<&Vec<Value>> {
+        Self::check(self.tuple_slotmap.get(key))
     }
 
     pub fn get_string(&self, key: Symbol) -> WalrusResult<&str> {
@@ -106,21 +130,59 @@ impl ValueHolder {
         Self::check(self.function_slotmap.get(key))
     }
 
-    fn check<T>(result: Option<T>) -> Result<T, WalrusError> {
+    pub fn get_iter(&self, key: IterKey) -> WalrusResult<&ValueIter> {
+        Self::check(self.iter_slotmap.get(key))
+    }
+
+    pub fn get_mut_iter(&mut self, key: IterKey) -> WalrusResult<&mut ValueIter> {
+        Self::check(self.iter_slotmap.get_mut(key))
+    }
+
+    pub fn value_to_iter(&mut self, value: Value) -> WalrusResult<Value> {
+        let key = match value {
+            Value::List(list) => {
+                let iter = CollectionIter::new(self.get_list(list)?.clone());
+                self.push(HeapValue::Iter(Box::new(iter)))
+            }
+            Value::Tuple(tuple) => {
+                let iter = CollectionIter::new(self.get_tuple(tuple)?.clone());
+                self.push(HeapValue::Iter(Box::new(iter)))
+            }
+            Value::Dict(dict) => {
+                let iter = DictIter::new(self.get_dict(dict)?.clone());
+                self.push(HeapValue::Iter(Box::new(iter)))
+            }
+            Value::String(string) => {
+                let iter = StrIter::new(self.get_string(string)?.to_string());
+                self.push(HeapValue::Iter(Box::new(iter)))
+            }
+            Value::Range(range) => self.push(HeapValue::Iter(Box::new(RangeIter::new(range)))),
+            Value::Iter(iter) => Value::Iter(iter),
+            _ => {
+                return Err(WalrusError::GenericError {
+                    message: "TODO: implement error for not iterable".into(),
+                })
+            }
+        };
+
+        Ok(key)
+    }
+
+    fn check<T>(result: Option<T>) -> WalrusResult<T> {
         result.ok_or(WalrusError::UnknownError {
             message: "Attempt to access released memory".into(), // fixme: use correct AccessReleasedMemory error
         })
     }
 
     // todo: speed this up
-    pub fn stringify(&self, value: ValueKind) -> WalrusResult<String> {
+    pub fn stringify(&self, value: Value) -> WalrusResult<String> {
         Ok(match value {
-            ValueKind::Int(i) => i.to_string(),
-            ValueKind::Float(FloatOrd(f)) => f.to_string(),
-            ValueKind::Bool(b) => b.to_string(),
-            ValueKind::Range(r) => r.to_string(),
-            ValueKind::String(s) => self.get_string(s)?.to_string(),
-            ValueKind::List(l) => {
+            Value::Int(i) => i.to_string(),
+            Value::Float(FloatOrd(f)) => f.to_string(),
+            Value::Bool(b) => b.to_string(),
+            Value::Range(r) => r.to_string(),
+            Value::String(s) => self.get_string(s)?.to_string(),
+            Value::List(l) => {
                 let list = self.get_list(l)?;
                 let mut s = String::new();
 
@@ -136,7 +198,23 @@ impl ValueHolder {
                 s.push(']');
                 s
             }
-            ValueKind::Dict(d) => {
+            Value::Tuple(t) => {
+                let tuple = self.get_tuple(t)?;
+                let mut s = String::new();
+
+                s.push('(');
+
+                for (i, &item) in tuple.iter().enumerate() {
+                    if i > 0 {
+                        s.push_str(", ");
+                    }
+                    s.push_str(&self.stringify(item)?);
+                }
+
+                s.push(')');
+                s
+            }
+            Value::Dict(d) => {
                 let dict = self.get_dict(d)?;
                 let mut s = String::new();
 
@@ -154,7 +232,7 @@ impl ValueHolder {
                 s.push('}');
                 s
             }
-            ValueKind::Function(f) => {
+            Value::Function(f) => {
                 let (name, args, _) = self.get_function(f)?;
                 let mut s = String::new();
 
@@ -172,29 +250,34 @@ impl ValueHolder {
                 s.push(')');
                 s
             }
-            ValueKind::RustFunction(r) => {
+            Value::RustFunction(r) => {
                 let rust_func = self.get_rust_function(r)?;
                 let mut s = String::new();
 
-                s.push_str("rust_function ");
+                s.push_str("<rust function ");
                 s.push_str(rust_func.name());
+                s.push('>');
+
                 s
             }
-            ValueKind::Void => "void".to_string(),
+            Value::Iter(_) => "<iter object>".to_string(),
+            Value::Void => "void".to_string(),
         })
     }
 }
 
-pub enum HeapValue {
-    List(Vec<ValueKind>),
-    Dict(FxHashMap<ValueKind, ValueKind>),
+pub enum HeapValue<'a> {
+    List(Vec<Value>),
+    Tuple(&'a [Value]),
+    Dict(FxHashMap<Value, Value>),
     Function((String, Vec<String>, Node)),
     RustFunction(RustFunction),
-    String(String),
+    String(&'a str),
+    Iter(ValueIter),
 }
 
-impl HeapValue {
-    pub fn alloc(self) -> ValueKind {
+impl HeapValue<'_> {
+    pub fn alloc(self) -> Value {
         unsafe { ARENA.push(self) }
     }
 }
@@ -204,6 +287,8 @@ new_key_type! {
     pub struct DictKey;
     pub struct FuncKey;
     pub struct RustFuncKey;
+    pub struct TupleKey;
+    pub struct IterKey;
 }
 
 pub trait Free {
@@ -220,14 +305,14 @@ pub trait ResolveMut<'a> {
     fn resolve_mut(self) -> WalrusResult<Self::Output>;
 }
 
-impl Free for ValueKind {
+impl Free for Value {
     fn free(&mut self) -> bool {
         unsafe { ARENA.free(*self) }
     }
 }
 
 impl<'a> Resolve<'a> for ListKey {
-    type Output = &'a Vec<ValueKind>;
+    type Output = &'a Vec<Value>;
 
     fn resolve(self) -> WalrusResult<Self::Output> {
         unsafe { ARENA.get_list(self) }
@@ -235,7 +320,7 @@ impl<'a> Resolve<'a> for ListKey {
 }
 
 impl<'a> Resolve<'a> for DictKey {
-    type Output = &'a FxHashMap<ValueKind, ValueKind>;
+    type Output = &'a FxHashMap<Value, Value>;
 
     fn resolve(self) -> WalrusResult<Self::Output> {
         unsafe { ARENA.get_dict(self) }
@@ -267,7 +352,7 @@ impl<'a> Resolve<'a> for Symbol {
 }
 
 impl<'a> ResolveMut<'a> for ListKey {
-    type Output = &'a mut Vec<ValueKind>;
+    type Output = &'a mut Vec<Value>;
 
     fn resolve_mut(self) -> WalrusResult<Self::Output> {
         unsafe { ARENA.get_mut_list(self) }
@@ -275,9 +360,17 @@ impl<'a> ResolveMut<'a> for ListKey {
 }
 
 impl<'a> ResolveMut<'a> for DictKey {
-    type Output = &'a mut FxHashMap<ValueKind, ValueKind>;
+    type Output = &'a mut FxHashMap<Value, Value>;
 
     fn resolve_mut(self) -> WalrusResult<Self::Output> {
         unsafe { ARENA.get_mut_dict(self) }
+    }
+}
+
+impl<'a> Resolve<'a> for TupleKey {
+    type Output = &'a Vec<Value>;
+
+    fn resolve(self) -> WalrusResult<Self::Output> {
+        unsafe { ARENA.get_tuple(self) }
     }
 }
