@@ -231,10 +231,7 @@ impl<'a> BytecodeEmitter<'a> {
                 }
 
                 self.emit(*node)?;
-                self.instructions.push_local(name);
-
-                self.instructions
-                    .push(Instruction::new(Opcode::Store, span));
+                self.define_variable(name, span);
             }
             NodeKind::Reassign(name, node, op) => {
                 let index = match self.instructions.resolve_index(name.value()) {
@@ -332,6 +329,13 @@ impl<'a> BytecodeEmitter<'a> {
 
         self.instructions
             .push(Instruction::new(Opcode::PopLocal(popped), span));
+    }
+
+    fn define_variable(&mut self, name: String, span: Span) {
+        self.instructions.push_local(name);
+
+        self.instructions
+            .push(Instruction::new(Opcode::Store, span));
     }
 
     pub fn instruction_set(self) -> InstructionSet {
