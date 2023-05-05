@@ -9,7 +9,7 @@ use crate::error::{parser_err_mapper, WalrusError};
 use crate::grammar::ProgramParser;
 use crate::interpreter::{Interpreter, InterpreterResult};
 use crate::source_ref::{OwnedSourceRef, SourceRef};
-use crate::value::ValueKind;
+use crate::value::Value;
 use crate::vm::compiler::BytecodeEmitter;
 use crate::vm::opcode::Opcode;
 use crate::vm::VM;

@@ -3,7 +3,7 @@ use crate::ast::{Node, NodeKind};
 use crate::error::WalrusError;
 use crate::source_ref::SourceRef;
 use crate::span::Span;
-use crate::value::ValueKind;
+use crate::value::Value;
 use crate::vm::instruction_set::InstructionSet;
 use crate::vm::opcode::{Instruction, Opcode};
 use crate::WalrusResult;

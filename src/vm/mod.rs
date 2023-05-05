@@ -1,3 +1,5 @@
+use std::ptr::NonNull;
+
 use float_ord::FloatOrd;
 use log::{debug, log_enabled};
 use rustc_hash::FxHashMap;
@@ -9,7 +11,7 @@ use crate::error::WalrusError;
 use crate::range::RangeValue;
 use crate::source_ref::SourceRef;
 use crate::span::Span;
-use crate::value::ValueKind;
+use crate::value::Value;
 use crate::vm::opcode::Opcode;
 use crate::WalrusResult;
 
@@ -19,11 +21,11 @@ pub mod opcode;
 mod symbol_table;
 
 pub struct VM<'a> {
-    stack: Vec<ValueKind>,
+    stack: Vec<Value>,
     ip: usize,
     is: InstructionSet,
     source_ref: SourceRef<'a>,
-    locals: Vec<ValueKind>,
+    locals: Vec<Value>,
 }
 
 impl<'a> VM<'a> {
@@ -37,7 +39,7 @@ impl<'a> VM<'a> {
         }
     }
 
-    pub fn run(&mut self) -> WalrusResult<ValueKind> {
+    pub fn run(&mut self) -> WalrusResult<Value> {
         loop {
             self.is.disassemble_single(self.ip);
 
@@ -94,17 +96,17 @@ impl<'a> VM<'a> {
 
                     // fixme: the spans are wrong here
                     match (left, right) {
-                        (ValueKind::Void, ValueKind::Void) => {
-                            self.push(ValueKind::Range(RangeValue::new(0, span, -1, span)));
+                        (Value::Void, Value::Void) => {
+                            self.push(Value::Range(RangeValue::new(0, span, -1, span)));
                         }
-                        (ValueKind::Void, ValueKind::Int(right)) => {
-                            self.push(ValueKind::Range(RangeValue::new(0, span, right, span)));
+                        (Value::Void, Value::Int(right)) => {
+                            self.push(Value::Range(RangeValue::new(0, span, right, span)));
                         }
-                        (ValueKind::Int(left), ValueKind::Void) => {
-                            self.push(ValueKind::Range(RangeValue::new(left, span, -1, span)));
+                        (Value::Int(left), Value::Void) => {
+                            self.push(Value::Range(RangeValue::new(left, span, -1, span)));
                         }
-                        (ValueKind::Int(left), ValueKind::Int(right)) => {
-                            self.push(ValueKind::Range(RangeValue::new(left, span, right, span)));
+                        (Value::Int(left), Value::Int(right)) => {
+                            self.push(Value::Range(RangeValue::new(left, span, right, span)));
                         }
                         // fixme: this is a catch all for now, break it into
                         // errors for left and right and then both
@@ -119,9 +121,9 @@ impl<'a> VM<'a> {
                         }
                     }
                 }
-                Opcode::True => self.push(ValueKind::Bool(true)),
-                Opcode::False => self.push(ValueKind::Bool(false)),
-                Opcode::Void => self.push(ValueKind::Void),
+                Opcode::True => self.push(Value::Bool(true)),
+                Opcode::False => self.push(Value::Bool(false)),
+                Opcode::Void => self.push(Value::Void),
                 Opcode::Pop => {
                     self.pop(opcode, span)?;
                 }
@@ -133,7 +135,7 @@ impl<'a> VM<'a> {
                 Opcode::JumpIfFalse(offset) => {
                     let value = self.pop(opcode, span)?;
 
-                    if let ValueKind::Bool(false) = value {
+                    if let Value::Bool(false) = value {
                         self.ip = offset;
                     }
                 }
@@ -145,13 +147,13 @@ impl<'a> VM<'a> {
                     let a = self.pop(opcode, span)?;
 
                     match (a, b) {
-                        (ValueKind::Int(a), ValueKind::Int(b)) => {
-                            self.push(ValueKind::Int(a + b));
+                        (Value::Int(a), Value::Int(b)) => {
+                            self.push(Value::Int(a + b));
                         }
-                        (ValueKind::Float(FloatOrd(a)), ValueKind::Float(FloatOrd(b))) => {
-                            self.push(ValueKind::Float(FloatOrd(a + b)));
+                        (Value::Float(FloatOrd(a)), Value::Float(FloatOrd(b))) => {
+                            self.push(Value::Float(FloatOrd(a + b)));
                         }
-                        (ValueKind::String(a), ValueKind::String(b)) => {
+                        (Value::String(a), Value::String(b)) => {
                             let a = self.is.get_heap().get_string(a)?;
                             let b = self.is.get_heap().get_string(b)?;
 
@@ -159,10 +161,10 @@ impl<'a> VM<'a> {
                             s.push_str(a);
                             s.push_str(b);
 
-                            let value = self.is.get_heap_mut().push(HeapValue::String(s));
+                            let value = self.is.get_heap_mut().push(HeapValue::String(&s));
                             self.push(value);
                         }
-                        (ValueKind::List(a), ValueKind::List(b)) => {
+                        (Value::List(a), Value::List(b)) => {
                             let mut a = self.is.get_heap().get_list(a)?.to_vec();
                             let b = self.is.get_heap().get_list(b)?;
                             a.extend(b);
@@ -170,7 +172,7 @@ impl<'a> VM<'a> {
                             let value = self.is.get_heap_mut().push(HeapValue::List(a));
                             self.push(value);
                         }
-                        (ValueKind::Dict(a), ValueKind::Dict(b)) => {
+                        (Value::Dict(a), Value::Dict(b)) => {
                             let mut a = self.is.get_heap().get_dict(a)?.clone();
                             let b = self.is.get_heap().get_dict(b)?;
                             a.extend(b);
@@ -186,11 +188,11 @@ impl<'a> VM<'a> {
                     let a = self.pop(opcode, span)?;
 
                     match (a, b) {
-                        (ValueKind::Int(a), ValueKind::Int(b)) => {
-                            self.push(ValueKind::Int(a - b));
+                        (Value::Int(a), Value::Int(b)) => {
+                            self.push(Value::Int(a - b));
                         }
-                        (ValueKind::Float(FloatOrd(a)), ValueKind::Float(FloatOrd(b))) => {
-                            self.push(ValueKind::Float(FloatOrd(a - b)));
+                        (Value::Float(FloatOrd(a)), Value::Float(FloatOrd(b))) => {
+                            self.push(Value::Float(FloatOrd(a - b)));
                         }
                         _ => return Err(self.construct_err(opcode, a, Some(b), span)),
                     }
@@ -200,8 +202,11 @@ impl<'a> VM<'a> {
                     let a = self.pop(opcode, span)?;
 
                     match (a, b) {
-                        (ValueKind::Int(a), ValueKind::Int(b)) => {
-                            self.push(ValueKind::Int(a * b));
+                        (Value::Int(a), Value::Int(b)) => {
+                            self.push(Value::Int(a * b));
+                        }
+                        (Value::Float(FloatOrd(a)), Value::Float(FloatOrd(b))) => {
+                            self.push(Value::Float(FloatOrd(a * b)));
                         }
                         (ValueKind::Float(FloatOrd(a)), ValueKind::Float(FloatOrd(b))) => {
                             self.push(ValueKind::Float(FloatOrd(a * b)));
@@ -214,11 +219,11 @@ impl<'a> VM<'a> {
                     let a = self.pop(opcode, span)?;
 
                     match (a, b) {
-                        (ValueKind::Int(a), ValueKind::Int(b)) => {
-                            self.push(ValueKind::Int(a / b));
+                        (Value::Int(a), Value::Int(b)) => {
+                            self.push(Value::Int(a / b));
                         }
-                        (ValueKind::Float(FloatOrd(a)), ValueKind::Float(FloatOrd(b))) => {
-                            self.push(ValueKind::Float(FloatOrd(a / b)));
+                        (Value::Float(FloatOrd(a)), Value::Float(FloatOrd(b))) => {
+                            self.push(Value::Float(FloatOrd(a / b)));
                         }
                         _ => return Err(self.construct_err(opcode, a, Some(b), span)),
                     }
@@ -228,11 +233,11 @@ impl<'a> VM<'a> {
                     let a = self.pop(opcode, span)?;
 
                     match (a, b) {
-                        (ValueKind::Int(a), ValueKind::Int(b)) => {
-                            self.push(ValueKind::Int(a.pow(b as u32)));
+                        (Value::Int(a), Value::Int(b)) => {
+                            self.push(Value::Int(a.pow(b as u32)));
                         }
-                        (ValueKind::Float(FloatOrd(a)), ValueKind::Float(FloatOrd(b))) => {
-                            self.push(ValueKind::Float(FloatOrd(a.powf(b))));
+                        (Value::Float(FloatOrd(a)), Value::Float(FloatOrd(b))) => {
+                            self.push(Value::Float(FloatOrd(a.powf(b))));
                         }
                         _ => return Err(self.construct_err(opcode, a, Some(b), span)),
                     }
@@ -242,11 +247,11 @@ impl<'a> VM<'a> {
                     let a = self.pop(opcode, span)?;
 
                     match (a, b) {
-                        (ValueKind::Int(a), ValueKind::Int(b)) => {
-                            self.push(ValueKind::Int(a % b));
+                        (Value::Int(a), Value::Int(b)) => {
+                            self.push(Value::Int(a % b));
                         }
-                        (ValueKind::Float(FloatOrd(a)), ValueKind::Float(FloatOrd(b))) => {
-                            self.push(ValueKind::Float(FloatOrd(a % b)));
+                        (Value::Float(FloatOrd(a)), Value::Float(FloatOrd(b))) => {
+                            self.push(Value::Float(FloatOrd(a % b)));
                         }
                         _ => return Err(self.construct_err(opcode, a, Some(b), span)),
                     }
@@ -255,11 +260,11 @@ impl<'a> VM<'a> {
                     let a = self.pop(opcode, span)?;
 
                     match a {
-                        ValueKind::Int(a) => {
-                            self.push(ValueKind::Int(-a));
+                        Value::Int(a) => {
+                            self.push(Value::Int(-a));
                         }
-                        ValueKind::Float(FloatOrd(a)) => {
-                            self.push(ValueKind::Float(FloatOrd(-a)));
+                        Value::Float(FloatOrd(a)) => {
+                            self.push(Value::Float(FloatOrd(-a)));
                         }
                         _ => return Err(self.construct_err(opcode, a, None, span)),
                     }
@@ -268,8 +273,8 @@ impl<'a> VM<'a> {
                     let a = self.pop(opcode, span)?;
 
                     match a {
-                        ValueKind::Bool(a) => {
-                            self.push(ValueKind::Bool(!a));
+                        Value::Bool(a) => {
+                            self.push(Value::Bool(!a));
                         }
                         _ => return Err(self.construct_err(opcode, a, None, span)),
                     }
@@ -279,8 +284,8 @@ impl<'a> VM<'a> {
                     let a = self.pop(opcode, span)?;
 
                     match (a, b) {
-                        (ValueKind::Bool(a), ValueKind::Bool(b)) => {
-                            self.push(ValueKind::Bool(a && b));
+                        (Value::Bool(a), Value::Bool(b)) => {
+                            self.push(Value::Bool(a && b));
                         }
                         _ => return Err(self.construct_err(opcode, a, Some(b), span)),
                     }
@@ -290,8 +295,8 @@ impl<'a> VM<'a> {
                     let a = self.pop(opcode, span)?;
 
                     match (a, b) {
-                        (ValueKind::Bool(a), ValueKind::Bool(b)) => {
-                            self.push(ValueKind::Bool(a || b));
+                        (Value::Bool(a), Value::Bool(b)) => {
+                            self.push(Value::Bool(a || b));
                         }
                         _ => return Err(self.construct_err(opcode, a, Some(b), span)),
                     }
@@ -301,31 +306,31 @@ impl<'a> VM<'a> {
                     let a = self.pop(opcode, span)?;
 
                     match (a, b) {
-                        (ValueKind::List(a), ValueKind::List(b)) => {
+                        (Value::List(a), Value::List(b)) => {
                             let a = self.is.get_heap().get_list(a)?;
                             let b = self.is.get_heap().get_list(b)?;
 
-                            self.push(ValueKind::Bool(a == b));
+                            self.push(Value::Bool(a == b));
                         }
-                        (ValueKind::Dict(a), ValueKind::Dict(b)) => {
+                        (Value::Dict(a), Value::Dict(b)) => {
                             let a = self.is.get_heap().get_dict(a)?;
                             let b = self.is.get_heap().get_dict(b)?;
 
-                            self.push(ValueKind::Bool(a == b));
+                            self.push(Value::Bool(a == b));
                         }
-                        (ValueKind::Function(a), ValueKind::Function(b)) => {
+                        (Value::Function(a), Value::Function(b)) => {
                             let a_func = self.is.get_heap().get_function(a)?;
                             let b_func = self.is.get_heap().get_function(b)?;
 
-                            self.push(ValueKind::Bool(a_func == b_func));
+                            self.push(Value::Bool(a_func == b_func));
                         }
-                        (ValueKind::Int(a), ValueKind::Float(FloatOrd(b))) => {
-                            self.push(ValueKind::Bool(a as f64 == b));
+                        (Value::Int(a), Value::Float(FloatOrd(b))) => {
+                            self.push(Value::Bool(a as f64 == b));
                         }
-                        (ValueKind::Float(FloatOrd(a)), ValueKind::Int(b)) => {
-                            self.push(ValueKind::Bool(a == b as f64));
+                        (Value::Float(FloatOrd(a)), Value::Int(b)) => {
+                            self.push(Value::Bool(a == b as f64));
                         }
-                        _ => self.push(ValueKind::Bool(a == b)),
+                        _ => self.push(Value::Bool(a == b)),
                     }
                 }
                 Opcode::NotEqual => {
@@ -333,31 +338,31 @@ impl<'a> VM<'a> {
                     let a = self.pop(opcode, span)?;
 
                     match (a, b) {
-                        (ValueKind::List(a), ValueKind::List(b)) => {
+                        (Value::List(a), Value::List(b)) => {
                             let a = self.is.get_heap().get_list(a)?;
                             let b = self.is.get_heap().get_list(b)?;
 
-                            self.push(ValueKind::Bool(a != b));
+                            self.push(Value::Bool(a != b));
                         }
-                        (ValueKind::Dict(a), ValueKind::Dict(b)) => {
+                        (Value::Dict(a), Value::Dict(b)) => {
                             let a = self.is.get_heap().get_dict(a)?;
                             let b = self.is.get_heap().get_dict(b)?;
 
-                            self.push(ValueKind::Bool(a != b));
+                            self.push(Value::Bool(a != b));
                         }
-                        (ValueKind::Function(a), ValueKind::Function(b)) => {
+                        (Value::Function(a), Value::Function(b)) => {
                             let a_func = self.is.get_heap().get_function(a)?;
                             let b_func = self.is.get_heap().get_function(b)?;
 
-                            self.push(ValueKind::Bool(a_func != b_func));
+                            self.push(Value::Bool(a_func != b_func));
                         }
-                        (ValueKind::Int(a), ValueKind::Float(FloatOrd(b))) => {
-                            self.push(ValueKind::Bool(a as f64 != b));
+                        (Value::Int(a), Value::Float(FloatOrd(b))) => {
+                            self.push(Value::Bool(a as f64 != b));
                         }
-                        (ValueKind::Float(FloatOrd(a)), ValueKind::Int(b)) => {
-                            self.push(ValueKind::Bool(a != b as f64));
+                        (Value::Float(FloatOrd(a)), Value::Int(b)) => {
+                            self.push(Value::Bool(a != b as f64));
                         }
-                        _ => self.push(ValueKind::Bool(a != b)),
+                        _ => self.push(Value::Bool(a != b)),
                     }
                 }
                 Opcode::Greater => {
@@ -365,11 +370,11 @@ impl<'a> VM<'a> {
                     let a = self.pop(opcode, span)?;
 
                     match (a, b) {
-                        (ValueKind::Int(a), ValueKind::Int(b)) => {
-                            self.push(ValueKind::Bool(a > b));
+                        (Value::Int(a), Value::Int(b)) => {
+                            self.push(Value::Bool(a > b));
                         }
-                        (ValueKind::Float(FloatOrd(a)), ValueKind::Float(FloatOrd(b))) => {
-                            self.push(ValueKind::Bool(a > b));
+                        (Value::Float(FloatOrd(a)), Value::Float(FloatOrd(b))) => {
+                            self.push(Value::Bool(a > b));
                         }
                         _ => return Err(self.construct_err(opcode, a, Some(b), span)),
                     }
@@ -379,11 +384,11 @@ impl<'a> VM<'a> {
                     let a = self.pop(opcode, span)?;
 
                     match (a, b) {
-                        (ValueKind::Int(a), ValueKind::Int(b)) => {
-                            self.push(ValueKind::Bool(a >= b));
+                        (Value::Int(a), Value::Int(b)) => {
+                            self.push(Value::Bool(a >= b));
                         }
-                        (ValueKind::Float(FloatOrd(a)), ValueKind::Float(FloatOrd(b))) => {
-                            self.push(ValueKind::Bool(a >= b));
+                        (Value::Float(FloatOrd(a)), Value::Float(FloatOrd(b))) => {
+                            self.push(Value::Bool(a >= b));
                         }
                         _ => return Err(self.construct_err(opcode, a, Some(b), span)),
                     }
@@ -393,11 +398,11 @@ impl<'a> VM<'a> {
                     let a = self.pop(opcode, span)?;
 
                     match (a, b) {
-                        (ValueKind::Int(a), ValueKind::Int(b)) => {
-                            self.push(ValueKind::Bool(a < b));
+                        (Value::Int(a), Value::Int(b)) => {
+                            self.push(Value::Bool(a < b));
                         }
-                        (ValueKind::Float(FloatOrd(a)), ValueKind::Float(FloatOrd(b))) => {
-                            self.push(ValueKind::Bool(a < b));
+                        (Value::Float(FloatOrd(a)), Value::Float(FloatOrd(b))) => {
+                            self.push(Value::Bool(a < b));
                         }
                         _ => return Err(self.construct_err(opcode, a, Some(b), span)),
                     }
@@ -407,11 +412,11 @@ impl<'a> VM<'a> {
                     let a = self.pop(opcode, span)?;
 
                     match (a, b) {
-                        (ValueKind::Int(a), ValueKind::Int(b)) => {
-                            self.push(ValueKind::Bool(a <= b));
+                        (Value::Int(a), Value::Int(b)) => {
+                            self.push(Value::Bool(a <= b));
                         }
-                        (ValueKind::Float(FloatOrd(a)), ValueKind::Float(FloatOrd(b))) => {
-                            self.push(ValueKind::Bool(a <= b));
+                        (Value::Float(FloatOrd(a)), Value::Float(FloatOrd(b))) => {
+                            self.push(Value::Bool(a <= b));
                         }
                         _ => return Err(self.construct_err(opcode, a, Some(b), span)),
                     }
@@ -421,7 +426,7 @@ impl<'a> VM<'a> {
                     let a = self.pop(opcode, span)?;
 
                     match (a, b) {
-                        (ValueKind::List(a), ValueKind::Int(b)) => {
+                        (Value::List(a), Value::Int(b)) => {
                             let a = self.is.get_heap().get_list(a)?;
                             let mut b = b;
                             let original = b;
@@ -443,7 +448,7 @@ impl<'a> VM<'a> {
 
                             self.push(a[b as usize]);
                         }
-                        (ValueKind::String(a), ValueKind::Int(b)) => {
+                        (Value::String(a), Value::Int(b)) => {
                             let a = self.is.get_heap().get_string(a)?;
                             let mut b = b;
                             let original = b;
@@ -464,11 +469,11 @@ impl<'a> VM<'a> {
 
                             let b = b as usize;
                             let res = a[b..b + 1].to_string();
-                            let value = self.is.get_heap_mut().push(HeapValue::String(res));
+                            let value = self.is.get_heap_mut().push(HeapValue::String(&res));
 
                             self.push(value);
                         }
-                        (ValueKind::Dict(a), b) => {
+                        (Value::Dict(a), b) => {
                             let a = self.is.get_heap().get_dict(a)?;
 
                             if let Some(value) = a.get(&b) {
@@ -501,13 +506,7 @@ impl<'a> VM<'a> {
         }
     }
 
-    fn construct_err(
-        &self,
-        op: Opcode,
-        a: ValueKind,
-        b: Option<ValueKind>,
-        span: Span,
-    ) -> WalrusError {
+    fn construct_err(&self, op: Opcode, a: Value, b: Option<Value>, span: Span) -> WalrusError {
         if let Some(b) = b {
             WalrusError::InvalidOperation {
                 op,
@@ -528,17 +527,17 @@ impl<'a> VM<'a> {
         }
     }
 
-    fn push(&mut self, value: ValueKind) {
+    fn push(&mut self, value: Value) {
         self.stack.push(value);
     }
 
-    fn get(&self, index: usize) -> WalrusResult<&ValueKind> {
+    fn get(&self, index: usize) -> WalrusResult<&Value> {
         self.stack.get(index).ok_or(WalrusError::UnknownError {
             message: "Failed to resolve local variable stack index".to_string(),
         })
     }
 
-    fn set(&mut self, index: usize, value: ValueKind) -> WalrusResult<()> {
+    fn set(&mut self, index: usize, value: Value) -> WalrusResult<()> {
         if let Some(slot) = self.stack.get_mut(index) {
             *slot = value;
             Ok(())
@@ -549,7 +548,7 @@ impl<'a> VM<'a> {
         }
     }
 
-    fn pop(&mut self, op: Opcode, span: Span) -> WalrusResult<ValueKind> {
+    fn pop(&mut self, op: Opcode, span: Span) -> WalrusResult<Value> {
         self.stack.pop().ok_or_else(|| WalrusError::StackUnderflow {
             op,
             span,

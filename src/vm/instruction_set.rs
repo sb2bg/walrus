@@ -9,7 +9,7 @@ use crate::WalrusResult;
 #[derive(Default)]
 pub struct InstructionSet {
     instructions: Vec<Instruction>,
-    constants: Vec<ValueKind>,
+    constants: Vec<Value>,
     locals: SymbolTable,
     heap: ValueHolder,
 }
@@ -32,12 +32,12 @@ impl InstructionSet {
         self.instructions[index]
     }
 
-    pub fn push_constant(&mut self, value: ValueKind) -> usize {
+    pub fn push_constant(&mut self, value: Value) -> usize {
         self.constants.push(value);
         self.constants.len() - 1
     }
 
-    pub fn get_constant(&self, index: usize) -> ValueKind {
+    pub fn get_constant(&self, index: usize) -> Value {
         self.constants[index]
     }
 

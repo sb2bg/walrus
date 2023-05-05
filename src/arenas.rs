@@ -7,7 +7,7 @@ use strena::{Interner, Symbol};
 use crate::ast::Node;
 use crate::error::WalrusError;
 use crate::rust_function::RustFunction;
-use crate::value::ValueKind;
+use crate::value::{Value, ValueIter};
 use crate::WalrusResult;
 
 pub static mut ARENA: Lazy<ValueHolder> = Lazy::new(ValueHolder::new);
@@ -22,8 +22,9 @@ pub static mut ARENA: Lazy<ValueHolder> = Lazy::new(ValueHolder::new);
 // todo: maybe use a different arena library, DenseSlotMap is mid-performance
 #[derive(Default)]
 pub struct ValueHolder {
-    dict_slotmap: DenseSlotMap<DictKey, FxHashMap<ValueKind, ValueKind>>,
-    list_slotmap: DenseSlotMap<ListKey, Vec<ValueKind>>,
+    dict_slotmap: DenseSlotMap<DictKey, FxHashMap<Value, Value>>,
+    list_slotmap: DenseSlotMap<ListKey, Vec<Value>>,
+    tuple_slotmap: DenseSlotMap<TupleKey, Vec<Value>>, // todo: use slice?
     string_interner: Interner,
     function_slotmap: DenseSlotMap<FuncKey, (String, Vec<String>, Node)>,
     rust_function_slotmap: DenseSlotMap<RustFuncKey, RustFunction>,
