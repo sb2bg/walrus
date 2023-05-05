@@ -51,7 +51,7 @@ impl<'a> BytecodeEmitter<'a> {
                 let value = self
                     .instructions
                     .get_heap_mut()
-                    .push(HeapValue::String(value));
+                    .push(HeapValue::String(&value));
                 let index = self.instructions.push_constant(value);
                 self.instructions
                     .push(Instruction::new(Opcode::LoadConst(index), span));
