@@ -22,6 +22,10 @@ pub Statements: NodeKind = {
     Statement* => NodeKind::Statements(<>),
 };
 
+UnscopedStatements: NodeKind = {
+    Statement* => NodeKind::UnscopedStatements(<>),
+};
+
 Statement: Node = {
     Sp<If>,
     Sp<For>,
@@ -247,12 +251,14 @@ Defer: NodeKind = {
 };
 
 Block = Brace<Statements>;
+UnscopedBlock = Brace<UnscopedStatements>;
 Brace<T>: T = "{" <T> "}";
 Paren<T>: T = "(" <T> ")";
 Bracket<T>: T = "[" <T> "]";
 Comma<T> = Delim<T, ",">;
 
 SpBlock = Sp<Block>;
+SpUnscopedBlock = Sp<UnscopedBlock>;
 SpExpr = Sp<Expr>;
 SpIdent = Sp<Ident>;
 

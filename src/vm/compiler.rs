@@ -168,12 +168,16 @@ impl<'a> BytecodeEmitter<'a> {
                 self.instructions
                     .push(Instruction::new(Opcode::IterNext(0), span));
 
+                self.inc_depth();
+
                 let index = self.instructions.push_local(name);
 
                 self.instructions
                     .push(Instruction::new(Opcode::StoreAt(index), span));
 
                 self.emit(*body)?;
+
+                self.dec_depth(span);
 
                 self.instructions
                     .push(Instruction::new(Opcode::Jump(jump), span));
@@ -307,6 +311,11 @@ impl<'a> BytecodeEmitter<'a> {
                 }
 
                 self.dec_depth(span);
+            }
+            NodeKind::UnscopedStatements(nodes) => {
+                for node in nodes {
+                    self.emit(node)?;
+                }
             }
             NodeKind::Return(node) => {
                 self.emit(*node)?;

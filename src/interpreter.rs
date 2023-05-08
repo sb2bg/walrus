@@ -55,6 +55,7 @@ impl<'a> Interpreter<'a> {
             NodeKind::Program(nodes) | NodeKind::Statements(nodes) => {
                 Ok(self.visit_statements(nodes)?)
             }
+            NodeKind::UnscopedStatements(nodes) => Ok(self.visit_unscoped_statements(nodes)?),
             NodeKind::BinOp(left, op, right) => Ok(self.visit_bin_op(*left, op, *right, span)?),
             NodeKind::UnaryOp(op, value) => Ok(self.visit_unary_op(op, *value, span)?),
             NodeKind::Int(num) => Ok(Value::Int(num)),
@@ -122,6 +123,18 @@ impl<'a> Interpreter<'a> {
 
             if sub_interpreter.is_returning {
                 self.is_returning = true;
+                return Ok(res);
+            }
+        }
+
+        Ok(Value::Void)
+    }
+
+    fn visit_unscoped_statements(&mut self, nodes: Vec<Node>) -> InterpreterResult {
+        for node in nodes {
+            let res = self.interpret(node)?;
+
+            if self.is_returning {
                 return Ok(res);
             }
         }
@@ -586,9 +599,6 @@ impl<'a> Interpreter<'a> {
                 let list = l.resolve()?;
 
                 for value in list {
-                    // fixme: this is here because I need to be able to put values in the scope
-                    // even though statements already get a new scope. same for the dict and string
-                    // and range cases below
                     let mut sub_interpreter = self.create_child("for_list".to_string());
 
                     if sub_interpreter.scope.is_defined(&name) {

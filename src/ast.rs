@@ -13,6 +13,7 @@ pub struct Node {
 pub enum NodeKind {
     Program(Vec<Node>),
     Statements(Vec<Node>),
+    UnscopedStatements(Vec<Node>),
     Int(i64),
     Float(FloatOrd<f64>),
     String(String),
@@ -74,6 +75,7 @@ impl Display for NodeKind {
         match self {
             NodeKind::Program(_) => write!(f, "Program"),
             NodeKind::Statements(_) => write!(f, "Statements"),
+            NodeKind::UnscopedStatements(_) => write!(f, "UnscopedStatements"),
             NodeKind::Int(_) => write!(f, "Int"),
             NodeKind::Float(_) => write!(f, "Float"),
             NodeKind::String(_) => write!(f, "String"),
