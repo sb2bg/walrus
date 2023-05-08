@@ -55,6 +55,10 @@ impl InstructionSet {
         self.locals.push(name)
     }
 
+    pub fn local_len(&self) -> usize {
+        self.locals.len()
+    }
+
     pub fn resolve_index(&self, name: &str) -> Option<usize> {
         self.locals.resolve_index(name)
     }
