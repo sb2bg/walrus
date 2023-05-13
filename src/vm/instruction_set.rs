@@ -92,16 +92,7 @@ impl InstructionSet {
     }
 
     pub fn disassemble(&self) {
-        if !log::log_enabled!(log::Level::Debug) {
-            return;
-        }
-
-        debug!("| == disassemble ==");
-        debug!("| sizeof(instructions) = {}", self.instructions.len());
-
-        for (i, _) in self.instructions.iter().enumerate() {
-            self.disassemble_single(i);
-        }
+        debug!("{}", self);
     }
 
     pub fn stringify(&self, value: Value) -> WalrusResult<String> {
@@ -115,7 +106,15 @@ impl InstructionSet {
 
 impl Display for InstructionSet {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "| == disassemble ==")?;
+        writeln!(f, "| ===  disassembly  ===")?;
+        // writeln!(f, "| === constant pool ===")?;
+        //
+        // for (i, _) in self.constants.iter().enumerate() {
+        //     writeln!(f, "| C{i:02} {:?}", self.constants[i],)?;
+        // }
+        //
+        // writeln!(f)?;
+        // writeln!(f, "| ===  instructions  ===")?;
 
         for (i, _) in self.instructions.iter().enumerate() {
             writeln!(f, "| {i:03} {:?}", self.instructions[i].opcode(),)?;
