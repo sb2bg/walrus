@@ -4,10 +4,9 @@ use rustc_hash::FxHashMap;
 use slotmap::{new_key_type, DenseSlotMap};
 use strena::{Interner, Symbol};
 
-use crate::ast::Node;
 use crate::error::WalrusError;
+use crate::function::WalrusFunction;
 use crate::iter::{CollectionIter, DictIter, RangeIter, StrIter};
-use crate::rust_function::RustFunction;
 use crate::value::{Value, ValueIter};
 use crate::WalrusResult;
 
@@ -27,8 +26,7 @@ pub struct ValueHolder {
     list_slotmap: DenseSlotMap<ListKey, Vec<Value>>,
     tuple_slotmap: DenseSlotMap<TupleKey, Vec<Value>>, // todo: use slice?
     string_interner: Interner,
-    function_slotmap: DenseSlotMap<FuncKey, (String, Vec<String>, Node)>,
-    rust_function_slotmap: DenseSlotMap<RustFuncKey, RustFunction>,
+    function_slotmap: DenseSlotMap<FuncKey, WalrusFunction>,
     iter_slotmap: DenseSlotMap<IterKey, ValueIter>,
 }
 
@@ -40,7 +38,6 @@ impl ValueHolder {
             tuple_slotmap: DenseSlotMap::with_key(),
             string_interner: Interner::default(), // todo: use FxHasher
             function_slotmap: DenseSlotMap::with_key(),
-            rust_function_slotmap: DenseSlotMap::with_key(),
             iter_slotmap: DenseSlotMap::with_key(),
         }
     }
@@ -55,7 +52,6 @@ impl ValueHolder {
                 false
             }
             Value::Function(key) => self.function_slotmap.remove(key).is_some(),
-            Value::RustFunction(key) => self.rust_function_slotmap.remove(key).is_some(),
             Value::Tuple(key) => self.tuple_slotmap.remove(key).is_some(),
             Value::Iter(key) => self.iter_slotmap.remove(key).is_some(),
             _ => false,
@@ -69,9 +65,6 @@ impl ValueHolder {
             HeapValue::Tuple(tuple) => Value::Tuple(self.tuple_slotmap.insert(tuple.to_vec())),
             HeapValue::Dict(dict) => Value::Dict(self.dict_slotmap.insert(dict)),
             HeapValue::Function(func) => Value::Function(self.function_slotmap.insert(func)),
-            HeapValue::RustFunction(rust_func) => {
-                Value::RustFunction(self.rust_function_slotmap.insert(rust_func))
-            }
             HeapValue::String(string) => Value::String(self.string_interner.get_or_insert(string)),
             HeapValue::Iter(iter) => Value::Iter(self.iter_slotmap.insert(iter)),
         }
@@ -89,17 +82,12 @@ impl ValueHolder {
             Value::Range(range) => !range.is_empty(),
             Value::Function(_) => true,
             Value::Iter(_) => true,
-            Value::RustFunction(_) => true,
             Value::Void => false,
         })
     }
 
     pub fn push_ident(&mut self, ident: &str) -> Symbol {
         self.string_interner.get_or_insert(ident)
-    }
-
-    pub fn get_rust_function(&self, key: RustFuncKey) -> WalrusResult<&RustFunction> {
-        Self::check(self.rust_function_slotmap.get(key))
     }
 
     pub fn get_mut_dict(&mut self, key: DictKey) -> WalrusResult<&mut FxHashMap<Value, Value>> {
@@ -126,7 +114,7 @@ impl ValueHolder {
         Self::check(self.string_interner.resolve(key))
     }
 
-    pub fn get_function(&self, key: FuncKey) -> WalrusResult<&(String, Vec<String>, Node)> {
+    pub fn get_function(&self, key: FuncKey) -> WalrusResult<&WalrusFunction> {
         Self::check(self.function_slotmap.get(key))
     }
 
@@ -234,32 +222,8 @@ impl ValueHolder {
                 s
             }
             Value::Function(f) => {
-                let (name, args, _) = self.get_function(f)?;
-                let mut s = String::new();
-
-                s.push_str("function ");
-                s.push_str(name);
-                s.push('(');
-
-                for (i, arg) in args.iter().enumerate() {
-                    if i > 0 {
-                        s.push_str(", ");
-                    }
-                    s.push_str(arg);
-                }
-
-                s.push(')');
-                s
-            }
-            Value::RustFunction(r) => {
-                let rust_func = self.get_rust_function(r)?;
-                let mut s = String::new();
-
-                s.push_str("<rust function ");
-                s.push_str(rust_func.name());
-                s.push('>');
-
-                s
+                let func = self.get_function(f)?;
+                func.to_string()
             }
             Value::Iter(_) => "<iter object>".to_string(),
             Value::Void => "void".to_string(),
@@ -271,8 +235,7 @@ pub enum HeapValue<'a> {
     List(Vec<Value>),
     Tuple(&'a [Value]),
     Dict(FxHashMap<Value, Value>),
-    Function((String, Vec<String>, Node)),
-    RustFunction(RustFunction),
+    Function(WalrusFunction),
     String(&'a str),
     Iter(ValueIter),
 }
@@ -287,7 +250,6 @@ new_key_type! {
     pub struct ListKey;
     pub struct DictKey;
     pub struct FuncKey;
-    pub struct RustFuncKey;
     pub struct TupleKey;
     pub struct IterKey;
 }
@@ -329,18 +291,10 @@ impl<'a> Resolve<'a> for DictKey {
 }
 
 impl<'a> Resolve<'a> for FuncKey {
-    type Output = &'a (String, Vec<String>, Node);
+    type Output = &'a WalrusFunction;
 
     fn resolve(self) -> WalrusResult<Self::Output> {
         unsafe { ARENA.get_function(self) }
-    }
-}
-
-impl<'a> Resolve<'a> for RustFuncKey {
-    type Output = &'a RustFunction;
-
-    fn resolve(self) -> WalrusResult<Self::Output> {
-        unsafe { ARENA.get_rust_function(self) }
     }
 }
 
