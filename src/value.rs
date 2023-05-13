@@ -5,7 +5,7 @@ use std::hash::Hash;
 use float_ord::FloatOrd;
 use strena::Symbol;
 
-use crate::arenas::{DictKey, FuncKey, IterKey, ListKey, Resolve, RustFuncKey, TupleKey};
+use crate::arenas::{DictKey, FuncKey, IterKey, ListKey, Resolve, TupleKey};
 use crate::iter::ValueIterator;
 use crate::range::RangeValue;
 use crate::WalrusResult;
@@ -24,7 +24,6 @@ pub enum Value {
     Tuple(TupleKey),
     Dict(DictKey),
     Function(FuncKey),
-    RustFunction(RustFuncKey),
     Iter(IterKey),
     Void,
 }
@@ -40,8 +39,7 @@ impl Value {
             Value::List(_) => "list",
             Value::Tuple(_) => "tuple",
             Value::Dict(_) => "dict",
-            Value::Function(..) => "function",
-            Value::RustFunction(..) => "builtin_function",
+            Value::Function(_) => "function",
             Value::Iter(_) => "iter",
             Value::Void => "void",
         }
@@ -59,7 +57,6 @@ impl Value {
             Value::Dict(d) => !d.resolve()?.is_empty(),
             Value::Range(r) => !r.is_empty(),
             Value::Function(_) => true,
-            Value::RustFunction(_) => true,
             Value::Iter(_) => true,
         })
     }
@@ -122,30 +119,8 @@ impl Value {
                 s
             }
             Value::Function(f) => {
-                let (name, args, _) = f.resolve()?;
-                let mut s = String::new();
-
-                s.push_str("function ");
-                s.push_str(name);
-                s.push('(');
-
-                for (i, arg) in args.iter().enumerate() {
-                    if i > 0 {
-                        s.push_str(", ");
-                    }
-                    s.push_str(arg);
-                }
-
-                s.push(')');
-                s
-            }
-            Value::RustFunction(r) => {
-                let rust_func = r.resolve()?;
-                let mut s = String::new();
-
-                s.push_str("rust_function ");
-                s.push_str(rust_func.name());
-                s
+                let func = f.resolve()?;
+                func.to_string()
             }
             Value::Iter(_) => "iter".to_string(),
             Value::Void => "void".to_string(),
@@ -166,7 +141,6 @@ impl Display for Value {
             Value::Tuple(tuple) => write!(f, "{:?}", tuple),
             Value::Dict(dict) => write!(f, "{:?}", dict),
             Value::Function(func) => write!(f, "{:?}", func),
-            Value::RustFunction(rust_func) => write!(f, "{:?}", rust_func),
             Value::Iter(iter) => write!(f, "{:?}", iter),
             Value::Void => write!(f, "void"),
         }
