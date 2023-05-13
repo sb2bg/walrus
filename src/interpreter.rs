@@ -1,3 +1,5 @@
+use std::hint::unreachable_unchecked;
+
 use float_ord::FloatOrd;
 use log::debug;
 use rustc_hash::FxHashMap;
@@ -6,6 +8,7 @@ use uuid::Uuid;
 use crate::arenas::{Free, HeapValue, Resolve, ResolveMut};
 use crate::ast::{Node, NodeKind};
 use crate::error::WalrusError;
+use crate::function::{NodeFunction, WalrusFunction};
 use crate::program::Program;
 use crate::range::RangeValue;
 use crate::scope::Scope;
@@ -211,11 +214,21 @@ impl<'a> Interpreter<'a> {
     fn visit_anon_fn_def(&mut self, args: Vec<String>, body: Node) -> InterpreterResult {
         let fn_name = format!("anon_{}", Uuid::new_v4());
 
-        Ok(HeapValue::Function((fn_name, args, body)).alloc())
+        Ok(
+            HeapValue::Function(WalrusFunction::TreeWalk(NodeFunction::new(
+                fn_name, args, body,
+            )))
+            .alloc(),
+        )
     }
 
     fn visit_fn_def(&mut self, name: String, args: Vec<String>, body: Node) -> InterpreterResult {
-        let value = HeapValue::Function((name.clone(), args, body)).alloc();
+        let value = HeapValue::Function(WalrusFunction::TreeWalk(NodeFunction::new(
+            name.clone(),
+            args,
+            body,
+        )))
+        .alloc();
 
         self.scope.assign(name, value);
         Ok(Value::Void)
@@ -358,49 +371,52 @@ impl<'a> Interpreter<'a> {
 
         match value {
             Value::Function(f) => {
-                let function = f.resolve()?;
+                let func = f.resolve()?;
 
-                if function.1.len() != args.len() {
-                    Err(WalrusError::InvalidArgCount {
-                        name: function.0.clone(),
-                        expected: function.1.len(),
-                        got: args.len(),
-                        span,
-                        src: self.source_ref.source().into(),
-                        filename: self.source_ref.filename().into(),
-                    })?
-                }
+                return match func {
+                    WalrusFunction::Rust(rust_fn) => {
+                        if rust_fn.args != args.len() {
+                            Err(WalrusError::InvalidArgCount {
+                                name: "rust fn".to_string(), // fixme: get name
+                                expected: args.len(),
+                                got: rust_fn.args,
+                                span,
+                                src: self.source_ref.source().into(),
+                                filename: self.source_ref.filename().into(),
+                            })?
+                        }
 
-                // fixme: this creates a double nested interpreter child because statements also creates a new child
-                // for now this is okay but for performance reasons we should probably avoid this
-                // todo: I think I should make a new child and give ownership of the child interpreter to the function
-                // object
-                let mut sub_interpreter = self.create_child(function.0.clone()); // todo: clone
-
-                for (name, value) in function.1.iter().zip(args) {
-                    sub_interpreter.scope.assign(name.clone(), value); // todo: clone
-                }
-
-                // todo: I'm pretty sure this clone is required but see if we can avoid it
-                Ok(sub_interpreter.interpret(function.2.clone())?)
-            }
-            Value::RustFunction(f) => {
-                let function = f.resolve()?;
-
-                if let Some(rust_args) = function.args() {
-                    if rust_args != args.len() {
-                        Err(WalrusError::InvalidArgCount {
-                            name: "rust fn".to_string(), // fixme: get name
-                            expected: args.len(),
-                            got: rust_args,
-                            span,
-                            src: self.source_ref.source().into(),
-                            filename: self.source_ref.filename().into(),
-                        })?
+                        rust_fn.call(args, self.source_ref, span)
                     }
-                }
+                    WalrusFunction::TreeWalk(node_fn) => {
+                        if node_fn.args.len() != args.len() {
+                            Err(WalrusError::InvalidArgCount {
+                                name: node_fn.name.clone(),
+                                expected: node_fn.args.len(),
+                                got: args.len(),
+                                span,
+                                src: self.source_ref.source().into(),
+                                filename: self.source_ref.filename().into(),
+                            })?
+                        }
 
-                function.call(args, self.source_ref, span)
+                        // fixme: this creates a double nested interpreter child because statements also creates a new child
+                        // for now this is okay but for performance reasons we should probably avoid this
+                        // todo: I think I should make a new child and give ownership of the child interpreter to the function
+                        // object
+                        let mut sub_interpreter = self.create_child(node_fn.name.clone()); // todo: clone
+
+                        for (name, value) in node_fn.args.iter().zip(args) {
+                            sub_interpreter.scope.assign(name.clone(), value); // todo: clone
+                        }
+
+                        // todo: I'm pretty sure this clone is required but see if we can avoid it
+                        sub_interpreter.interpret(node_fn.body.clone())
+                    }
+                    WalrusFunction::Vm(_) => unsafe {
+                        unreachable_unchecked();
+                    },
+                };
             }
             _ => Err(WalrusError::NotCallable {
                 value: value.get_type().to_string(),
