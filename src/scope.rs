@@ -5,7 +5,7 @@ use rustc_hash::FxHashMap;
 
 use crate::arenas::{HeapValue, Resolve};
 use crate::error::WalrusError;
-use crate::rust_function::RustFunction;
+use crate::function::{RustFunction, WalrusFunction};
 use crate::value::Value;
 
 #[derive(Debug)]
@@ -31,9 +31,9 @@ impl Scope {
 
         builtins.insert(
             "input".to_string(),
-            HeapValue::RustFunction(RustFunction::new(
+            HeapValue::Function(WalrusFunction::Rust(RustFunction::new(
                 "input".to_string(),
-                Some(1),
+                1,
                 |args, _, _| {
                     print!("{}", args[0].stringify()?);
                     std::io::stdout()
@@ -48,15 +48,15 @@ impl Scope {
 
                     Ok(HeapValue::String(&input).alloc())
                 },
-            ))
+            )))
             .alloc(),
         );
 
         builtins.insert(
             "len".to_string(),
-            HeapValue::RustFunction(RustFunction::new(
+            HeapValue::Function(WalrusFunction::Rust(RustFunction::new(
                 "len".to_string(),
-                Some(1),
+                1,
                 |args, source_ref, span| match args[0] {
                     Value::String(key) => Ok(Value::Int(key.resolve()?.len() as i64)),
                     Value::List(key) => Ok(Value::Int(key.resolve()?.len() as i64)),
@@ -68,7 +68,7 @@ impl Scope {
                         filename: source_ref.filename().to_string(),
                     }),
                 },
-            ))
+            )))
             .alloc(),
         );
 
