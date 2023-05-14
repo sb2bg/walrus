@@ -129,19 +129,19 @@ impl ValueHolder {
     pub fn value_to_iter(&mut self, value: Value) -> WalrusResult<Value> {
         let key = match value {
             Value::List(list) => {
-                let iter = CollectionIter::new(self.get_list(list)?.clone());
+                let iter = CollectionIter::new(self.get_list(list)?);
                 self.push(HeapValue::Iter(Box::new(iter)))
             }
             Value::Tuple(tuple) => {
-                let iter = CollectionIter::new(self.get_tuple(tuple)?.clone());
+                let iter = CollectionIter::new(self.get_tuple(tuple)?);
                 self.push(HeapValue::Iter(Box::new(iter)))
             }
             Value::Dict(dict) => {
-                let iter = DictIter::new(self.get_dict(dict)?.clone());
+                let iter = DictIter::new(self.get_dict(dict)?);
                 self.push(HeapValue::Iter(Box::new(iter)))
             }
             Value::String(string) => {
-                let iter = StrIter::new(self.get_string(string)?.to_string());
+                let iter = StrIter::new(self.get_string(string)?);
                 self.push(HeapValue::Iter(Box::new(iter)))
             }
             Value::Range(range) => self.push(HeapValue::Iter(Box::new(RangeIter::new(range)))),

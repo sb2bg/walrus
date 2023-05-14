@@ -34,7 +34,7 @@ pub struct StrIter {
 }
 
 impl StrIter {
-    pub fn new(string: String) -> Self {
+    pub fn new(string: &str) -> Self {
         Self {
             chars: string.chars().collect(),
         }
@@ -54,9 +54,9 @@ pub struct DictIter {
 }
 
 impl DictIter {
-    pub fn new(dict: FxHashMap<Value, Value>) -> Self {
+    pub fn new(dict: &FxHashMap<Value, Value>) -> Self {
         Self {
-            dict: dict.into_iter().collect(),
+            dict: dict.iter().map(|(k, v)| (*k, *v)).collect(),
         }
     }
 }
@@ -74,9 +74,9 @@ pub struct CollectionIter {
 }
 
 impl CollectionIter {
-    pub fn new(collection: Vec<Value>) -> Self {
+    pub fn new(collection: &Vec<Value>) -> Self {
         Self {
-            collection: collection.into(),
+            collection: collection.iter().copied().collect(),
         }
     }
 }
