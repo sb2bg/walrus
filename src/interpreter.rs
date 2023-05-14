@@ -1045,7 +1045,7 @@ impl<'a> Interpreter<'a> {
         }
     }
 
-    fn is_truthy(&self, value: Value, span: Span) -> Result<bool, WalrusError> {
+    fn is_truthy(&self, value: Value, span: Span) -> WalrusResult<bool> {
         match value {
             Value::Bool(b) => Ok(b),
             value => Err(WalrusError::TypeMismatch {
