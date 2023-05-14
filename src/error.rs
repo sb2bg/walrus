@@ -80,7 +80,7 @@ pub fn escape_string<T>(
 // fixme: lower error size
 #[derive(Error, Debug)]
 pub enum WalrusError {
-    #[error("Unknown error '{message}'. Please report this bug with the following information: Glass Version = '{}', Git Revision = '{}'", env!("CARGO_PKG_VERSION"), git_version!(fallback = "flamegraph"))]
+    #[error("Unknown error '{message}'. Please report this bug with the following information: Walrus Version = '{}', Git Revision = '{}'", env!("CARGO_PKG_VERSION"), git_version!(fallback = "flamegraph"))]
     UnknownError { message: String },
 
     #[error("{message}")]
