@@ -11,14 +11,10 @@ extern {
 }
 
 pub Program: Node = {
-    Sp<ProgramStatements>,
+    Sp<Statements>,
 };
 
-pub ProgramStatements: NodeKind = {
-    Statement* => NodeKind::Program(<>),
-};
-
-pub Statements: NodeKind = {
+Statements: NodeKind = {
     Statement* => NodeKind::Statements(<>),
 };
 
@@ -169,7 +165,7 @@ While: NodeKind = {
 };
 
 For: NodeKind = {
-    "for" <v: IdentStr> "in" <i: SpExpr> <b: SpBlock> => NodeKind::For(v, Box::new(i), Box::new(b)),
+    "for" <v: IdentStr> "in" <i: SpExpr> <b: SpUnscopedBlock> => NodeKind::For(v, Box::new(i), Box::new(b)),
 };
 
 Func: NodeKind = {
