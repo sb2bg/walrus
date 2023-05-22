@@ -1,9 +1,9 @@
 use crate::ast::Node;
-use crate::interpreter::{Interpreter, InterpreterResult};
+use crate::interpreter::InterpreterResult;
 use crate::source_ref::SourceRef;
 use crate::span::Span;
 use crate::value::Value;
-use crate::vm::instruction_set::InstructionSet;
+use crate::vm::opcode::Instruction;
 
 pub struct RustFunction {
     pub name: String,
@@ -44,28 +44,12 @@ impl NodeFunction {
 pub struct VmFunction {
     pub name: String,
     pub arity: usize,
-    chunk: InstructionSet,
+    pub code: Vec<Instruction>,
 }
 
 impl VmFunction {
-    pub fn new(name: String, arity: usize, chunk: InstructionSet) -> Self {
-        Self { name, arity, chunk }
-    }
-
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
-    pub fn arity(&self) -> usize {
-        self.arity
-    }
-
-    pub fn chunk(&self) -> &InstructionSet {
-        &self.chunk
-    }
-
-    pub fn into_chunk(self) -> InstructionSet {
-        self.chunk
+    pub fn new(name: String, arity: usize, code: Vec<Instruction>) -> Self {
+        Self { name, arity, code }
     }
 }
 
