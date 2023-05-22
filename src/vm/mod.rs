@@ -182,6 +182,7 @@ impl<'a> VM<'a> {
                         }
                     }
                 }
+                Opcode::Call(_args) => {}
                 Opcode::Add => {
                     let b = self.pop(opcode, span)?;
                     let a = self.pop(opcode, span)?;
