@@ -14,6 +14,7 @@ pub enum Opcode {
     PopLocal(usize),
     IterNext(usize),
     StoreAt(usize),
+    Call(usize),
     GetIter,
     Store,
     Range,
