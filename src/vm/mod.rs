@@ -260,6 +260,17 @@ impl<'a> VM<'a> {
                             let value = self.is.get_heap_mut().push(HeapValue::List(list));
                             self.push(value);
                         }
+                        (Value::String(a), Value::Int(b)) | (Value::Int(b), Value::String(a)) => {
+                            let a = self.is.get_heap().get_string(a)?;
+                            let mut s = String::with_capacity(a.len() * b as usize);
+
+                            for _ in 0..b {
+                                s.push_str(a);
+                            }
+
+                            let value = self.is.get_heap_mut().push(HeapValue::String(&s));
+                            self.push(value);
+                        }
                         _ => return Err(self.construct_err(opcode, a, Some(b), span)),
                     }
                 }
