@@ -11,7 +11,7 @@ extern {
 }
 
 pub Program: Node = {
-    Sp<Statements>,
+    RawSp<Statements>,
 };
 
 Statements: NodeKind = {
@@ -23,26 +23,27 @@ UnscopedStatements: NodeKind = {
 };
 
 Statement: Node = {
-    Sp<If>,
-    Sp<For>,
-    Sp<While>,
-    Sp<Func>,
-    <Sp<Expr>> ";",
-    <Sp<Assign>> ";",
-    <Sp<Return>> ";",
-    <Sp<Break>> ";",
-    <Sp<Continue>> ";",
-    <Sp<Import>> ";",
-    <Sp<Print>> ";",
-    <Sp<Throw>> ";",
-    <Sp<Try>> ";",
-    <Sp<Free>> ";",
-    <Sp<Defer>> ";",
-    <Sp<Extern>> ";",
+    RawSp<If>,
+    RawSp<For>,
+    RawSp<While>,
+    RawSp<Func>,
+    <RawSp<TestBlock>> ";",
+    <RawSp<Expr>> ";",
+    <RawSp<Assign>> ";",
+    <RawSp<Return>> ";",
+    <RawSp<Break>> ";",
+    <RawSp<Continue>> ";",
+    <RawSp<Import>> ";",
+    <RawSp<Print>> ";",
+    <RawSp<Throw>> ";",
+    <RawSp<Try>> ";",
+    <RawSp<Free>> ";",
+    <RawSp<Defer>> ";",
+    <RawSp<Extern>> ";",
 };
 
 BinOp<Op, Next>: NodeKind = {
-    <left: Sp<BinOp<Op, Next>>> <o: Op> <right: Sp<Next>> => NodeKind::BinOp(Box::new(left), o, Box::new(right)),
+    <left: Sp<BinOp<Op, Next>>> <o: Op> <right: Sp<Next>> => NodeKind::BinOp(left, o, right),
     Next,
 };
 
@@ -53,15 +54,15 @@ MathExpr = BinOp<ExprOp, MathFactor>;
 MathFactor = BinOp<FactorOp, Unary>;
 
 Unary = {
-    <o: UnaryOp> <e: Sp<Unary>> => NodeKind::UnaryOp(o, Box::new(e)),
+    <o: UnaryOp> <e: Sp<Unary>> => NodeKind::UnaryOp(o, e),
     Pow,
 };
 
 Pow = BinOp<PowOp, Call>;
 
 Call = {
-    <e: Sp<Atom>> <args: Paren<Comma<SpExpr>>> => NodeKind::FunctionCall(Box::new(e), args),
-    <e: Sp<Atom>> <args: Bracket<SpExpr>> => NodeKind::Index(Box::new(e), Box::new(args)),
+    <e: Sp<Atom>> <args: Paren<Comma<RawSp<Expr>>>> => NodeKind::FunctionCall(e, args),
+    <e: Sp<Atom>> <args: Bracket<SpExpr>> => NodeKind::Index(e, args),
     Atom,
 };
 
@@ -133,14 +134,14 @@ Bool: NodeKind = {
 };
 
 List: NodeKind = {
-    Bracket<Comma<SpExpr>> => NodeKind::List(<>),
+    Bracket<Comma<RawSp<Expr>>> => NodeKind::List(<>),
 };
 
 Dict: NodeKind = {
     Brace<Comma<DictEntry>> => NodeKind::Dict(<>),
 };
 
-DictEntry = <SpExpr> ":" <SpExpr>;
+DictEntry = <RawSp<Expr>> ":" <RawSp<Expr>>;
 
 Ident: NodeKind = {
 	IdentStr => NodeKind::Ident(<>),
@@ -148,39 +149,39 @@ Ident: NodeKind = {
 
 IdentStr: String = r"[a-zA-Z_][a-zA-Z0-9_]*" => <>.to_string();
 
-If: NodeKind = "if" <c: SpExpr> <b: SpBlock> <e: Else> => NodeKind::If(Box::new(c), Box::new(b), e);
+If: NodeKind = "if" <c: SpExpr> <b: SpBlock> <e: Else> => NodeKind::If(c, b, e);
 
 Ternary: NodeKind = {
-    <r: SpExpr> "if" <c: SpExpr> "else" <e: SpExpr> => NodeKind::Ternary(Box::new(r), Box::new(c), Box::new(e)),
+    <r: SpExpr> "if" <c: SpExpr> "else" <e: SpExpr> => NodeKind::Ternary(r, c, e),
 }
 
 Else: Option<Box<Node>> = {
-	"else" <SpBlock> => Some(Box::new(<>)),
-	"else" <Sp<If>> => Some(Box::new(<>)),
+	"else" <SpBlock> => Some(<>),
+	"else" <Sp<If>> => Some(<>),
 	=> None,
 };
 
 While: NodeKind = {
-    "while" <c: SpExpr> <b: SpBlock> => NodeKind::While(Box::new(c), Box::new(b)),
+    "while" <c: SpExpr> <b: SpBlock> => NodeKind::While(c, b),
 };
 
 For: NodeKind = {
-    "for" <v: IdentStr> "in" <i: SpExpr> <b: SpUnscopedBlock> => NodeKind::For(v, Box::new(i), Box::new(b)),
+    "for" <v: IdentStr> "in" <i: SpExpr> <b: SpUnscopedBlock> => NodeKind::For(v, i, b),
 };
 
 Func: NodeKind = {
-    "fn" <n: IdentStr> ":" <a: Comma<IdentStr>> <b: SpBlock> => NodeKind::FunctionDefinition(n, a, Box::new(b)),
+    "fn" <n: IdentStr> ":" <a: Comma<IdentStr>> <b: SpBlock> => NodeKind::FunctionDefinition(n, a, b),
 };
 
 Lambda: NodeKind = {
-    ":" <a: Comma<IdentStr>> <b: SpBlock> => NodeKind::AnonFunctionDefinition(a, Box::new(b)),
+    ":" <a: Comma<IdentStr>> <b: SpBlock> => NodeKind::AnonFunctionDefinition(a, b),
 };
 
 Range: NodeKind = {
     // fixme: limited to identifiers
-    <l: SpIdent> ".." <u: SpIdent> => NodeKind::Range(Some(Box::new(l)), Some(Box::new(u))),
-    <l: SpIdent> ".." => NodeKind::Range(Some(Box::new(l)), None),
-    ".." <u: SpIdent> => NodeKind::Range(None, Some(Box::new(u))),
+    <l: Sp<Int>> ".." <u: Sp<Int>> => NodeKind::Range(Some(l), Some(u)),
+    <l: SpIdent> ".." => NodeKind::Range(Some(l), None),
+    ".." <u: SpIdent> => NodeKind::Range(None, Some(u)),
     ".." => NodeKind::Range(None, None),
 };
 
@@ -193,21 +194,21 @@ Extern: NodeKind = {
 };
 
 Assign: NodeKind = {
-    "let" <n: IdentStr> "=" <e: SpExpr> => NodeKind::Assign(n, Box::new(e)),
-    <n: StrSp<IdentStr>> "=" <e: SpExpr> => NodeKind::Reassign(n, Box::new(e), Opcode::Equal),
-    <n: StrSp<IdentStr>> "+=" <e: SpExpr> => NodeKind::Reassign(n, Box::new(e), Opcode::Add),
-    <n: StrSp<IdentStr>> "-=" <e: SpExpr> => NodeKind::Reassign(n, Box::new(e), Opcode::Subtract),
-    <n: StrSp<IdentStr>> "*=" <e: SpExpr> => NodeKind::Reassign(n, Box::new(e), Opcode::Multiply),
-    <n: StrSp<IdentStr>> "/=" <e: SpExpr> => NodeKind::Reassign(n, Box::new(e), Opcode::Divide),
-    <n: StrSp<IdentStr>> "%=" <e: SpExpr> => NodeKind::Reassign(n, Box::new(e), Opcode::Modulo),
-    <n: StrSp<IdentStr>> "**=" <e: SpExpr> => NodeKind::Reassign(n, Box::new(e), Opcode::Power),
-    <n: StrSp<IdentStr>> "or=" <e: SpExpr> => NodeKind::Reassign(n, Box::new(e), Opcode::Or),
-    <n: StrSp<IdentStr>> "and=" <e: SpExpr> => NodeKind::Reassign(n, Box::new(e), Opcode::And),
-    <n: Sp<Atom>> "[" <i: SpExpr> "]" "=" <e: SpExpr> => NodeKind::IndexAssign(Box::new(n), Box::new(i), Box::new(e)), // fixme: add ops, make x[n][m] work
+    "let" <n: IdentStr> "=" <e: SpExpr> => NodeKind::Assign(n, e),
+    <n: StrSp<IdentStr>> "=" <e: SpExpr> => NodeKind::Reassign(n, e, Opcode::Equal),
+    <n: StrSp<IdentStr>> "+=" <e: SpExpr> => NodeKind::Reassign(n, e, Opcode::Add),
+    <n: StrSp<IdentStr>> "-=" <e: SpExpr> => NodeKind::Reassign(n, e, Opcode::Subtract),
+    <n: StrSp<IdentStr>> "*=" <e: SpExpr> => NodeKind::Reassign(n, e, Opcode::Multiply),
+    <n: StrSp<IdentStr>> "/=" <e: SpExpr> => NodeKind::Reassign(n, e, Opcode::Divide),
+    <n: StrSp<IdentStr>> "%=" <e: SpExpr> => NodeKind::Reassign(n, e, Opcode::Modulo),
+    <n: StrSp<IdentStr>> "**=" <e: SpExpr> => NodeKind::Reassign(n, e, Opcode::Power),
+    <n: StrSp<IdentStr>> "or=" <e: SpExpr> => NodeKind::Reassign(n, e, Opcode::Or),
+    <n: StrSp<IdentStr>> "and=" <e: SpExpr> => NodeKind::Reassign(n, e, Opcode::And),
+    <n: Sp<Atom>> "[" <i: SpExpr> "]" "=" <e: SpExpr> => NodeKind::IndexAssign(n, i, e), // fixme: add ops, make x[n][m] work
 };
 
 Return: NodeKind = {
-    "return" <SpExpr> => NodeKind::Return(Box::new(<>)),
+    "return" <SpExpr> => NodeKind::Return(<>),
 };
 
 Break: NodeKind = {
@@ -226,24 +227,28 @@ Import: NodeKind = {
 };
 
 Print: NodeKind = {
-    "print" <SpExpr> => NodeKind::Print(Box::new(<>)),
-    "println" <SpExpr> => NodeKind::Println(Box::new(<>)),
+    "print" <SpExpr> => NodeKind::Print(<>),
+    "println" <SpExpr> => NodeKind::Println(<>),
 };
 
 Throw: NodeKind = {
-    "throw" <SpExpr> => NodeKind::Throw(Box::new(<>)),
+    "throw" <SpExpr> => NodeKind::Throw(<>),
 };
 
 Try: NodeKind = {
-    "try" <b: SpBlock> "catch" <c: IdentStr> <e: SpBlock> => NodeKind::Try(Box::new(b), c, Box::new(e)),
+    "try" <b: SpBlock> "catch" <c: IdentStr> <e: SpBlock> => NodeKind::Try(b, c, e),
 };
 
 Free: NodeKind = {
-    "free" <SpExpr> => NodeKind::Free(Box::new(<>)),
+    "free" <SpExpr> => NodeKind::Free(<>),
 };
 
 Defer: NodeKind = {
-    "defer" <SpExpr> => NodeKind::Defer(Box::new(<>)),
+    "defer" <SpExpr> => NodeKind::Defer(<>),
+};
+
+TestBlock: NodeKind = {
+    "start" <Statements> "end",
 };
 
 Block = Brace<Statements>;
@@ -253,9 +258,9 @@ Paren<T>: T = "(" <T> ")";
 Bracket<T>: T = "[" <T> "]";
 Comma<T> = Delim<T, ",">;
 
-SpBlock = Sp<Block>;
-SpUnscopedBlock = Sp<UnscopedBlock>;
-SpExpr = Sp<Expr>;
+SpBlock: Box<Node> = Sp<Block>;
+SpUnscopedBlock: Box<Node> = Sp<UnscopedBlock>;
+SpExpr: Box<Node> = Sp<Expr>;
 SpIdent = Sp<Ident>;
 
 Delim<T, D>: Vec<T> = {
@@ -268,12 +273,6 @@ Delim<T, D>: Vec<T> = {
     }
 };
 
-TrailingDelim<T, D>: Vec<T> = {
-    <mut h: (<T> D)*> <t: T> D => {
-        h.push(t);
-        h
-    }
-};
-
-Sp<Rule>: Node = <l: @L> <rule: Rule> <r: @R> => Node::new(rule, Span(l, r));
+Sp<Rule>: Box<Node> = <l: @L> <rule: Rule> <r: @R> => Box::new(Node::new(rule, Span(l, r)));
+RawSp<Rule>: Node = <l: @L> <rule: Rule> <r: @R> => Node::new(rule, Span(l, r));
 StrSp<Rule>: Spanned<String> = <l: @L> <rule: Rule> <r: @R> => Spanned::new(rule.to_string(), Span(l, r));
