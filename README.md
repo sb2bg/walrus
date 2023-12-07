@@ -1,5 +1,5 @@
 
-# Walrus Programming Language README
+# WalrusLang
 
 ## Introduction
 
