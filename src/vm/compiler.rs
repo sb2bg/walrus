@@ -177,7 +177,7 @@ impl<'a> BytecodeEmitter<'a> {
 
                 self.emit(*body)?;
 
-                self.dec_depth(span);
+                self.dec_depth_no_pop();
 
                 self.instructions
                     .push(Instruction::new(Opcode::Jump(jump), span));
@@ -187,6 +187,13 @@ impl<'a> BytecodeEmitter<'a> {
                     Instruction::new(Opcode::IterNext(self.instructions.len()), span),
                 );
             }
+            NodeKind::FunctionDefinition(name, args, body) => {
+                todo!()
+            }
+            NodeKind::AnonFunctionDefinition(args, body) => {
+                todo!()
+            }
+            NodeKind::FunctionCall(func, args) => {}
             NodeKind::Index(node, index) => {
                 self.emit(*node)?;
                 self.emit(*index)?;
@@ -340,6 +347,10 @@ impl<'a> BytecodeEmitter<'a> {
             self.instructions
                 .push(Instruction::new(Opcode::PopLocal(popped), span));
         }
+    }
+
+    fn dec_depth_no_pop(&mut self) {
+        self.instructions.dec_depth();
     }
 
     fn define_variable(&mut self, name: String, span: Span) {

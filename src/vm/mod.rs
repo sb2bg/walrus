@@ -165,7 +165,7 @@ impl<'a> VM<'a> {
                             let iter = ptr.as_mut().get_mut_iter(key)?;
 
                             if let Some(value) = iter.next(self.is.get_heap_mut()) {
-                                // fixme: if another value gets pushed on the stack, this will be wrong
+                                // fixme: if another value gets pushed on the stack, this cause a non iterable error
                                 self.push(Value::Iter(key));
                                 self.push(value);
                             } else {
