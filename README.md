@@ -1,5 +1,5 @@
 
-# Walrus Programming Language README
+# WalrusLang
 
 ## Introduction
 
@@ -42,7 +42,7 @@ Welcome to **Walrus**, a programming language designed to make coding approachab
 
 ```walrus
 for n in 1..100 {
-let result = ""
+   let result = ""
 
     if n % 3 == 0 {
         result += "Fizz"
