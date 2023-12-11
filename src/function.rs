@@ -81,5 +81,5 @@ impl PartialEq for WalrusFunction {
 }
 
 fn cmp<T>(a1: &T, a2: &T) -> bool {
-    a1 as *const _ == a2 as *const _ // todo: is this correct?
+    std::ptr::eq(a1, a2) // todo: is this correct?
 }
