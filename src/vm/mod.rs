@@ -87,7 +87,7 @@ impl<'a> VM<'a> {
                     self.push(value);
                 }
                 Opcode::Dict(cap) => {
-                    let mut dict = FxHashMap::default();
+                    let mut dict = FxHashMap::with_capacity_and_hasher(cap, Default::default());
 
                     for _ in 0..cap {
                         let value = self.pop(opcode, span)?;
@@ -121,7 +121,7 @@ impl<'a> VM<'a> {
                         // errors for left and right and then both
                         (left, right) => {
                             return Err(WalrusError::TypeMismatch {
-                                expected: "int".to_string(),
+                                expected: "type: todo".to_string(),
                                 found: format!("{} and {}", left.get_type(), right.get_type()),
                                 span,
                                 src: self.source_ref.source().into(),
