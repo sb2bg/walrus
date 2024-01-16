@@ -178,7 +178,7 @@ Lambda: NodeKind = {
 };
 
 Range: NodeKind = {
-    // fixme: limited to identifiers
+    // FIXME: limited to identifiers
     <l: Sp<Int>> ".." <u: Sp<Int>> => NodeKind::Range(Some(l), Some(u)),
     <l: SpIdent> ".." => NodeKind::Range(Some(l), None),
     ".." <u: SpIdent> => NodeKind::Range(None, Some(u)),
