@@ -48,10 +48,6 @@ impl SymbolTable {
         len - self.locals.len()
     }
 
-    pub fn clear(&mut self) {
-        self.locals.clear();
-    }
-
     pub fn len(&self) -> usize {
         self.locals.len()
     }
