@@ -51,10 +51,6 @@ impl SymbolTable {
     pub fn len(&self) -> usize {
         self.locals.len()
     }
-
-    pub fn iter(&self) -> std::slice::Iter<Local> {
-        self.locals.iter()
-    }
 }
 
 #[derive(Debug)]
