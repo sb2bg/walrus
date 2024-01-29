@@ -52,10 +52,6 @@ impl SymbolTable {
         self.locals.len()
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.locals.is_empty()
-    }
-
     pub fn iter(&self) -> std::slice::Iter<Local> {
         self.locals.iter()
     }
