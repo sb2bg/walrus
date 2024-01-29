@@ -81,5 +81,7 @@ impl PartialEq for WalrusFunction {
 }
 
 fn cmp<T>(a1: &T, a2: &T) -> bool {
-    std::ptr::eq(a1, a2) // todo: is this correct?
+    // checks if the function is the same, not equal semantically
+    // (may violate set theory, but we'll cross that bridge when we get there)
+    std::ptr::eq(a1, a2)
 }
