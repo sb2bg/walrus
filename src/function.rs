@@ -4,6 +4,7 @@ use crate::source_ref::SourceRef;
 use crate::span::Span;
 use crate::value::Value;
 use crate::vm::opcode::Instruction;
+use std::fmt::Display;
 
 pub struct RustFunction {
     pub name: String,
@@ -59,13 +60,17 @@ pub enum WalrusFunction {
     Vm(VmFunction),
 }
 
-impl ToString for WalrusFunction {
-    fn to_string(&self) -> String {
-        match self {
-            WalrusFunction::Rust(func) => format!("<builtin_function({})>", func.name),
-            WalrusFunction::TreeWalk(func) => format!("<function({})>", func.name),
-            WalrusFunction::Vm(func) => format!("<function({})>", func.name),
-        }
+impl Display for WalrusFunction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                WalrusFunction::Rust(func) => format!("<builtin_function({})>", func.name),
+                WalrusFunction::TreeWalk(func) => format!("<function({})>", func.name),
+                WalrusFunction::Vm(func) => format!("<function({})>", func.name),
+            }
+        )
     }
 }
 
@@ -81,7 +86,5 @@ impl PartialEq for WalrusFunction {
 }
 
 fn cmp<T>(a1: &T, a2: &T) -> bool {
-    // checks if the function is the same, not equal semantically
-    // (may violate set theory, but we'll cross that bridge when we get there)
     std::ptr::eq(a1, a2)
 }
