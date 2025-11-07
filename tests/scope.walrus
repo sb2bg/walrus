@@ -1,0 +1,19 @@
+let global = "global";
+
+fn test_scope : {
+    let local = "local";
+    println(local);
+    println(global);
+    return 0;
+}
+
+test_scope();
+println(global);
+
+let outer = 1;
+if true {
+    let inner = 2;
+    println(outer);
+    println(inner);
+}
+println(outer);

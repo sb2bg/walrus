@@ -1,0 +1,11 @@
+let dict = {};
+
+for i in 1..100 {
+    dict += {i: "hello"};
+}
+
+for x in dict {
+    println x;
+}
+
+return 0;

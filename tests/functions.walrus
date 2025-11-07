@@ -1,0 +1,28 @@
+fn add : a, b {
+    return a + b;
+}
+
+println(add(5, 3));
+
+fn multiply : x, y {
+    return x * y;
+}
+
+println(multiply(4, 7));
+
+fn greet : name {
+    println("Hello, " + name);
+    return 0;
+}
+
+greet("World");
+
+fn double : n {
+    return n * 2;
+}
+
+fn quadruple : n {
+    return double(double(n));
+}
+
+println(quadruple(5));

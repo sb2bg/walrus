@@ -1,0 +1,9 @@
+println(2 + 3);
+println(10 - 4);
+println(7 * 8);
+println(20 / 4);
+println(17 % 5);
+
+println(2 + 3 * 4);
+println((2 + 3) * 4);
+println(10 - 2 + 3);

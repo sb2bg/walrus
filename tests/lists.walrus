@@ -1,0 +1,9 @@
+let numbers = [1, 2, 3, 4, 5];
+println(numbers);
+
+for num in numbers {
+    println(num);
+}
+
+let mixed = [1, "hello", true, 3.14];
+println(mixed);

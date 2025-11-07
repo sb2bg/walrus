@@ -1,0 +1,22 @@
+let x = 1;
+let y = 2;
+let z = 3;
+let w = 4;
+
+println x;
+println y;
+println z;
+println w;
+
+let result = x + y * z;
+println result;
+
+let a = true and false;
+let b = false or true;
+println a;
+println b;
+
+let list = [1, 2, 3, 4, 5];
+println list;
+
+return 0;

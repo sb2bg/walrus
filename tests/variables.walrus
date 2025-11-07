@@ -1,0 +1,13 @@
+let x = 10;
+println(x);
+
+let y = 20;
+println(y);
+
+let z = x + y;
+println(z);
+
+let a = 5;
+println(a);
+a = 10;
+println(a);

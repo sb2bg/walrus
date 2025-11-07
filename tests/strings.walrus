@@ -1,0 +1,10 @@
+let greeting = "Hello";
+let name = "Walrus";
+
+println(greeting + " " + name);
+
+println("abc" == "abc");
+println("abc" == "def");
+
+let message = "Testing strings";
+println(message);

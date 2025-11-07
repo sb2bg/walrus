@@ -1,0 +1,12 @@
+fn side_effect : {
+    println "This should not be printed!";
+    return true;
+}
+
+let result1 = false and side_effect();
+println result1;
+
+let result2 = true or side_effect();
+println result2;
+
+return 0;

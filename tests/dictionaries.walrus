@@ -1,0 +1,17 @@
+let person = {
+    "name": "Alice",
+    "age": 30
+};
+
+println(person);
+
+let dict = {};
+dict += {"a": 1};
+dict += {"b": 2};
+dict += {"c": 3};
+
+println(dict);
+
+for item in dict {
+    println(item);
+}

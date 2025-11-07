@@ -1,0 +1,13 @@
+let x = 10;
+
+fn test : {
+    println("in test");
+    x = 20;
+    println(x);
+    return void;
+}
+
+println("before test");
+test();
+println("after test");
+println(x);
