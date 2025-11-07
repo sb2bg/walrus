@@ -1,3 +1,5 @@
+use std::io;
+use std::io::Write;
 use std::ptr::NonNull;
 
 use float_ord::FloatOrd;
@@ -8,11 +10,13 @@ use instruction_set::InstructionSet;
 
 use crate::arenas::HeapValue;
 use crate::error::WalrusError;
+use crate::function::WalrusFunction;
+use crate::iter::ValueIterator;
 use crate::range::RangeValue;
 use crate::source_ref::SourceRef;
 use crate::span::Span;
 use crate::value::Value;
-use crate::vm::opcode::Opcode;
+use crate::vm::opcode::{Instruction, Opcode};
 use crate::WalrusResult;
 
 pub mod compiler;
@@ -20,28 +24,52 @@ pub mod instruction_set;
 pub mod opcode;
 mod symbol_table;
 
+#[derive(Debug)]
 pub struct VM<'a> {
+    title: String,
     stack: Vec<Value>,
     ip: usize,
     is: InstructionSet,
     source_ref: SourceRef<'a>,
     locals: Vec<Value>,
+    paused: bool,
+    breakpoints: Vec<usize>,
 }
 
 impl<'a> VM<'a> {
     pub fn new(source_ref: SourceRef<'a>, is: InstructionSet) -> Self {
         Self {
+            title: "<main>".to_string(),
             stack: Vec::new(),
             locals: Vec::new(),
             ip: 0,
             is,
             source_ref,
+            paused: false,
+            breakpoints: Vec::new(),
+        }
+    }
+
+    fn create_child(&self, new_is: InstructionSet, title: String) -> Self {
+        Self {
+            title,
+            stack: Vec::new(),
+            locals: self.locals.clone(),
+            ip: 0,
+            is: new_is,
+            source_ref: self.source_ref,
+            paused: self.paused,
+            breakpoints: self.breakpoints.clone(),
         }
     }
 
     pub fn run(&mut self) -> WalrusResult<Value> {
-        loop {
-            self.is.disassemble_single(self.ip);
+        while self.ip < self.is.instructions.len() {
+            self.is.disassemble_single(self.ip, &self.title);
+
+            if self.paused || self.breakpoints.contains(&self.ip) {
+                self.debug_prompt()?;
+            }
 
             let instruction = self.is.get(self.ip);
             let opcode = instruction.opcode();
@@ -182,7 +210,66 @@ impl<'a> VM<'a> {
                         }
                     }
                 }
-                Opcode::Call(_args) => {}
+                Opcode::Call(args) => {
+                    let func = self.pop(opcode, span)?;
+                    let args = self.pop_n(args, opcode, span)?;
+
+                    match func {
+                        Value::Function(key) => {
+                            // fixme: this is a hack to get around the borrow checker so we can clone the heap
+                            let mut ptr = NonNull::from(self.is.get_heap_mut());
+                            let func = self.is.get_heap().get_function(key)?;
+
+                            match func {
+                                WalrusFunction::Rust(func) => {
+                                    let result = func.call(args, self.source_ref, span)?;
+                                    self.push(result);
+                                }
+                                WalrusFunction::Vm(func) => unsafe {
+                                    let heap = ptr.as_mut().clone();
+
+                                    let mut child = self.create_child(
+                                        InstructionSet {
+                                            instructions: func.code.instructions.clone(),
+                                            constants: func.code.constants.clone(),
+                                            locals: func.code.locals.clone(),
+                                            heap,
+                                        },
+                                        format!("fn<{}>", func.name),
+                                    );
+
+                                    // TODO: assign the arguments to the local variables
+                                    for arg in args {
+                                        child.push(arg);
+                                    }
+
+                                    let result = child.run()?;
+                                    self.push(result);
+                                },
+                                _ => {
+                                    // In theory, this should never happen because the compiler
+                                    // should not compile a call to a node function (but just in case)
+                                    return Err(WalrusError::Exception {
+                                        message: "Cannot call a node function from the VM"
+                                            .to_string(),
+                                        span,
+                                        src: self.source_ref.source().into(),
+                                        filename: self.source_ref.filename().into(),
+                                    });
+                                }
+                            }
+                        }
+                        _ => {
+                            println!("func: {:?}", func);
+                            return Err(WalrusError::NotCallable {
+                                value: func.get_type().to_string(),
+                                span,
+                                src: self.source_ref.source().into(),
+                                filename: self.source_ref.filename().into(),
+                            });
+                        }
+                    }
+                }
                 Opcode::Add => {
                     let b = self.pop(opcode, span)?;
                     let a = self.pop(opcode, span)?;
@@ -564,6 +651,10 @@ impl<'a> VM<'a> {
 
             self.stack_trace();
         }
+
+        Err(WalrusError::UnknownError {
+            message: "Instruction pointer out of bounds".to_string(),
+        })
     }
 
     fn construct_err(&self, op: Opcode, a: Value, b: Option<Value>, span: Span) -> WalrusError {
@@ -617,13 +708,90 @@ impl<'a> VM<'a> {
         })
     }
 
+    fn pop_n(&mut self, n: usize, op: Opcode, span: Span) -> WalrusResult<Vec<Value>> {
+        let mut values = Vec::with_capacity(n);
+
+        for _ in 0..n {
+            values.push(self.pop(op, span)?);
+        }
+
+        values.reverse();
+        Ok(values)
+    }
+
     fn stack_trace(&self) {
         if !log_enabled!(log::Level::Debug) {
             return;
         }
 
         for (i, frame) in self.stack.iter().enumerate() {
-            debug!("| {}: {}", i, frame);
+            debug!("| {} | {}: {}", self.title, i, frame);
+        }
+    }
+
+    fn debug_prompt(&mut self) -> WalrusResult<()> {
+        loop {
+            print!("(debug) ");
+            io::stdout().flush().expect("Failed to flush stdout");
+
+            let mut input = String::new();
+            io::stdin()
+                .read_line(&mut input)
+                .expect("Failed to read line");
+
+            match input.trim() {
+                "s" | "step" => {
+                    self.paused = true;
+                    break;
+                }
+                "c" | "continue" => {
+                    self.paused = false;
+                    break;
+                }
+                "p" | "print" => self.print_debug_info(),
+                "b" | "breakpoint" => {
+                    print!("Enter breakpoint line number: ");
+                    io::stdout().flush().expect("Failed to flush stdout");
+                    let mut line = String::new();
+                    io::stdin().read_line(&mut line).expect("Failed to read line");
+                    if let Ok(line_num) = line.trim().parse::<usize>() {
+                        self.breakpoints.push(line_num);
+                        debug!("Breakpoint set at line {}", line_num);
+                    } else {
+                        debug!("Invalid line number");
+                    }
+                }
+                "q" | "quit" => {
+                    return Err(WalrusError::UnknownError {
+                        message: "Debugger quit".to_string(),
+                    });
+                }
+                _ => debug!("Unknown command. Available commands: step (s), continue (c), print (p), breakpoint (b), quit (q)"),
+            }
+        }
+
+        Ok(())
+    }
+
+    fn print_current_instruction(&self) {
+        let instruction = self.is.get(self.ip);
+        debug!(
+            "Executing {} -> {}",
+            instruction.opcode(),
+            &self.source_ref.source()[instruction.span().0..instruction.span().1],
+        );
+    }
+
+    fn print_debug_info(&self) {
+        self.print_current_instruction();
+        debug!("Current instruction pointer -> {}", self.ip);
+        debug!("Stack ->");
+        for (i, value) in self.stack.iter().enumerate() {
+            debug!("  {}: {:?}", i, value);
+        }
+        debug!("Locals ->");
+        for (i, value) in self.locals.iter().enumerate() {
+            debug!("  {}: {:?}", i, value);
         }
     }
 }
