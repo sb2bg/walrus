@@ -251,16 +251,13 @@ impl<'a> VM<'a> {
                                     self.push(result);
                                 }
                                 WalrusFunction::Vm(func) => {
-                                    // Use the function's own heap from compilation, not the parent's
-                                    let heap = func.code.heap.clone();
-
+                                    // All VMs share the global ARENA heap now
                                     let mut child = self.create_child(
                                         InstructionSet {
                                             instructions: func.code.instructions.clone(),
                                             constants: func.code.constants.clone(),
                                             locals: func.code.locals.clone(),
                                             globals: func.code.globals.clone(),
-                                            heap,
                                         },
                                         format!("fn<{}>", func.name),
                                     );

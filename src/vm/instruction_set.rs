@@ -14,7 +14,7 @@ pub struct InstructionSet {
     pub constants: Vec<Value>,
     pub locals: SymbolTable,
     pub globals: SymbolTable,
-    pub heap: ValueHolder,
+    // Note: heap is stored globally in ARENA, not per InstructionSet
 }
 
 impl InstructionSet {
@@ -24,7 +24,6 @@ impl InstructionSet {
             constants: Vec::new(),
             locals: SymbolTable::new(),
             globals: SymbolTable::new(),
-            heap: ValueHolder::new(),
         }
     }
 
@@ -34,7 +33,6 @@ impl InstructionSet {
             constants: Vec::new(),
             locals,
             globals: SymbolTable::new(),
-            heap: ValueHolder::new(),
         }
     }
 
@@ -44,7 +42,6 @@ impl InstructionSet {
             constants: Vec::new(),
             locals: SymbolTable::new(),
             globals,
-            heap: ValueHolder::new(),
         }
     }
 
@@ -66,11 +63,11 @@ impl InstructionSet {
     }
 
     pub fn get_heap_mut(&mut self) -> &mut ValueHolder {
-        &mut self.heap
+        unsafe { &mut *std::ptr::addr_of_mut!(crate::arenas::ARENA) }
     }
 
     pub fn get_heap(&self) -> &ValueHolder {
-        &self.heap
+        unsafe { &*std::ptr::addr_of!(crate::arenas::ARENA) }
     }
 
     pub fn push_local(&mut self, name: String) -> usize {
@@ -130,7 +127,7 @@ impl InstructionSet {
     }
 
     pub fn stringify(&self, value: Value) -> WalrusResult<String> {
-        self.heap.stringify(value)
+        unsafe { (&*std::ptr::addr_of!(crate::arenas::ARENA)).stringify(value) }
     }
 
     pub fn disassemble_single(&self, index: usize, title: &str) {
