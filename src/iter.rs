@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::fmt::Debug;
 use std::ops::Range;
 
 use rustc_hash::FxHashMap;
@@ -7,10 +8,11 @@ use crate::arenas::{HeapValue, ValueHolder};
 use crate::range::RangeValue;
 use crate::value::Value;
 
-pub trait ValueIterator {
+pub trait ValueIterator: Debug {
     fn next(&mut self, arena: &mut ValueHolder) -> Option<Value>;
 }
 
+#[derive(Debug, Clone)]
 pub struct RangeIter {
     range: Range<i64>,
 }
@@ -29,6 +31,7 @@ impl ValueIterator for RangeIter {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct StrIter {
     chars: VecDeque<char>,
 }
@@ -49,6 +52,7 @@ impl ValueIterator for StrIter {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct DictIter {
     dict: Vec<(Value, Value)>,
 }
@@ -65,16 +69,17 @@ impl ValueIterator for DictIter {
     fn next(&mut self, arena: &mut ValueHolder) -> Option<Value> {
         self.dict
             .pop()
-            .map(|(k, v)| arena.push(HeapValue::Tuple(&vec![k, v])))
+            .map(|(k, v)| arena.push(HeapValue::Tuple(&[k, v])))
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct CollectionIter {
     collection: VecDeque<Value>,
 }
 
 impl CollectionIter {
-    pub fn new(collection: &Vec<Value>) -> Self {
+    pub fn new(collection: &[Value]) -> Self {
         Self {
             collection: collection.iter().copied().collect(),
         }
