@@ -178,11 +178,13 @@ Lambda: NodeKind = {
 };
 
 Range: NodeKind = {
-    // FIXME: limited to identifiers
-    <l: Sp<Int>> ".." <u: Sp<Int>> => NodeKind::Range(Some(l), Some(u)),
-    <l: SpIdent> ".." => NodeKind::Range(Some(l), None),
-    ".." <u: SpIdent> => NodeKind::Range(None, Some(u)),
-    ".." => NodeKind::Range(None, None),
+    <l: Sp<Int>> <r: SpRange> => NodeKind::Range(Some(l), r),
+    <r: SpRange> => NodeKind::Range(None, r),
+};
+
+SpRange: Option<Box<Node>> = {
+    ".." <u: Sp<Int>> => Some(u),
+    ".." => None,
 };
 
 Void: NodeKind = {
