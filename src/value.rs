@@ -5,12 +5,29 @@ use std::hash::Hash;
 use float_ord::FloatOrd;
 use strena::Symbol;
 
-use crate::arenas::{DictKey, FuncKey, IterKey, ListKey, Resolve, TupleKey};
-use crate::iter::ValueIterator;
+use crate::arenas::{DictKey, FuncKey, IterKey, ListKey, Resolve, TupleKey, ValueHolder};
+use crate::iter::{CollectionIter, DictIter, RangeIter, StrIter, ValueIterator};
 use crate::range::RangeValue;
 use crate::WalrusResult;
 
-pub type ValueIter = Box<dyn ValueIterator>;
+#[derive(Debug, Clone)]
+pub enum ValueIter {
+    Range(RangeIter),
+    Collection(CollectionIter),
+    Dict(DictIter),
+    Str(StrIter),
+}
+
+impl ValueIterator for ValueIter {
+    fn next(&mut self, arena: &mut ValueHolder) -> Option<Value> {
+        match self {
+            ValueIter::Range(iter) => iter.next(arena),
+            ValueIter::Collection(iter) => iter.next(arena),
+            ValueIter::Dict(iter) => iter.next(arena),
+            ValueIter::Str(iter) => iter.next(arena),
+        }
+    }
+}
 
 #[derive(Debug, PartialEq, Eq, Copy, Clone, Hash)]
 pub enum Value {
