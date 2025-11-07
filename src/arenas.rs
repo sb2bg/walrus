@@ -1,14 +1,14 @@
 use float_ord::FloatOrd;
 use once_cell::sync::Lazy;
 use rustc_hash::FxHashMap;
-use slotmap::{new_key_type, DenseSlotMap};
+use slotmap::{DenseSlotMap, new_key_type};
 use strena::{Interner, Symbol};
 
+use crate::WalrusResult;
 use crate::error::WalrusError;
 use crate::function::WalrusFunction;
 use crate::iter::{CollectionIter, DictIter, RangeIter, StrIter};
 use crate::value::{Value, ValueIter};
-use crate::WalrusResult;
 
 pub static mut ARENA: Lazy<ValueHolder> = Lazy::new(ValueHolder::new);
 
@@ -20,40 +20,40 @@ pub static mut ARENA: Lazy<ValueHolder> = Lazy::new(ValueHolder::new);
 // and then just clone everything and the copy types would just
 // be copied and the rc types would be cloned
 // todo: maybe use a different arena library, DenseSlotMap is mid-performance
-#[derive(Default)]
+#[derive(Default, Debug, Clone)]
 pub struct ValueHolder {
-    dict_slotmap: DenseSlotMap<DictKey, FxHashMap<Value, Value>>,
-    list_slotmap: DenseSlotMap<ListKey, Vec<Value>>,
-    tuple_slotmap: DenseSlotMap<TupleKey, Vec<Value>>, // todo: use slice?
-    string_interner: Interner,
-    function_slotmap: DenseSlotMap<FuncKey, WalrusFunction>,
-    iter_slotmap: DenseSlotMap<IterKey, ValueIter>,
+    dicts: DenseSlotMap<DictKey, FxHashMap<Value, Value>>,
+    lists: DenseSlotMap<ListKey, Vec<Value>>,
+    tuples: DenseSlotMap<TupleKey, Vec<Value>>, // todo: use slice?
+    strings: Interner,
+    functions: DenseSlotMap<FuncKey, WalrusFunction>,
+    iterators: DenseSlotMap<IterKey, ValueIter>,
 }
 
 impl ValueHolder {
     pub fn new() -> Self {
         Self {
-            dict_slotmap: DenseSlotMap::with_key(),
-            list_slotmap: DenseSlotMap::with_key(),
-            tuple_slotmap: DenseSlotMap::with_key(),
-            string_interner: Interner::default(), // todo: use FxHasher
-            function_slotmap: DenseSlotMap::with_key(),
-            iter_slotmap: DenseSlotMap::with_key(),
+            dicts: DenseSlotMap::with_key(),
+            lists: DenseSlotMap::with_key(),
+            tuples: DenseSlotMap::with_key(),
+            strings: Interner::default(), // todo: use FxHasher
+            functions: DenseSlotMap::with_key(),
+            iterators: DenseSlotMap::with_key(),
         }
     }
 
     pub fn free(&mut self, key: Value) -> bool {
         match key {
-            Value::Dict(key) => self.dict_slotmap.remove(key).is_some(),
-            Value::List(key) => self.list_slotmap.remove(key).is_some(),
-            Value::String(key) => {
+            Value::Dict(key) => self.dicts.remove(key).is_some(),
+            Value::List(key) => self.lists.remove(key).is_some(),
+            Value::String(_key) => {
                 // fixme: for now, no way to free strings
                 // self.string_interner.remove(key).is_some()
                 false
             }
-            Value::Function(key) => self.function_slotmap.remove(key).is_some(),
-            Value::Tuple(key) => self.tuple_slotmap.remove(key).is_some(),
-            Value::Iter(key) => self.iter_slotmap.remove(key).is_some(),
+            Value::Function(key) => self.functions.remove(key).is_some(),
+            Value::Tuple(key) => self.tuples.remove(key).is_some(),
+            Value::Iter(key) => self.iterators.remove(key).is_some(),
             _ => false,
         }
     }
@@ -61,12 +61,12 @@ impl ValueHolder {
     // todo: split this into multiple functions for each type
     pub fn push(&mut self, value: HeapValue) -> Value {
         match value {
-            HeapValue::List(list) => Value::List(self.list_slotmap.insert(list)),
-            HeapValue::Tuple(tuple) => Value::Tuple(self.tuple_slotmap.insert(tuple.to_vec())),
-            HeapValue::Dict(dict) => Value::Dict(self.dict_slotmap.insert(dict)),
-            HeapValue::Function(func) => Value::Function(self.function_slotmap.insert(func)),
-            HeapValue::String(string) => Value::String(self.string_interner.get_or_insert(string)),
-            HeapValue::Iter(iter) => Value::Iter(self.iter_slotmap.insert(iter)),
+            HeapValue::List(list) => Value::List(self.lists.insert(list)),
+            HeapValue::Tuple(tuple) => Value::Tuple(self.tuples.insert(tuple.to_vec())),
+            HeapValue::Dict(dict) => Value::Dict(self.dicts.insert(dict)),
+            HeapValue::Function(func) => Value::Function(self.functions.insert(func)),
+            HeapValue::String(string) => Value::String(self.strings.get_or_insert(string)),
+            HeapValue::Iter(iter) => Value::Iter(self.iterators.insert(iter)),
         }
     }
 
@@ -87,64 +87,66 @@ impl ValueHolder {
     }
 
     pub fn push_ident(&mut self, ident: &str) -> Symbol {
-        self.string_interner.get_or_insert(ident)
+        self.strings.get_or_insert(ident)
     }
 
     pub fn get_mut_dict(&mut self, key: DictKey) -> WalrusResult<&mut FxHashMap<Value, Value>> {
-        Self::check(self.dict_slotmap.get_mut(key))
+        Self::check(self.dicts.get_mut(key))
     }
 
     pub fn get_dict(&self, key: DictKey) -> WalrusResult<&FxHashMap<Value, Value>> {
-        Self::check(self.dict_slotmap.get(key))
+        Self::check(self.dicts.get(key))
     }
 
     pub fn get_mut_list(&mut self, key: ListKey) -> WalrusResult<&mut Vec<Value>> {
-        Self::check(self.list_slotmap.get_mut(key))
+        Self::check(self.lists.get_mut(key))
     }
 
     pub fn get_list(&self, key: ListKey) -> WalrusResult<&Vec<Value>> {
-        Self::check(self.list_slotmap.get(key))
+        Self::check(self.lists.get(key))
     }
 
     pub fn get_tuple(&self, key: TupleKey) -> WalrusResult<&Vec<Value>> {
-        Self::check(self.tuple_slotmap.get(key))
+        Self::check(self.tuples.get(key))
     }
 
     pub fn get_string(&self, key: Symbol) -> WalrusResult<&str> {
-        Self::check(self.string_interner.resolve(key))
+        Self::check(self.strings.resolve(key))
     }
 
     pub fn get_function(&self, key: FuncKey) -> WalrusResult<&WalrusFunction> {
-        Self::check(self.function_slotmap.get(key))
+        Self::check(self.functions.get(key))
     }
 
     pub fn get_iter(&self, key: IterKey) -> WalrusResult<&ValueIter> {
-        Self::check(self.iter_slotmap.get(key))
+        Self::check(self.iterators.get(key))
     }
 
     pub fn get_mut_iter(&mut self, key: IterKey) -> WalrusResult<&mut ValueIter> {
-        Self::check(self.iter_slotmap.get_mut(key))
+        Self::check(self.iterators.get_mut(key))
     }
 
     pub fn value_to_iter(&mut self, value: Value) -> WalrusResult<Value> {
         let key = match value {
             Value::List(list) => {
                 let iter = CollectionIter::new(self.get_list(list)?);
-                self.push(HeapValue::Iter(Box::new(iter)))
+                self.push(HeapValue::Iter(ValueIter::Collection(iter)))
             }
             Value::Tuple(tuple) => {
                 let iter = CollectionIter::new(self.get_tuple(tuple)?);
-                self.push(HeapValue::Iter(Box::new(iter)))
+                self.push(HeapValue::Iter(ValueIter::Collection(iter)))
             }
             Value::Dict(dict) => {
                 let iter = DictIter::new(self.get_dict(dict)?);
-                self.push(HeapValue::Iter(Box::new(iter)))
+                self.push(HeapValue::Iter(ValueIter::Dict(iter)))
             }
             Value::String(string) => {
                 let iter = StrIter::new(self.get_string(string)?);
-                self.push(HeapValue::Iter(Box::new(iter)))
+                self.push(HeapValue::Iter(ValueIter::Str(iter)))
             }
-            Value::Range(range) => self.push(HeapValue::Iter(Box::new(RangeIter::new(range)))),
+            Value::Range(range) => {
+                self.push(HeapValue::Iter(ValueIter::Range(RangeIter::new(range))))
+            }
             Value::Iter(iter) => Value::Iter(iter),
             _ => {
                 return Err(WalrusError::TodoError {
@@ -242,7 +244,7 @@ pub enum HeapValue<'a> {
 
 impl HeapValue<'_> {
     pub fn alloc(self) -> Value {
-        unsafe { ARENA.push(self) }
+        unsafe { (*std::ptr::addr_of_mut!(ARENA)).push(self) }
     }
 }
 
@@ -270,7 +272,7 @@ pub trait ResolveMut<'a> {
 
 impl Free for Value {
     fn free(&mut self) -> bool {
-        unsafe { ARENA.free(*self) }
+        unsafe { (*std::ptr::addr_of_mut!(ARENA)).free(*self) }
     }
 }
 
@@ -278,7 +280,7 @@ impl<'a> Resolve<'a> for ListKey {
     type Output = &'a Vec<Value>;
 
     fn resolve(self) -> WalrusResult<Self::Output> {
-        unsafe { ARENA.get_list(self) }
+        unsafe { (*std::ptr::addr_of_mut!(ARENA)).get_list(self) }
     }
 }
 
@@ -286,7 +288,7 @@ impl<'a> Resolve<'a> for DictKey {
     type Output = &'a FxHashMap<Value, Value>;
 
     fn resolve(self) -> WalrusResult<Self::Output> {
-        unsafe { ARENA.get_dict(self) }
+        unsafe { (*std::ptr::addr_of_mut!(ARENA)).get_dict(self) }
     }
 }
 
@@ -294,7 +296,7 @@ impl<'a> Resolve<'a> for FuncKey {
     type Output = &'a WalrusFunction;
 
     fn resolve(self) -> WalrusResult<Self::Output> {
-        unsafe { ARENA.get_function(self) }
+        unsafe { (*std::ptr::addr_of_mut!(ARENA)).get_function(self) }
     }
 }
 
@@ -302,7 +304,7 @@ impl<'a> Resolve<'a> for Symbol {
     type Output = &'a str;
 
     fn resolve(self) -> WalrusResult<Self::Output> {
-        unsafe { ARENA.get_string(self) }
+        unsafe { (*std::ptr::addr_of_mut!(ARENA)).get_string(self) }
     }
 }
 
@@ -310,7 +312,7 @@ impl<'a> ResolveMut<'a> for ListKey {
     type Output = &'a mut Vec<Value>;
 
     fn resolve_mut(self) -> WalrusResult<Self::Output> {
-        unsafe { ARENA.get_mut_list(self) }
+        unsafe { (*std::ptr::addr_of_mut!(ARENA)).get_mut_list(self) }
     }
 }
 
@@ -318,7 +320,7 @@ impl<'a> ResolveMut<'a> for DictKey {
     type Output = &'a mut FxHashMap<Value, Value>;
 
     fn resolve_mut(self) -> WalrusResult<Self::Output> {
-        unsafe { ARENA.get_mut_dict(self) }
+        unsafe { (*std::ptr::addr_of_mut!(ARENA)).get_mut_dict(self) }
     }
 }
 
@@ -326,6 +328,6 @@ impl<'a> Resolve<'a> for TupleKey {
     type Output = &'a Vec<Value>;
 
     fn resolve(self) -> WalrusResult<Self::Output> {
-        unsafe { ARENA.get_tuple(self) }
+        unsafe { (*std::ptr::addr_of_mut!(ARENA)).get_tuple(self) }
     }
 }
