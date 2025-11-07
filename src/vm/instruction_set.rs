@@ -8,12 +8,12 @@ use crate::vm::opcode::Instruction;
 use crate::vm::symbol_table::SymbolTable;
 use crate::WalrusResult;
 
-#[derive(Default)]
+#[derive(Default, Debug, Clone)]
 pub struct InstructionSet {
-    instructions: Vec<Instruction>,
-    constants: Vec<Value>,
-    locals: SymbolTable,
-    heap: ValueHolder,
+    pub instructions: Vec<Instruction>,
+    pub constants: Vec<Value>,
+    pub locals: SymbolTable,
+    pub heap: ValueHolder,
 }
 
 impl InstructionSet {
@@ -22,6 +22,15 @@ impl InstructionSet {
             instructions: Vec::new(),
             constants: Vec::new(),
             locals: SymbolTable::new(),
+            heap: ValueHolder::new(),
+        }
+    }
+
+    pub fn new_with(locals: SymbolTable) -> Self {
+        Self {
+            instructions: Vec::new(),
+            constants: Vec::new(),
+            locals,
             heap: ValueHolder::new(),
         }
     }
@@ -99,22 +108,26 @@ impl InstructionSet {
         self.heap.stringify(value)
     }
 
-    pub fn disassemble_single(&self, index: usize) {
-        debug!("| {index:03} {:?}", self.instructions[index].opcode(),);
+    pub fn disassemble_single(&self, index: usize, title: &str) {
+        debug!(
+            "| {} | {index:03} {:?}",
+            title,
+            self.instructions[index].opcode(),
+        );
     }
 }
 
 impl Display for InstructionSet {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "| ===  disassembly  ===")?;
-        // writeln!(f, "| === constant pool ===")?;
-        //
-        // for (i, _) in self.constants.iter().enumerate() {
-        //     writeln!(f, "| C{i:02} {:?}", self.constants[i],)?;
-        // }
-        //
-        // writeln!(f)?;
-        // writeln!(f, "| ===  instructions  ===")?;
+        writeln!(f, "| === constant pool ===")?;
+
+        for (i, _) in self.constants.iter().enumerate() {
+            writeln!(f, "| C{i:02} {:?}", self.constants[i],)?;
+        }
+
+        writeln!(f)?;
+        writeln!(f, "| ===  instructions  ===")?;
 
         for (i, _) in self.instructions.iter().enumerate() {
             writeln!(f, "| {i:03} {:?}", self.instructions[i].opcode(),)?;
