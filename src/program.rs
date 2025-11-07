@@ -74,8 +74,14 @@ impl Program {
     }
 
     fn compile(&self, ast: Node, source_ref: SourceRef) -> InterpreterResult {
+        let span = *ast.span();
         let mut emitter = BytecodeEmitter::new(source_ref);
         emitter.emit(ast)?;
+        
+        // Add implicit return at the end of the program
+        emitter.emit_void(span);
+        emitter.emit_return(span);
+        
         let mut vm = VM::new(source_ref, emitter.instruction_set());
         vm.run()?;
 

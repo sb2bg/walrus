@@ -406,6 +406,12 @@ impl<'a> BytecodeEmitter<'a> {
             .push(Instruction::new(Opcode::Store, span));
     }
 
+    fn define_parameter(&mut self, name: String) {
+        // Define parameter in locals without emitting Store opcode
+        // The value will already be in locals when the function is called
+        self.instructions.push_local(name);
+    }
+
     pub fn instruction_set(self) -> InstructionSet {
         self.instructions.disassemble();
         self.instructions
