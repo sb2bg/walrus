@@ -2,7 +2,7 @@
 name = "walrus"
 authors = ["Sullivan Bognar"]
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [build-dependencies]
 lalrpop = "0.19.9"
