@@ -1,18 +1,18 @@
 use std::collections::HashSet;
 use std::fs;
-use std::io::{BufRead, stdout, Write};
+use std::io::{BufRead, Write, stdout};
 use std::path::PathBuf;
 
 use log::debug;
 
 use crate::ast::Node;
-use crate::error::{parser_err_mapper, WalrusError};
+use crate::error::{WalrusError, parser_err_mapper};
 use crate::grammar::ProgramParser;
 use crate::interpreter::{Interpreter, InterpreterResult};
 use crate::source_ref::{OwnedSourceRef, SourceRef};
 use crate::value::Value;
-use crate::vm::compiler::BytecodeEmitter;
 use crate::vm::VM;
+use crate::vm::compiler::BytecodeEmitter;
 
 #[derive(Debug, Clone, Copy)]
 pub enum Opts {
@@ -77,11 +77,11 @@ impl Program {
         let span = *ast.span();
         let mut emitter = BytecodeEmitter::new(source_ref);
         emitter.emit(ast)?;
-        
+
         // Add implicit return at the end of the program
         emitter.emit_void(span);
         emitter.emit_return(span);
-        
+
         let mut vm = VM::new(source_ref, emitter.instruction_set());
         vm.run()?;
 

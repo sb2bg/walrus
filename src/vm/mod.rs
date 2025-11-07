@@ -8,6 +8,7 @@ use rustc_hash::FxHashMap;
 
 use instruction_set::InstructionSet;
 
+use crate::WalrusResult;
 use crate::arenas::HeapValue;
 use crate::error::WalrusError;
 use crate::function::WalrusFunction;
@@ -17,7 +18,6 @@ use crate::source_ref::SourceRef;
 use crate::span::Span;
 use crate::value::Value;
 use crate::vm::opcode::{Instruction, Opcode};
-use crate::WalrusResult;
 
 pub mod compiler;
 pub mod instruction_set;
@@ -56,7 +56,7 @@ impl<'a> VM<'a> {
         Self {
             title,
             stack: Vec::new(),
-            locals: Vec::new(), // Functions start with empty locals
+            locals: Vec::new(),            // Functions start with empty locals
             globals: self.globals.clone(), // Share globals with parent
             ip: 0,
             is: new_is,
@@ -774,7 +774,9 @@ impl<'a> VM<'a> {
                     print!("Enter breakpoint line number: ");
                     io::stdout().flush().expect("Failed to flush stdout");
                     let mut line = String::new();
-                    io::stdin().read_line(&mut line).expect("Failed to read line");
+                    io::stdin()
+                        .read_line(&mut line)
+                        .expect("Failed to read line");
                     if let Ok(line_num) = line.trim().parse::<usize>() {
                         self.breakpoints.push(line_num);
                         debug!("Breakpoint set at line {}", line_num);
@@ -787,7 +789,9 @@ impl<'a> VM<'a> {
                         message: "Debugger quit".to_string(),
                     });
                 }
-                _ => debug!("Unknown command. Available commands: step (s), continue (c), print (p), breakpoint (b), quit (q)"),
+                _ => debug!(
+                    "Unknown command. Available commands: step (s), continue (c), print (p), breakpoint (b), quit (q)"
+                ),
             }
         }
 

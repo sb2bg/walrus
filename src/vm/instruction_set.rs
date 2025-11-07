@@ -2,11 +2,11 @@ use std::fmt::Display;
 
 use log::debug;
 
+use crate::WalrusResult;
 use crate::arenas::ValueHolder;
 use crate::value::Value;
 use crate::vm::opcode::Instruction;
 use crate::vm::symbol_table::SymbolTable;
-use crate::WalrusResult;
 
 #[derive(Default, Debug, Clone)]
 pub struct InstructionSet {
