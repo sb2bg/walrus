@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 use std::fs;
-use std::io::{stdout, BufRead, Write};
+use std::io::{BufRead, stdout, Write};
 use std::path::PathBuf;
 
 use log::debug;
@@ -132,7 +132,7 @@ impl Program {
         }
     }
 
-    pub fn load_module(&mut self, module_name: &str) -> InterpreterResult {
+    pub fn load_module(&self, module_name: &str) -> InterpreterResult {
         if self.loaded_modules.contains(module_name) {
             return Ok(Value::Void);
         }
@@ -140,7 +140,7 @@ impl Program {
         let mut program = Program::new(Some(PathBuf::from(module_name)), None, self.opts)?;
         let result = program.execute()?;
 
-        self.loaded_modules.insert(module_name.to_string());
+        // self.loaded_modules.insert(module_name.to_string());
 
         Ok(result)
     }
