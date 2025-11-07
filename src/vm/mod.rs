@@ -58,7 +58,7 @@ impl<'a> VM<'a> {
         Self {
             title,
             stack: Vec::new(),
-            locals: Vec::new(),            // Functions start with empty locals
+            locals: Vec::new(),                // Functions start with empty locals
             globals: Rc::clone(&self.globals), // Share globals with parent via Rc
             ip: 0,
             is: new_is,
