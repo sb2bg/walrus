@@ -6,14 +6,17 @@ use crate::span::Span;
 pub enum Opcode {
     LoadConst(usize), // usize pads the enum by 8 bytes
     Load(usize),
+    LoadGlobal(usize),
     List(usize),
     Dict(usize),
     Reassign(usize),
+    ReassignGlobal(usize),
     JumpIfFalse(usize),
     Jump(usize),
     PopLocal(usize),
     IterNext(usize),
     StoreAt(usize),
+    StoreGlobal(usize),
     Call(usize),
     GetIter,
     Store,

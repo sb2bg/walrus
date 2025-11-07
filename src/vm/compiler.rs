@@ -1,3 +1,4 @@
+use crate::WalrusResult;
 use crate::arenas::HeapValue;
 use crate::ast::{Node, NodeKind};
 use crate::error::WalrusError;
@@ -7,11 +8,11 @@ use crate::span::Span;
 use crate::value::Value;
 use crate::vm::instruction_set::InstructionSet;
 use crate::vm::opcode::{Instruction, Opcode};
-use crate::WalrusResult;
 
 pub struct BytecodeEmitter<'a> {
     instructions: InstructionSet,
     source_ref: SourceRef<'a>,
+    depth: usize, // 0 = global scope, >0 = local scope
 }
 
 impl<'a> BytecodeEmitter<'a> {
@@ -19,13 +20,15 @@ impl<'a> BytecodeEmitter<'a> {
         Self {
             instructions: InstructionSet::new(),
             source_ref,
+            depth: 0, // Start at global scope
         }
     }
 
     fn new_child(&self) -> Self {
         Self {
-            instructions: InstructionSet::new_with(self.instructions.locals.clone()),
+            instructions: InstructionSet::new_child_with_globals(self.instructions.globals.clone()),
             source_ref: self.source_ref,
+            depth: 1, // Functions start at local scope depth 1
         }
     }
 
@@ -196,15 +199,28 @@ impl<'a> BytecodeEmitter<'a> {
                 );
             }
             NodeKind::FunctionDefinition(name, args, body) => {
+                let is_global = self.depth == 0;
+
+                // Pre-register the function name
+                let func_index = if is_global {
+                    self.instructions.push_global(name.clone())
+                } else {
+                    self.instructions.push_local(name.clone())
+                };
+
+                // Create a child emitter - functions are always local scope
                 let mut emitter = self.new_child();
                 let arg_len = args.len();
 
+                // Define function parameters as locals in the function scope
+                // Don't emit Store opcodes - values will already be in locals when called
                 for arg in args {
-                    emitter.define_variable(arg, span);
+                    emitter.define_parameter(arg);
                 }
 
                 emitter.emit(*body)?;
 
+                // Create the function heap value
                 let func =
                     self.instructions
                         .get_heap_mut()
@@ -214,11 +230,20 @@ impl<'a> BytecodeEmitter<'a> {
                             emitter.instruction_set(),
                         ))));
 
+                // Load the function constant and store it
                 let index = self.instructions.push_constant(func);
                 self.instructions
                     .push(Instruction::new(Opcode::LoadConst(index), span));
 
-                self.define_variable(name, span);
+                if is_global {
+                    // Top-level function definitions go into globals
+                    self.instructions
+                        .push(Instruction::new(Opcode::StoreGlobal(func_index), span));
+                } else {
+                    // Nested function definitions go into locals
+                    self.instructions
+                        .push(Instruction::new(Opcode::StoreAt(func_index), span));
+                }
             }
             NodeKind::AnonFunctionDefinition(args, body) => {
                 // TODO: model this after FunctionDefinition
@@ -260,20 +285,21 @@ impl<'a> BytecodeEmitter<'a> {
                     .push(Instruction::new(Opcode::Print, span));
             }
             NodeKind::Ident(name) => {
-                match self.instructions.resolve_index(&name) {
-                    Some(index) => {
-                        self.instructions
-                            .push(Instruction::new(Opcode::Load(index), span));
-                    }
-                    None => {
-                        return Err(WalrusError::UndefinedVariable {
-                            name,
-                            span,
-                            src: self.source_ref.source().to_string(),
-                            filename: self.source_ref.filename().to_string(),
-                        })
-                    }
-                };
+                // Check locals first, then globals
+                if let Some(index) = self.instructions.resolve_local_index(&name) {
+                    self.instructions
+                        .push(Instruction::new(Opcode::Load(index), span));
+                } else if let Some(index) = self.instructions.resolve_global_index(&name) {
+                    self.instructions
+                        .push(Instruction::new(Opcode::LoadGlobal(index), span));
+                } else {
+                    return Err(WalrusError::UndefinedVariable {
+                        name,
+                        span,
+                        src: self.source_ref.source().to_string(),
+                        filename: self.source_ref.filename().to_string(),
+                    });
+                }
             }
             NodeKind::Assign(name, node) => {
                 if let Some(depth) = self.instructions.resolve_depth(&name) {
@@ -299,7 +325,7 @@ impl<'a> BytecodeEmitter<'a> {
                             span,
                             src: self.source_ref.source().to_string(),
                             filename: self.source_ref.filename().to_string(),
-                        })
+                        });
                     }
                 };
 
@@ -415,5 +441,14 @@ impl<'a> BytecodeEmitter<'a> {
     pub fn instruction_set(self) -> InstructionSet {
         self.instructions.disassemble();
         self.instructions
+    }
+
+    pub fn emit_void(&mut self, span: Span) {
+        self.instructions.push(Instruction::new(Opcode::Void, span));
+    }
+
+    pub fn emit_return(&mut self, span: Span) {
+        self.instructions
+            .push(Instruction::new(Opcode::Return, span));
     }
 }

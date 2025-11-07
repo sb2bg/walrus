@@ -32,6 +32,7 @@ pub struct VM<'a> {
     is: InstructionSet,
     source_ref: SourceRef<'a>,
     locals: Vec<Value>,
+    globals: Vec<Value>,
     paused: bool,
     breakpoints: Vec<usize>,
 }
@@ -42,6 +43,7 @@ impl<'a> VM<'a> {
             title: "<main>".to_string(),
             stack: Vec::new(),
             locals: Vec::new(),
+            globals: Vec::new(),
             ip: 0,
             is,
             source_ref,
@@ -54,7 +56,8 @@ impl<'a> VM<'a> {
         Self {
             title,
             stack: Vec::new(),
-            locals: self.locals.clone(),
+            locals: Vec::new(), // Functions start with empty locals
+            globals: self.globals.clone(), // Share globals with parent
             ip: 0,
             is: new_is,
             source_ref: self.source_ref,
@@ -84,6 +87,9 @@ impl<'a> VM<'a> {
                 Opcode::Load(index) => {
                     self.push(self.locals[index]);
                 }
+                Opcode::LoadGlobal(index) => {
+                    self.push(self.globals[index]);
+                }
                 Opcode::Store => {
                     let value = self.pop(opcode, span)?;
                     self.locals.push(value);
@@ -97,9 +103,22 @@ impl<'a> VM<'a> {
 
                     self.locals[index] = value;
                 }
+                Opcode::StoreGlobal(index) => {
+                    let value = self.pop(opcode, span)?;
+
+                    if index == self.globals.len() {
+                        self.globals.push(value);
+                    } else {
+                        self.globals[index] = value;
+                    }
+                }
                 Opcode::Reassign(index) => {
                     let value = self.pop(opcode, span)?;
                     self.locals[index] = value;
+                }
+                Opcode::ReassignGlobal(index) => {
+                    let value = self.pop(opcode, span)?;
+                    self.globals[index] = value;
                 }
                 Opcode::List(cap) => {
                     let mut list = Vec::with_capacity(cap);
@@ -233,14 +252,16 @@ impl<'a> VM<'a> {
                                             instructions: func.code.instructions.clone(),
                                             constants: func.code.constants.clone(),
                                             locals: func.code.locals.clone(),
+                                            globals: func.code.globals.clone(),
                                             heap,
                                         },
                                         format!("fn<{}>", func.name),
                                     );
 
-                                    // TODO: assign the arguments to the local variables
+                                    // Store the arguments as local variables
+                                    // The function parameters are already defined as locals during compilation
                                     for arg in args {
-                                        child.push(arg);
+                                        child.locals.push(arg);
                                     }
 
                                     let result = child.run()?;

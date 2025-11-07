@@ -13,6 +13,7 @@ pub struct InstructionSet {
     pub instructions: Vec<Instruction>,
     pub constants: Vec<Value>,
     pub locals: SymbolTable,
+    pub globals: SymbolTable,
     pub heap: ValueHolder,
 }
 
@@ -22,6 +23,7 @@ impl InstructionSet {
             instructions: Vec::new(),
             constants: Vec::new(),
             locals: SymbolTable::new(),
+            globals: SymbolTable::new(),
             heap: ValueHolder::new(),
         }
     }
@@ -31,6 +33,17 @@ impl InstructionSet {
             instructions: Vec::new(),
             constants: Vec::new(),
             locals,
+            globals: SymbolTable::new(),
+            heap: ValueHolder::new(),
+        }
+    }
+
+    pub fn new_child_with_globals(globals: SymbolTable) -> Self {
+        Self {
+            instructions: Vec::new(),
+            constants: Vec::new(),
+            locals: SymbolTable::new(),
+            globals,
             heap: ValueHolder::new(),
         }
     }
@@ -64,12 +77,24 @@ impl InstructionSet {
         self.locals.push(name)
     }
 
+    pub fn push_global(&mut self, name: String) -> usize {
+        self.globals.push(name)
+    }
+
     pub fn local_len(&self) -> usize {
         self.locals.len()
     }
 
     pub fn resolve_index(&self, name: &str) -> Option<usize> {
         self.locals.resolve_index(name)
+    }
+
+    pub fn resolve_local_index(&self, name: &str) -> Option<usize> {
+        self.locals.resolve_index(name)
+    }
+
+    pub fn resolve_global_index(&self, name: &str) -> Option<usize> {
+        self.globals.resolve_index(name)
     }
 
     pub fn resolve_depth(&self, name: &str) -> Option<usize> {
