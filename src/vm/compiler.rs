@@ -302,85 +302,120 @@ impl<'a> BytecodeEmitter<'a> {
                 }
             }
             NodeKind::Assign(name, node) => {
-                if let Some(depth) = self.instructions.resolve_depth(&name) {
-                    if depth >= self.instructions.local_depth() {
-                        return Err(WalrusError::RedefinedLocal {
-                            name,
-                            span,
-                            src: self.source_ref.source().to_string(),
-                            filename: self.source_ref.filename().to_string(),
-                        });
+                let is_global = self.depth == 0;
+                
+                if !is_global {
+                    // Check for redefinition only in local scopes
+                    if let Some(depth) = self.instructions.resolve_depth(&name) {
+                        if depth >= self.instructions.local_depth() {
+                            return Err(WalrusError::RedefinedLocal {
+                                name,
+                                span,
+                                src: self.source_ref.source().to_string(),
+                                filename: self.source_ref.filename().to_string(),
+                            });
+                        }
                     }
                 }
 
                 self.emit(*node)?;
-                self.define_variable(name, span);
+                
+                if is_global {
+                    self.define_global_variable(name, span);
+                } else {
+                    self.define_variable(name, span);
+                }
             }
             NodeKind::Reassign(name, node, op) => {
-                let index = match self.instructions.resolve_index(name.value()) {
-                    Some(index) => index,
-                    None => {
-                        return Err(WalrusError::UndefinedVariable {
-                            name: name.value().to_string(),
-                            span,
-                            src: self.source_ref.source().to_string(),
-                            filename: self.source_ref.filename().to_string(),
-                        });
-                    }
+                // Check locals first, then globals
+                let (index, is_global) = if let Some(index) = self.instructions.resolve_local_index(name.value()) {
+                    (index, false)
+                } else if let Some(index) = self.instructions.resolve_global_index(name.value()) {
+                    (index, true)
+                } else {
+                    return Err(WalrusError::UndefinedVariable {
+                        name: name.value().to_string(),
+                        span,
+                        src: self.source_ref.source().to_string(),
+                        filename: self.source_ref.filename().to_string(),
+                    });
                 };
 
+                // For compound assignments (+=, -=, etc.), we need to load the current value first
                 match op {
                     Opcode::Add => {
-                        self.instructions
-                            .push(Instruction::new(Opcode::Load(index), span));
-
+                        if is_global {
+                            self.instructions
+                                .push(Instruction::new(Opcode::LoadGlobal(index), span));
+                        } else {
+                            self.instructions
+                                .push(Instruction::new(Opcode::Load(index), span));
+                        }
                         self.emit(*node)?;
-
                         self.instructions.push(Instruction::new(Opcode::Add, span));
                     }
                     Opcode::Subtract => {
-                        self.instructions
-                            .push(Instruction::new(Opcode::Load(index), span));
-
+                        if is_global {
+                            self.instructions
+                                .push(Instruction::new(Opcode::LoadGlobal(index), span));
+                        } else {
+                            self.instructions
+                                .push(Instruction::new(Opcode::Load(index), span));
+                        }
                         self.emit(*node)?;
-
                         self.instructions
                             .push(Instruction::new(Opcode::Subtract, span));
                     }
                     Opcode::Multiply => {
-                        self.instructions
-                            .push(Instruction::new(Opcode::Load(index), span));
-
+                        if is_global {
+                            self.instructions
+                                .push(Instruction::new(Opcode::LoadGlobal(index), span));
+                        } else {
+                            self.instructions
+                                .push(Instruction::new(Opcode::Load(index), span));
+                        }
                         self.emit(*node)?;
-
                         self.instructions
                             .push(Instruction::new(Opcode::Multiply, span));
                     }
                     Opcode::Divide => {
-                        self.instructions
-                            .push(Instruction::new(Opcode::Load(index), span));
-
+                        if is_global {
+                            self.instructions
+                                .push(Instruction::new(Opcode::LoadGlobal(index), span));
+                        } else {
+                            self.instructions
+                                .push(Instruction::new(Opcode::Load(index), span));
+                        }
                         self.emit(*node)?;
-
                         self.instructions
                             .push(Instruction::new(Opcode::Divide, span));
                     }
                     Opcode::Modulo => {
-                        self.instructions
-                            .push(Instruction::new(Opcode::Load(index), span));
-
+                        if is_global {
+                            self.instructions
+                                .push(Instruction::new(Opcode::LoadGlobal(index), span));
+                        } else {
+                            self.instructions
+                                .push(Instruction::new(Opcode::Load(index), span));
+                        }
                         self.emit(*node)?;
-
                         self.instructions
                             .push(Instruction::new(Opcode::Modulo, span));
                     }
                     _ => {
+                        // Simple assignment (=), just emit the new value
                         self.emit(*node)?;
                     }
                 }
 
-                self.instructions
-                    .push(Instruction::new(Opcode::Reassign(index), span));
+                // Store the result back
+                if is_global {
+                    self.instructions
+                        .push(Instruction::new(Opcode::ReassignGlobal(index), span));
+                } else {
+                    self.instructions
+                        .push(Instruction::new(Opcode::Reassign(index), span));
+                }
             }
             NodeKind::Statements(nodes) => {
                 self.inc_depth();
@@ -430,6 +465,13 @@ impl<'a> BytecodeEmitter<'a> {
 
         self.instructions
             .push(Instruction::new(Opcode::Store, span));
+    }
+
+    fn define_global_variable(&mut self, name: String, span: Span) {
+        let index = self.instructions.push_global(name);
+
+        self.instructions
+            .push(Instruction::new(Opcode::StoreGlobal(index), span));
     }
 
     fn define_parameter(&mut self, name: String) {
