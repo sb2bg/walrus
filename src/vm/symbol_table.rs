@@ -1,4 +1,4 @@
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct SymbolTable {
     locals: Vec<Local>, // fixme: use a hashmap
     depth: usize,
@@ -53,7 +53,7 @@ impl SymbolTable {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Local {
     name: String,
     depth: usize,
