@@ -1,9 +1,9 @@
-use std::panic;
 use std::path::PathBuf;
+use std::{backtrace, panic};
 
 use clap::Parser as ClapParser;
 use lalrpop_util::lalrpop_mod;
-use log::LevelFilter;
+use log::{trace, LevelFilter};
 use simplelog::SimpleLogger;
 
 use crate::error::WalrusError;
@@ -55,6 +55,9 @@ struct Args {
 
     #[clap(short = 'v', long = "verbose", help = "Enable verbose mode")]
     verbose: bool,
+
+    #[clap(short = 't', long = "trace", help = "Enable trace mode")]
+    trace: bool,
 }
 
 type WalrusResult<T> = Result<T, WalrusError>;
@@ -67,6 +70,8 @@ fn main() {
                 message: err.to_string(),
             }
         );
+
+        trace!("Backtrace -> {}", backtrace::Backtrace::capture());
     }));
 
     #[cfg(feature = "dhat-heap")]
@@ -81,8 +86,16 @@ fn main() {
 
 fn try_main() -> WalrusResult<()> {
     let args = Args::parse();
-    setup_logger(args.debug)?;
 
+    setup_logger(if args.trace {
+        LevelFilter::Trace
+    } else if args.debug {
+        LevelFilter::Debug
+    } else {
+        LevelFilter::Info
+    })?;
+
+    // TODO: make this more idiomatic
     let opts = match (args.interpreted, args.disassemble) {
         (true, false) => Opts::Interpret,
         (false, true) => Opts::Disassemble,
@@ -102,13 +115,7 @@ pub fn create_shell(file: Option<PathBuf>, opts: Opts) -> InterpreterResult {
     Program::new(file, None, opts)?.execute()
 }
 
-fn setup_logger(debug: bool) -> WalrusResult<()> {
-    let level = if debug {
-        LevelFilter::Debug
-    } else {
-        LevelFilter::Info
-    };
-
+fn setup_logger(level: LevelFilter) -> WalrusResult<()> {
     match SimpleLogger::init(level, simplelog::Config::default()) {
         Ok(_) => Ok(()),
         Err(err) => Err(WalrusError::UnknownError {
