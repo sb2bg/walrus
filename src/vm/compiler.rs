@@ -1,6 +1,7 @@
 use crate::arenas::HeapValue;
 use crate::ast::{Node, NodeKind};
 use crate::error::WalrusError;
+use crate::function::{VmFunction, WalrusFunction};
 use crate::source_ref::SourceRef;
 use crate::span::Span;
 use crate::value::Value;
@@ -18,6 +19,13 @@ impl<'a> BytecodeEmitter<'a> {
         Self {
             instructions: InstructionSet::new(),
             source_ref,
+        }
+    }
+
+    fn new_child(&self) -> Self {
+        Self {
+            instructions: InstructionSet::new_with(self.instructions.locals.clone()),
+            source_ref: self.source_ref,
         }
     }
 
@@ -188,12 +196,50 @@ impl<'a> BytecodeEmitter<'a> {
                 );
             }
             NodeKind::FunctionDefinition(name, args, body) => {
-                todo!()
+                let mut emitter = self.new_child();
+                let arg_len = args.len();
+
+                for arg in args {
+                    emitter.define_variable(arg, span);
+                }
+
+                emitter.emit(*body)?;
+
+                let func =
+                    self.instructions
+                        .get_heap_mut()
+                        .push(HeapValue::Function(WalrusFunction::Vm(VmFunction::new(
+                            name.clone(),
+                            arg_len,
+                            emitter.instruction_set(),
+                        ))));
+
+                let index = self.instructions.push_constant(func);
+                self.instructions
+                    .push(Instruction::new(Opcode::LoadConst(index), span));
+
+                self.define_variable(name, span);
             }
             NodeKind::AnonFunctionDefinition(args, body) => {
-                todo!()
+                // TODO: model this after FunctionDefinition
             }
-            NodeKind::FunctionCall(func, args) => {}
+            NodeKind::FunctionCall(func, args) => {
+                // TODO: try to check arity at compile time, if possible
+                // we may need to evaluate func first, which is a Box<Node>
+                // and resolve it to a function, then check the arity, then
+                // evaluate the arguments, but we can't do that because we
+                // don't have the function table here
+                let arg_len = args.len();
+
+                for arg in args {
+                    self.emit(arg)?;
+                }
+
+                self.emit(*func)?;
+
+                self.instructions
+                    .push(Instruction::new(Opcode::Call(arg_len), span));
+            }
             NodeKind::Index(node, index) => {
                 self.emit(*node)?;
                 self.emit(*index)?;
@@ -361,7 +407,7 @@ impl<'a> BytecodeEmitter<'a> {
     }
 
     pub fn instruction_set(self) -> InstructionSet {
-        // self.instructions.disassemble();
+        self.instructions.disassemble();
         self.instructions
     }
 }
