@@ -3,9 +3,10 @@ use crate::interpreter::InterpreterResult;
 use crate::source_ref::SourceRef;
 use crate::span::Span;
 use crate::value::Value;
-use crate::vm::opcode::Instruction;
+use crate::vm::instruction_set::InstructionSet;
 use std::fmt::Display;
 
+#[derive(Debug, Clone)]
 pub struct RustFunction {
     pub name: String,
     pub args: usize,
@@ -26,6 +27,7 @@ impl RustFunction {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct NodeFunction {
     pub name: String,
     pub args: Vec<String>,
@@ -42,18 +44,20 @@ impl NodeFunction {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct VmFunction {
     pub name: String,
     pub arity: usize,
-    pub code: Vec<Instruction>,
+    pub code: InstructionSet,
 }
 
 impl VmFunction {
-    pub fn new(name: String, arity: usize, code: Vec<Instruction>) -> Self {
+    pub fn new(name: String, arity: usize, code: InstructionSet) -> Self {
         Self { name, arity, code }
     }
 }
 
+#[derive(Debug, Clone)]
 pub enum WalrusFunction {
     Rust(RustFunction),
     TreeWalk(NodeFunction),
