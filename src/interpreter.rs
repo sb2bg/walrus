@@ -373,7 +373,7 @@ impl<'a> Interpreter<'a> {
             Value::Function(f) => {
                 let func = f.resolve()?;
 
-                return match func {
+                match func {
                     WalrusFunction::Rust(rust_fn) => {
                         if rust_fn.args != args.len() {
                             Err(WalrusError::InvalidArgCount {
@@ -407,7 +407,7 @@ impl<'a> Interpreter<'a> {
                         let mut sub_interpreter = self.create_child(node_fn.name.clone()); // todo: clone
 
                         for (name, value) in node_fn.args.iter().zip(args) {
-                            sub_interpreter.scope.assign(name.clone(), value); // todo: clone
+                            sub_interpreter.scope.assign(name.clone(), value); // fixme: clone
                         }
 
                         // todo: I'm pretty sure this clone is required but see if we can avoid it
@@ -416,7 +416,7 @@ impl<'a> Interpreter<'a> {
                     WalrusFunction::Vm(_) => unsafe {
                         unreachable_unchecked();
                     },
-                };
+                }
             }
             _ => Err(WalrusError::NotCallable {
                 value: value.get_type().to_string(),
@@ -592,8 +592,9 @@ impl<'a> Interpreter<'a> {
     // fixme: when importing a function, for example, it clones the function rather than just referencing it
     fn visit_module_import(&mut self, name: String, as_name: Option<String>) -> InterpreterResult {
         if let Some(as_name) = as_name {
-            // fixme: we need to get program as mutable
-            // self.scope.define(as_name, self.program.load_module(&name)?);
+            // need to get program as mut
+            let module = self.program.load_module(&name)?;
+            self.scope.assign(as_name, module);
         }
 
         Ok(Value::Void)
@@ -848,6 +849,10 @@ impl<'a> Interpreter<'a> {
             (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a * b)),
             (Value::Float(FloatOrd(a)), Value::Float(FloatOrd(b))) => {
                 Ok(Value::Float(FloatOrd(a * b)))
+            }
+            (Value::String(a), Value::Int(b)) => {
+                let a_str = a.resolve()?.to_string();
+                Ok(HeapValue::String(&a_str.repeat(b as usize)).alloc())
             }
             (a, b) => Err(self.construct_err(Opcode::Multiply, a, b, span)),
         }
