@@ -303,7 +303,7 @@ impl<'a> BytecodeEmitter<'a> {
             }
             NodeKind::Assign(name, node) => {
                 let is_global = self.depth == 0;
-                
+
                 if !is_global {
                     // Check for redefinition only in local scopes
                     if let Some(depth) = self.instructions.resolve_depth(&name) {
@@ -319,7 +319,7 @@ impl<'a> BytecodeEmitter<'a> {
                 }
 
                 self.emit(*node)?;
-                
+
                 if is_global {
                     self.define_global_variable(name, span);
                 } else {
@@ -328,7 +328,9 @@ impl<'a> BytecodeEmitter<'a> {
             }
             NodeKind::Reassign(name, node, op) => {
                 // Check locals first, then globals
-                let (index, is_global) = if let Some(index) = self.instructions.resolve_local_index(name.value()) {
+                let (index, is_global) = if let Some(index) =
+                    self.instructions.resolve_local_index(name.value())
+                {
                     (index, false)
                 } else if let Some(index) = self.instructions.resolve_global_index(name.value()) {
                     (index, true)
