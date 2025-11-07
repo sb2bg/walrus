@@ -1,6 +1,8 @@
+use std::cell::RefCell;
 use std::io;
 use std::io::Write;
 use std::ptr::NonNull;
+use std::rc::Rc;
 
 use float_ord::FloatOrd;
 use log::{debug, log_enabled};
@@ -32,7 +34,7 @@ pub struct VM<'a> {
     is: InstructionSet,
     source_ref: SourceRef<'a>,
     locals: Vec<Value>,
-    globals: Vec<Value>,
+    globals: Rc<RefCell<Vec<Value>>>,
     paused: bool,
     breakpoints: Vec<usize>,
 }
@@ -43,7 +45,7 @@ impl<'a> VM<'a> {
             title: "<main>".to_string(),
             stack: Vec::new(),
             locals: Vec::new(),
-            globals: Vec::new(),
+            globals: Rc::new(RefCell::new(Vec::new())),
             ip: 0,
             is,
             source_ref,
@@ -57,7 +59,7 @@ impl<'a> VM<'a> {
             title,
             stack: Vec::new(),
             locals: Vec::new(),            // Functions start with empty locals
-            globals: self.globals.clone(), // Share globals with parent
+            globals: Rc::clone(&self.globals), // Share globals with parent via Rc
             ip: 0,
             is: new_is,
             source_ref: self.source_ref,
@@ -88,7 +90,11 @@ impl<'a> VM<'a> {
                     self.push(self.locals[index]);
                 }
                 Opcode::LoadGlobal(index) => {
-                    self.push(self.globals[index]);
+                    let value = {
+                        let globals = self.globals.borrow();
+                        globals[index]
+                    };
+                    self.push(value);
                 }
                 Opcode::Store => {
                     let value = self.pop(opcode, span)?;
@@ -105,11 +111,12 @@ impl<'a> VM<'a> {
                 }
                 Opcode::StoreGlobal(index) => {
                     let value = self.pop(opcode, span)?;
+                    let mut globals = self.globals.borrow_mut();
 
-                    if index == self.globals.len() {
-                        self.globals.push(value);
+                    if index == globals.len() {
+                        globals.push(value);
                     } else {
-                        self.globals[index] = value;
+                        globals[index] = value;
                     }
                 }
                 Opcode::Reassign(index) => {
@@ -118,7 +125,8 @@ impl<'a> VM<'a> {
                 }
                 Opcode::ReassignGlobal(index) => {
                     let value = self.pop(opcode, span)?;
-                    self.globals[index] = value;
+                    let mut globals = self.globals.borrow_mut();
+                    globals[index] = value;
                 }
                 Opcode::List(cap) => {
                     let mut list = Vec::with_capacity(cap);
@@ -235,8 +243,6 @@ impl<'a> VM<'a> {
 
                     match func {
                         Value::Function(key) => {
-                            // fixme: this is a hack to get around the borrow checker so we can clone the heap
-                            let mut ptr = NonNull::from(self.is.get_heap_mut());
                             let func = self.is.get_heap().get_function(key)?;
 
                             match func {
@@ -244,8 +250,9 @@ impl<'a> VM<'a> {
                                     let result = func.call(args, self.source_ref, span)?;
                                     self.push(result);
                                 }
-                                WalrusFunction::Vm(func) => unsafe {
-                                    let heap = ptr.as_mut().clone();
+                                WalrusFunction::Vm(func) => {
+                                    // Use the function's own heap from compilation, not the parent's
+                                    let heap = func.code.heap.clone();
 
                                     let mut child = self.create_child(
                                         InstructionSet {
@@ -266,7 +273,7 @@ impl<'a> VM<'a> {
 
                                     let result = child.run()?;
                                     self.push(result);
-                                },
+                                }
                                 _ => {
                                     // In theory, this should never happen because the compiler
                                     // should not compile a call to a node function (but just in case)
