@@ -139,7 +139,10 @@ impl<'a> BytecodeEmitter<'a> {
                         // Set jump target to current position
                         self.instructions.set(
                             jump,
-                            Instruction::new(Opcode::JumpIfFalse(self.instructions.len() as u32), span),
+                            Instruction::new(
+                                Opcode::JumpIfFalse(self.instructions.len() as u32),
+                                span,
+                            ),
                         );
                     }
                     Opcode::Or => {
@@ -153,11 +156,15 @@ impl<'a> BytecodeEmitter<'a> {
                             .push(Instruction::new(Opcode::JumpIfFalse(0), span));
                         // Left was true, skip right evaluation
                         let jump_end = self.instructions.len();
-                        self.instructions.push(Instruction::new(Opcode::Jump(0), span));
+                        self.instructions
+                            .push(Instruction::new(Opcode::Jump(0), span));
                         // Left was false, pop it and evaluate right
                         self.instructions.set(
                             jump_if_false,
-                            Instruction::new(Opcode::JumpIfFalse(self.instructions.len() as u32), span),
+                            Instruction::new(
+                                Opcode::JumpIfFalse(self.instructions.len() as u32),
+                                span,
+                            ),
                         );
                         self.instructions.push(Instruction::new(Opcode::Pop, span));
                         self.emit(*right)?;
@@ -423,7 +430,11 @@ impl<'a> BytecodeEmitter<'a> {
 
                 // For compound assignments (+=, -=, etc.), we need to load the current value first
                 match op {
-                    Opcode::Add | Opcode::Subtract | Opcode::Multiply | Opcode::Divide | Opcode::Modulo => {
+                    Opcode::Add
+                    | Opcode::Subtract
+                    | Opcode::Multiply
+                    | Opcode::Divide
+                    | Opcode::Modulo => {
                         // Load current value
                         if is_global {
                             self.instructions

@@ -152,9 +152,9 @@ impl<'a> VM<'a> {
 
                     if index == self.locals.len() {
                         self.locals.push(value);
+                    } else {
+                        self.locals[index] = value;
                     }
-
-                    self.locals[index] = value;
                 }
                 Opcode::StoreGlobal(index) => {
                     let value = self.pop(opcode, span)?;
@@ -457,7 +457,13 @@ impl<'a> VM<'a> {
 
                     match (a, b) {
                         (Value::Int(a), Value::Int(b)) => {
-                            self.push(Value::Int(a.pow(b as u32)));
+                            if b < 0 {
+                                // Convert to float for negative exponents
+                                let result = (a as f64).powf(b as f64);
+                                self.push(Value::Float(FloatOrd(result)));
+                            } else {
+                                self.push(Value::Int(a.pow(b as u32)));
+                            }
                         }
                         (Value::Float(FloatOrd(a)), Value::Float(FloatOrd(b))) => {
                             self.push(Value::Float(FloatOrd(a.powf(b))));
@@ -702,9 +708,18 @@ impl<'a> VM<'a> {
                             if let Some(value) = a.get(&b) {
                                 self.push(*value);
                             } else {
-                                // fixme: sometimes this throws even when the objects are equal because
-                                // we are comparing the arena keys and not the values
-                                todo!("Key not found");
+                                // fixme: sometimes this is thrown even when the key exists
+                                // this is because it compares the key, not the value, which
+                                // means while the key may be different, the contents of the
+                                // key may be the same
+                                let b_str = b.stringify()?;
+
+                                return Err(WalrusError::KeyNotFound {
+                                    key: b_str,
+                                    span: span,
+                                    src: self.source_ref.source().to_string(),
+                                    filename: self.source_ref.filename().to_string(),
+                                });
                             }
                         }
                         _ => return Err(self.construct_err(opcode, a, Some(b), span)),
@@ -742,31 +757,6 @@ impl<'a> VM<'a> {
                     self.pop(opcode, span)?;
                     self.pop(opcode, span)?;
                     self.pop(opcode, span)?;
-                }
-                // Specialized arithmetic opcodes
-                Opcode::Increment => {
-                    let a = self.pop(opcode, span)?;
-                    match a {
-                        Value::Int(a) => {
-                            self.push(Value::Int(a + 1));
-                        }
-                        Value::Float(FloatOrd(a)) => {
-                            self.push(Value::Float(FloatOrd(a + 1.0)));
-                        }
-                        _ => return Err(self.construct_err(opcode, a, None, span)),
-                    }
-                }
-                Opcode::Decrement => {
-                    let a = self.pop(opcode, span)?;
-                    match a {
-                        Value::Int(a) => {
-                            self.push(Value::Int(a - 1));
-                        }
-                        Value::Float(FloatOrd(a)) => {
-                            self.push(Value::Float(FloatOrd(a - 1.0)));
-                        }
-                        _ => return Err(self.construct_err(opcode, a, None, span)),
-                    }
                 }
                 Opcode::Nop => {}
             }

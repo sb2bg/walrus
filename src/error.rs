@@ -3,10 +3,10 @@ use std::str::FromStr;
 
 use float_ord::FloatOrd;
 use git_version::git_version;
-use lalrpop_util::lexer::Token;
 use lalrpop_util::ParseError;
+use lalrpop_util::lexer::Token;
 use line_span::{find_line_end, find_line_start};
-use snailquote::{unescape, UnescapeError};
+use snailquote::{UnescapeError, unescape};
 use thiserror::Error;
 
 use crate::ast::NodeKind;
@@ -96,7 +96,9 @@ pub enum WalrusError {
         source: std::io::Error,
     },
 
-    #[error("Unable to locate file '{filename}'. Make sure the file exists and that you have permission to read it.")]
+    #[error(
+        "Unable to locate file '{filename}'. Make sure the file exists and that you have permission to read it."
+    )]
     FileNotFound { filename: String },
 
     #[error("Unexpected EOF in source '{filename}'.")]
@@ -332,6 +334,16 @@ pub enum WalrusError {
     )]
     RedefinedLocal {
         name: String,
+        span: Span,
+        src: String,
+        filename: String,
+    },
+
+    #[error("Key '{key}' not found at {}",
+        get_line(src, filename, *span)
+    )]
+    KeyNotFound {
+        key: String,
         span: Span,
         src: String,
         filename: String,
