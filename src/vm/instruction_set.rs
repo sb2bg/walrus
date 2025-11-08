@@ -53,13 +53,13 @@ impl InstructionSet {
         self.instructions[index]
     }
 
-    pub fn push_constant(&mut self, value: Value) -> usize {
+    pub fn push_constant(&mut self, value: Value) -> u32 {
         self.constants.push(value);
-        self.constants.len() - 1
+        (self.constants.len() - 1) as u32
     }
 
-    pub fn get_constant(&self, index: usize) -> Value {
-        self.constants[index]
+    pub fn get_constant(&self, index: u32) -> Value {
+        self.constants[index as usize]
     }
 
     pub fn get_heap_mut(&mut self) -> &mut ValueHolder {
@@ -70,12 +70,12 @@ impl InstructionSet {
         unsafe { &*std::ptr::addr_of!(crate::arenas::ARENA) }
     }
 
-    pub fn push_local(&mut self, name: String) -> usize {
-        self.locals.push(name)
+    pub fn push_local(&mut self, name: String) -> u32 {
+        self.locals.push(name) as u32
     }
 
-    pub fn push_global(&mut self, name: String) -> usize {
-        self.globals.push(name)
+    pub fn push_global(&mut self, name: String) -> u32 {
+        self.globals.push(name) as u32
     }
 
     pub fn local_len(&self) -> usize {

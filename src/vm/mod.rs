@@ -86,13 +86,59 @@ impl<'a> VM<'a> {
                 Opcode::LoadConst(index) => {
                     self.push(self.is.get_constant(index));
                 }
+                Opcode::LoadConst0 => {
+                    self.push(self.is.get_constant(0));
+                }
+                Opcode::LoadConst1 => {
+                    self.push(self.is.get_constant(1));
+                }
                 Opcode::Load(index) => {
-                    self.push(self.locals[index]);
+                    self.push(self.locals[index as usize]);
+                }
+                Opcode::LoadLocal0 => {
+                    self.push(self.locals[0]);
+                }
+                Opcode::LoadLocal1 => {
+                    self.push(self.locals[1]);
+                }
+                Opcode::LoadLocal2 => {
+                    self.push(self.locals[2]);
+                }
+                Opcode::LoadLocal3 => {
+                    self.push(self.locals[3]);
                 }
                 Opcode::LoadGlobal(index) => {
                     let value = {
                         let globals = self.globals.borrow();
-                        globals[index]
+                        globals[index as usize]
+                    };
+                    self.push(value);
+                }
+                Opcode::LoadGlobal0 => {
+                    let value = {
+                        let globals = self.globals.borrow();
+                        globals[0]
+                    };
+                    self.push(value);
+                }
+                Opcode::LoadGlobal1 => {
+                    let value = {
+                        let globals = self.globals.borrow();
+                        globals[1]
+                    };
+                    self.push(value);
+                }
+                Opcode::LoadGlobal2 => {
+                    let value = {
+                        let globals = self.globals.borrow();
+                        globals[2]
+                    };
+                    self.push(value);
+                }
+                Opcode::LoadGlobal3 => {
+                    let value = {
+                        let globals = self.globals.borrow();
+                        globals[3]
                     };
                     self.push(value);
                 }
@@ -102,6 +148,7 @@ impl<'a> VM<'a> {
                 }
                 Opcode::StoreAt(index) => {
                     let value = self.pop(opcode, span)?;
+                    let index = index as usize;
 
                     if index == self.locals.len() {
                         self.locals.push(value);
@@ -111,6 +158,7 @@ impl<'a> VM<'a> {
                 }
                 Opcode::StoreGlobal(index) => {
                     let value = self.pop(opcode, span)?;
+                    let index = index as usize;
                     let mut globals = self.globals.borrow_mut();
 
                     if index == globals.len() {
@@ -121,14 +169,15 @@ impl<'a> VM<'a> {
                 }
                 Opcode::Reassign(index) => {
                     let value = self.pop(opcode, span)?;
-                    self.locals[index] = value;
+                    self.locals[index as usize] = value;
                 }
                 Opcode::ReassignGlobal(index) => {
                     let value = self.pop(opcode, span)?;
                     let mut globals = self.globals.borrow_mut();
-                    globals[index] = value;
+                    globals[index as usize] = value;
                 }
                 Opcode::List(cap) => {
+                    let cap = cap as usize;
                     let mut list = Vec::with_capacity(cap);
 
                     for _ in 0..cap {
@@ -142,6 +191,7 @@ impl<'a> VM<'a> {
                     self.push(value);
                 }
                 Opcode::Dict(cap) => {
+                    let cap = cap as usize;
                     let mut dict = FxHashMap::with_capacity_and_hasher(cap, Default::default());
 
                     for _ in 0..cap {
@@ -200,11 +250,11 @@ impl<'a> VM<'a> {
                     let value = self.pop(opcode, span)?;
 
                     if let Value::Bool(false) = value {
-                        self.ip = offset;
+                        self.ip = offset as usize;
                     }
                 }
                 Opcode::Jump(offset) => {
-                    self.ip = offset;
+                    self.ip = offset as usize;
                 }
                 Opcode::GetIter => {
                     let value = self.pop(opcode, span)?;
@@ -224,7 +274,7 @@ impl<'a> VM<'a> {
                                 self.push(Value::Iter(key));
                                 self.push(value);
                             } else {
-                                self.ip = offset;
+                                self.ip = offset as usize;
                             }
                         },
                         value => {
@@ -238,6 +288,7 @@ impl<'a> VM<'a> {
                     }
                 }
                 Opcode::Call(args) => {
+                    let args = args as usize;
                     let func = self.pop(opcode, span)?;
                     let args = self.pop_n(args, opcode, span)?;
 
@@ -670,6 +721,52 @@ impl<'a> VM<'a> {
                 Opcode::Return => {
                     let a = self.pop(opcode, span)?;
                     return Ok(a);
+                }
+                // Stack manipulation opcodes
+                Opcode::Dup => {
+                    let a = self.pop(opcode, span)?;
+                    self.push(a);
+                    self.push(a);
+                }
+                Opcode::Swap => {
+                    let b = self.pop(opcode, span)?;
+                    let a = self.pop(opcode, span)?;
+                    self.push(b);
+                    self.push(a);
+                }
+                Opcode::Pop2 => {
+                    self.pop(opcode, span)?;
+                    self.pop(opcode, span)?;
+                }
+                Opcode::Pop3 => {
+                    self.pop(opcode, span)?;
+                    self.pop(opcode, span)?;
+                    self.pop(opcode, span)?;
+                }
+                // Specialized arithmetic opcodes
+                Opcode::Increment => {
+                    let a = self.pop(opcode, span)?;
+                    match a {
+                        Value::Int(a) => {
+                            self.push(Value::Int(a + 1));
+                        }
+                        Value::Float(FloatOrd(a)) => {
+                            self.push(Value::Float(FloatOrd(a + 1.0)));
+                        }
+                        _ => return Err(self.construct_err(opcode, a, None, span)),
+                    }
+                }
+                Opcode::Decrement => {
+                    let a = self.pop(opcode, span)?;
+                    match a {
+                        Value::Int(a) => {
+                            self.push(Value::Int(a - 1));
+                        }
+                        Value::Float(FloatOrd(a)) => {
+                            self.push(Value::Float(FloatOrd(a - 1.0)));
+                        }
+                        _ => return Err(self.construct_err(opcode, a, None, span)),
+                    }
                 }
                 Opcode::Nop => {}
             }

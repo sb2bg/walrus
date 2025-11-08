@@ -4,20 +4,45 @@ use crate::span::Span;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Opcode {
-    LoadConst(usize), // usize pads the enum by 8 bytes
-    Load(usize),
-    LoadGlobal(usize),
-    List(usize),
-    Dict(usize),
-    Reassign(usize),
-    ReassignGlobal(usize),
-    JumpIfFalse(usize),
-    Jump(usize),
-    PopLocal(usize),
-    IterNext(usize),
-    StoreAt(usize),
-    StoreGlobal(usize),
-    Call(usize),
+    // Memory-optimized: u32 instead of usize reduces enum size from 16 to 12 bytes
+    LoadConst(u32),
+    Load(u32),
+    LoadGlobal(u32),
+    List(u32),
+    Dict(u32),
+    Reassign(u32),
+    ReassignGlobal(u32),
+    JumpIfFalse(u32),
+    Jump(u32),
+    PopLocal(u32),
+    IterNext(u32),
+    StoreAt(u32),
+    StoreGlobal(u32),
+    Call(u32),
+    
+    // Specialized constant loading (zero-operand for efficiency)
+    LoadConst0,      // Load constant at index 0
+    LoadConst1,      // Load constant at index 1
+    LoadLocal0,      // Load local at index 0
+    LoadLocal1,      // Load local at index 1
+    LoadLocal2,      // Load local at index 2
+    LoadLocal3,      // Load local at index 3
+    LoadGlobal0,     // Load global at index 0
+    LoadGlobal1,     // Load global at index 1
+    LoadGlobal2,     // Load global at index 2
+    LoadGlobal3,     // Load global at index 3
+    
+    // Stack manipulation
+    Dup,             // Duplicate top of stack
+    Swap,            // Swap top two stack values
+    Pop2,            // Pop two values
+    Pop3,            // Pop three values
+    
+    // Specialized arithmetic
+    Increment,       // Add 1 to top of stack
+    Decrement,       // Subtract 1 from top of stack
+    
+    // Zero-operand opcodes
     GetIter,
     Store,
     Range,
@@ -66,6 +91,8 @@ impl Display for Opcode {
             Opcode::LessEqual => write!(f, "<="),
             Opcode::And => write!(f, "and"),
             Opcode::Or => write!(f, "or"),
+            Opcode::Increment => write!(f, "++"),
+            Opcode::Decrement => write!(f, "--"),
             _ => write!(f, "{:?}", self),
         }
     }

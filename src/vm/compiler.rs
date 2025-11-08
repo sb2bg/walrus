@@ -44,13 +44,21 @@ impl<'a> BytecodeEmitter<'a> {
             }
             NodeKind::Int(value) => {
                 let index = self.instructions.push_constant(Value::Int(value));
-                self.instructions
-                    .push(Instruction::new(Opcode::LoadConst(index), span));
+                let opcode = match index {
+                    0 => Opcode::LoadConst0,
+                    1 => Opcode::LoadConst1,
+                    _ => Opcode::LoadConst(index),
+                };
+                self.instructions.push(Instruction::new(opcode, span));
             }
             NodeKind::Float(value) => {
                 let index = self.instructions.push_constant(Value::Float(value));
-                self.instructions
-                    .push(Instruction::new(Opcode::LoadConst(index), span));
+                let opcode = match index {
+                    0 => Opcode::LoadConst0,
+                    1 => Opcode::LoadConst1,
+                    _ => Opcode::LoadConst(index),
+                };
+                self.instructions.push(Instruction::new(opcode, span));
             }
             NodeKind::Bool(value) => {
                 self.instructions.push(Instruction::new(
@@ -64,18 +72,23 @@ impl<'a> BytecodeEmitter<'a> {
                     .get_heap_mut()
                     .push(HeapValue::String(&value));
                 let index = self.instructions.push_constant(value);
-                self.instructions
-                    .push(Instruction::new(Opcode::LoadConst(index), span));
+                let opcode = match index {
+                    0 => Opcode::LoadConst0,
+                    1 => Opcode::LoadConst1,
+                    _ => Opcode::LoadConst(index),
+                };
+                self.instructions.push(Instruction::new(opcode, span));
             }
             NodeKind::List(nodes) => {
                 let cap = nodes.len();
 
+                // Emit items in correct order (no need to reverse at runtime)
                 for node in nodes {
                     self.emit(node)?;
                 }
 
                 self.instructions
-                    .push(Instruction::new(Opcode::List(cap), span));
+                    .push(Instruction::new(Opcode::List(cap as u32), span));
             }
             NodeKind::Dict(nodes) => {
                 let cap = nodes.len();
@@ -86,7 +99,7 @@ impl<'a> BytecodeEmitter<'a> {
                 }
 
                 self.instructions
-                    .push(Instruction::new(Opcode::Dict(cap), span));
+                    .push(Instruction::new(Opcode::Dict(cap as u32), span));
             }
             NodeKind::Range(left, right) => {
                 if let Some(right) = right {
@@ -108,10 +121,59 @@ impl<'a> BytecodeEmitter<'a> {
                 self.instructions.push(Instruction::new(Opcode::Void, span));
             }
             NodeKind::BinOp(left, op, right) => {
-                self.emit(*left)?;
-                self.emit(*right)?;
-
-                self.instructions.push(Instruction::new(op, span));
+                // Short-circuit evaluation for And/Or
+                match op {
+                    Opcode::And => {
+                        // Evaluate left
+                        self.emit(*left)?;
+                        // Duplicate for conditional check
+                        self.instructions.push(Instruction::new(Opcode::Dup, span));
+                        // If false, skip right and keep false
+                        let jump = self.instructions.len();
+                        self.instructions
+                            .push(Instruction::new(Opcode::JumpIfFalse(0), span));
+                        // Pop the duplicated left value (it was true)
+                        self.instructions.push(Instruction::new(Opcode::Pop, span));
+                        // Evaluate right
+                        self.emit(*right)?;
+                        // Set jump target to current position
+                        self.instructions.set(
+                            jump,
+                            Instruction::new(Opcode::JumpIfFalse(self.instructions.len() as u32), span),
+                        );
+                    }
+                    Opcode::Or => {
+                        // Evaluate left
+                        self.emit(*left)?;
+                        // Duplicate for conditional check
+                        self.instructions.push(Instruction::new(Opcode::Dup, span));
+                        // If true, skip right and keep true
+                        let jump_if_false = self.instructions.len();
+                        self.instructions
+                            .push(Instruction::new(Opcode::JumpIfFalse(0), span));
+                        // Left was true, skip right evaluation
+                        let jump_end = self.instructions.len();
+                        self.instructions.push(Instruction::new(Opcode::Jump(0), span));
+                        // Left was false, pop it and evaluate right
+                        self.instructions.set(
+                            jump_if_false,
+                            Instruction::new(Opcode::JumpIfFalse(self.instructions.len() as u32), span),
+                        );
+                        self.instructions.push(Instruction::new(Opcode::Pop, span));
+                        self.emit(*right)?;
+                        // Set end jump target
+                        self.instructions.set(
+                            jump_end,
+                            Instruction::new(Opcode::Jump(self.instructions.len() as u32), span),
+                        );
+                    }
+                    _ => {
+                        // Normal binary operations
+                        self.emit(*left)?;
+                        self.emit(*right)?;
+                        self.instructions.push(Instruction::new(op, span));
+                    }
+                }
             }
             NodeKind::UnaryOp(op, node) => {
                 self.emit(*node)?;
@@ -135,7 +197,7 @@ impl<'a> BytecodeEmitter<'a> {
 
                 self.instructions.set(
                     jump,
-                    Instruction::new(Opcode::JumpIfFalse(self.instructions.len()), span),
+                    Instruction::new(Opcode::JumpIfFalse(self.instructions.len() as u32), span),
                 );
 
                 if let Some(otherwise) = otherwise {
@@ -145,7 +207,7 @@ impl<'a> BytecodeEmitter<'a> {
                 self.instructions.set(
                     jump_else,
                     // todo: check if span is right
-                    Instruction::new(Opcode::Jump(self.instructions.len()), span),
+                    Instruction::new(Opcode::Jump(self.instructions.len() as u32), span),
                 );
             }
             NodeKind::While(cond, body) => {
@@ -161,11 +223,11 @@ impl<'a> BytecodeEmitter<'a> {
                 self.emit(*body)?;
 
                 self.instructions
-                    .push(Instruction::new(Opcode::Jump(start), span));
+                    .push(Instruction::new(Opcode::Jump(start as u32), span));
 
                 self.instructions.set(
                     jump,
-                    Instruction::new(Opcode::JumpIfFalse(self.instructions.len()), span),
+                    Instruction::new(Opcode::JumpIfFalse(self.instructions.len() as u32), span),
                 );
             }
             NodeKind::For(name, iter, body) => {
@@ -191,11 +253,11 @@ impl<'a> BytecodeEmitter<'a> {
                 self.dec_depth_no_pop();
 
                 self.instructions
-                    .push(Instruction::new(Opcode::Jump(jump), span));
+                    .push(Instruction::new(Opcode::Jump(jump as u32), span));
 
                 self.instructions.set(
                     jump,
-                    Instruction::new(Opcode::IterNext(self.instructions.len()), span),
+                    Instruction::new(Opcode::IterNext(self.instructions.len() as u32), span),
                 );
             }
             NodeKind::FunctionDefinition(name, args, body) => {
@@ -232,8 +294,12 @@ impl<'a> BytecodeEmitter<'a> {
 
                 // Load the function constant and store it
                 let index = self.instructions.push_constant(func);
-                self.instructions
-                    .push(Instruction::new(Opcode::LoadConst(index), span));
+                let opcode = match index {
+                    0 => Opcode::LoadConst0,
+                    1 => Opcode::LoadConst1,
+                    _ => Opcode::LoadConst(index),
+                };
+                self.instructions.push(Instruction::new(opcode, span));
 
                 if is_global {
                     // Top-level function definitions go into globals
@@ -263,7 +329,7 @@ impl<'a> BytecodeEmitter<'a> {
                 self.emit(*func)?;
 
                 self.instructions
-                    .push(Instruction::new(Opcode::Call(arg_len), span));
+                    .push(Instruction::new(Opcode::Call(arg_len as u32), span));
             }
             NodeKind::Index(node, index) => {
                 self.emit(*node)?;
@@ -287,11 +353,23 @@ impl<'a> BytecodeEmitter<'a> {
             NodeKind::Ident(name) => {
                 // Check locals first, then globals
                 if let Some(index) = self.instructions.resolve_local_index(&name) {
-                    self.instructions
-                        .push(Instruction::new(Opcode::Load(index), span));
+                    let opcode = match index {
+                        0 => Opcode::LoadLocal0,
+                        1 => Opcode::LoadLocal1,
+                        2 => Opcode::LoadLocal2,
+                        3 => Opcode::LoadLocal3,
+                        _ => Opcode::Load(index as u32),
+                    };
+                    self.instructions.push(Instruction::new(opcode, span));
                 } else if let Some(index) = self.instructions.resolve_global_index(&name) {
-                    self.instructions
-                        .push(Instruction::new(Opcode::LoadGlobal(index), span));
+                    let opcode = match index {
+                        0 => Opcode::LoadGlobal0,
+                        1 => Opcode::LoadGlobal1,
+                        2 => Opcode::LoadGlobal2,
+                        3 => Opcode::LoadGlobal3,
+                        _ => Opcode::LoadGlobal(index as u32),
+                    };
+                    self.instructions.push(Instruction::new(opcode, span));
                 } else {
                     return Err(WalrusError::UndefinedVariable {
                         name,
@@ -331,9 +409,9 @@ impl<'a> BytecodeEmitter<'a> {
                 let (index, is_global) = if let Some(index) =
                     self.instructions.resolve_local_index(name.value())
                 {
-                    (index, false)
+                    (index as u32, false)
                 } else if let Some(index) = self.instructions.resolve_global_index(name.value()) {
-                    (index, true)
+                    (index as u32, true)
                 } else {
                     return Err(WalrusError::UndefinedVariable {
                         name: name.value().to_string(),
@@ -345,7 +423,8 @@ impl<'a> BytecodeEmitter<'a> {
 
                 // For compound assignments (+=, -=, etc.), we need to load the current value first
                 match op {
-                    Opcode::Add => {
+                    Opcode::Add | Opcode::Subtract | Opcode::Multiply | Opcode::Divide | Opcode::Modulo => {
+                        // Load current value
                         if is_global {
                             self.instructions
                                 .push(Instruction::new(Opcode::LoadGlobal(index), span));
@@ -353,56 +432,10 @@ impl<'a> BytecodeEmitter<'a> {
                             self.instructions
                                 .push(Instruction::new(Opcode::Load(index), span));
                         }
+                        // Emit the right-hand side
                         self.emit(*node)?;
-                        self.instructions.push(Instruction::new(Opcode::Add, span));
-                    }
-                    Opcode::Subtract => {
-                        if is_global {
-                            self.instructions
-                                .push(Instruction::new(Opcode::LoadGlobal(index), span));
-                        } else {
-                            self.instructions
-                                .push(Instruction::new(Opcode::Load(index), span));
-                        }
-                        self.emit(*node)?;
-                        self.instructions
-                            .push(Instruction::new(Opcode::Subtract, span));
-                    }
-                    Opcode::Multiply => {
-                        if is_global {
-                            self.instructions
-                                .push(Instruction::new(Opcode::LoadGlobal(index), span));
-                        } else {
-                            self.instructions
-                                .push(Instruction::new(Opcode::Load(index), span));
-                        }
-                        self.emit(*node)?;
-                        self.instructions
-                            .push(Instruction::new(Opcode::Multiply, span));
-                    }
-                    Opcode::Divide => {
-                        if is_global {
-                            self.instructions
-                                .push(Instruction::new(Opcode::LoadGlobal(index), span));
-                        } else {
-                            self.instructions
-                                .push(Instruction::new(Opcode::Load(index), span));
-                        }
-                        self.emit(*node)?;
-                        self.instructions
-                            .push(Instruction::new(Opcode::Divide, span));
-                    }
-                    Opcode::Modulo => {
-                        if is_global {
-                            self.instructions
-                                .push(Instruction::new(Opcode::LoadGlobal(index), span));
-                        } else {
-                            self.instructions
-                                .push(Instruction::new(Opcode::Load(index), span));
-                        }
-                        self.emit(*node)?;
-                        self.instructions
-                            .push(Instruction::new(Opcode::Modulo, span));
+                        // Perform the operation
+                        self.instructions.push(Instruction::new(op, span));
                     }
                     _ => {
                         // Simple assignment (=), just emit the new value
@@ -454,7 +487,7 @@ impl<'a> BytecodeEmitter<'a> {
 
         if popped > 0 {
             self.instructions
-                .push(Instruction::new(Opcode::PopLocal(popped), span));
+                .push(Instruction::new(Opcode::PopLocal(popped as u32), span));
         }
     }
 
