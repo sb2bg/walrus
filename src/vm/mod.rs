@@ -605,6 +605,12 @@ impl<'a> VM<'a> {
                         (Value::Float(FloatOrd(a)), Value::Float(FloatOrd(b))) => {
                             self.push(Value::Bool(a > b));
                         }
+                        (Value::Float(FloatOrd(a)), Value::Int(b)) => {
+                            self.push(Value::Bool(a > b as f64));
+                        }
+                        (Value::Int(a), Value::Float(FloatOrd(b))) => {
+                            self.push(Value::Bool(a as f64 > b));
+                        }
                         _ => return Err(self.construct_err(opcode, a, Some(b), span)),
                     }
                 }
@@ -618,6 +624,12 @@ impl<'a> VM<'a> {
                         }
                         (Value::Float(FloatOrd(a)), Value::Float(FloatOrd(b))) => {
                             self.push(Value::Bool(a >= b));
+                        }
+                        (Value::Float(FloatOrd(a)), Value::Int(b)) => {
+                            self.push(Value::Bool(a >= b as f64));
+                        }
+                        (Value::Int(a), Value::Float(FloatOrd(b))) => {
+                            self.push(Value::Bool(a as f64 >= b));
                         }
                         _ => return Err(self.construct_err(opcode, a, Some(b), span)),
                     }
@@ -633,6 +645,12 @@ impl<'a> VM<'a> {
                         (Value::Float(FloatOrd(a)), Value::Float(FloatOrd(b))) => {
                             self.push(Value::Bool(a < b));
                         }
+                        (Value::Float(FloatOrd(a)), Value::Int(b)) => {
+                            self.push(Value::Bool(a < b as f64));
+                        }
+                        (Value::Int(a), Value::Float(FloatOrd(b))) => {
+                            self.push(Value::Bool(a as f64 < b));
+                        }
                         _ => return Err(self.construct_err(opcode, a, Some(b), span)),
                     }
                 }
@@ -646,6 +664,12 @@ impl<'a> VM<'a> {
                         }
                         (Value::Float(FloatOrd(a)), Value::Float(FloatOrd(b))) => {
                             self.push(Value::Bool(a <= b));
+                        }
+                        (Value::Float(FloatOrd(a)), Value::Int(b)) => {
+                            self.push(Value::Bool(a <= b as f64));
+                        }
+                        (Value::Int(a), Value::Float(FloatOrd(b))) => {
+                            self.push(Value::Bool(a as f64 <= b));
                         }
                         _ => return Err(self.construct_err(opcode, a, Some(b), span)),
                     }
