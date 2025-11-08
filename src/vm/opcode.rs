@@ -19,29 +19,25 @@ pub enum Opcode {
     StoreAt(u32),
     StoreGlobal(u32),
     Call(u32),
-    
+
     // Specialized constant loading (zero-operand for efficiency)
-    LoadConst0,      // Load constant at index 0
-    LoadConst1,      // Load constant at index 1
-    LoadLocal0,      // Load local at index 0
-    LoadLocal1,      // Load local at index 1
-    LoadLocal2,      // Load local at index 2
-    LoadLocal3,      // Load local at index 3
-    LoadGlobal0,     // Load global at index 0
-    LoadGlobal1,     // Load global at index 1
-    LoadGlobal2,     // Load global at index 2
-    LoadGlobal3,     // Load global at index 3
-    
+    LoadConst0,  // Load constant at index 0
+    LoadConst1,  // Load constant at index 1
+    LoadLocal0,  // Load local at index 0
+    LoadLocal1,  // Load local at index 1
+    LoadLocal2,  // Load local at index 2
+    LoadLocal3,  // Load local at index 3
+    LoadGlobal0, // Load global at index 0
+    LoadGlobal1, // Load global at index 1
+    LoadGlobal2, // Load global at index 2
+    LoadGlobal3, // Load global at index 3
+
     // Stack manipulation
-    Dup,             // Duplicate top of stack
-    Swap,            // Swap top two stack values
-    Pop2,            // Pop two values
-    Pop3,            // Pop three values
-    
-    // Specialized arithmetic
-    Increment,       // Add 1 to top of stack
-    Decrement,       // Subtract 1 from top of stack
-    
+    Dup,  // Duplicate top of stack
+    Swap, // Swap top two stack values
+    Pop2, // Pop two values
+    Pop3, // Pop three values
+
     // Zero-operand opcodes
     GetIter,
     Store,
@@ -91,8 +87,6 @@ impl Display for Opcode {
             Opcode::LessEqual => write!(f, "<="),
             Opcode::And => write!(f, "and"),
             Opcode::Or => write!(f, "or"),
-            Opcode::Increment => write!(f, "++"),
-            Opcode::Decrement => write!(f, "--"),
             _ => write!(f, "{:?}", self),
         }
     }
