@@ -178,14 +178,20 @@ impl<'a> VM<'a> {
                 }
                 Opcode::List(cap) => {
                     let cap = cap as usize;
-                    let mut list = Vec::with_capacity(cap);
 
-                    for _ in 0..cap {
-                        list.push(self.pop(opcode, span)?);
+                    // Check we have enough items on the stack
+                    if self.stack.len() < cap {
+                        return Err(WalrusError::StackUnderflow {
+                            op: opcode,
+                            span,
+                            src: self.source_ref.source().to_string(),
+                            filename: self.source_ref.filename().to_string(),
+                        });
                     }
 
-                    // todo: can we avoid the reverse here?
-                    list.reverse();
+                    // Extract items from stack without reverse
+                    // split_off gives us the last cap items in correct order
+                    let list = self.stack.split_off(self.stack.len() - cap);
 
                     let value = self.is.get_heap_mut().push(HeapValue::List(list));
                     self.push(value);
@@ -609,7 +615,7 @@ impl<'a> VM<'a> {
                             self.push(Value::Bool(a > b as f64));
                         }
                         (Value::Int(a), Value::Float(FloatOrd(b))) => {
-                            self.push(Value::Bool(a as f64 > b));
+                            self.push(Value::Bool((a as f64) > b));
                         }
                         _ => return Err(self.construct_err(opcode, a, Some(b), span)),
                     }
@@ -629,7 +635,7 @@ impl<'a> VM<'a> {
                             self.push(Value::Bool(a >= b as f64));
                         }
                         (Value::Int(a), Value::Float(FloatOrd(b))) => {
-                            self.push(Value::Bool(a as f64 >= b));
+                            self.push(Value::Bool((a as f64) >= b));
                         }
                         _ => return Err(self.construct_err(opcode, a, Some(b), span)),
                     }
@@ -649,7 +655,7 @@ impl<'a> VM<'a> {
                             self.push(Value::Bool(a < b as f64));
                         }
                         (Value::Int(a), Value::Float(FloatOrd(b))) => {
-                            self.push(Value::Bool(a as f64 < b));
+                            self.push(Value::Bool((a as f64) < b));
                         }
                         _ => return Err(self.construct_err(opcode, a, Some(b), span)),
                     }
@@ -669,7 +675,7 @@ impl<'a> VM<'a> {
                             self.push(Value::Bool(a <= b as f64));
                         }
                         (Value::Int(a), Value::Float(FloatOrd(b))) => {
-                            self.push(Value::Bool(a as f64 <= b));
+                            self.push(Value::Bool((a as f64) <= b));
                         }
                         _ => return Err(self.construct_err(opcode, a, Some(b), span)),
                     }
