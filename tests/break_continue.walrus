@@ -1,0 +1,81 @@
+println("=== Testing break in while loop ===");
+let i = 0;
+while i < 10 {
+    if i == 5 {
+        break;
+    }
+    println(i);
+    i = i + 1;
+}
+println("After break, i is:");
+println(i);
+
+println("");
+println("=== Testing continue in while loop ===");
+i = 0;
+while i < 5 {
+    i = i + 1;
+    if i == 3 {
+        continue;
+    }
+    println(i);
+}
+
+println("");
+println("=== Testing break in for loop ===");
+for j in 0..10 {
+    if j == 5 {
+        break;
+    }
+    println(j);
+}
+
+println("");
+println("=== Testing continue in for loop ===");
+for k in 0..5 {
+    if k == 2 {
+        continue;
+    }
+    println(k);
+}
+
+println("");
+println("=== Testing nested loops with break ===");
+for x in 0..3 {
+    for y in 0..3 {
+        if y == 2 {
+            break;
+        }
+        print(x);
+        print(" ");
+        println(y);
+    }
+}
+
+println("");
+println("=== Testing nested loops with continue ===");
+for a in 0..3 {
+    for b in 0..3 {
+        if b == 1 {
+            continue;
+        }
+        print(a);
+        print(" ");
+        println(b);
+    }
+}
+
+println("");
+println("=== Testing break and continue together ===");
+for n in 0..10 {
+    if n == 2 {
+        continue;
+    }
+    if n == 7 {
+        break;
+    }
+    println(n);
+}
+
+println("");
+println("=== All tests complete ===");

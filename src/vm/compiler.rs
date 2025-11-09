@@ -12,7 +12,14 @@ use crate::vm::opcode::{Instruction, Opcode};
 pub struct BytecodeEmitter<'a> {
     instructions: InstructionSet,
     source_ref: SourceRef<'a>,
-    depth: usize, // 0 = global scope, >0 = local scope
+    depth: usize,                 // 0 = global scope, >0 = local scope
+    loop_stack: Vec<LoopContext>, // Track nested loops for break/continue
+}
+
+struct LoopContext {
+    start: usize,       // Address of loop start (for continue)
+    breaks: Vec<usize>, // Addresses of break jumps to patch
+    is_for_loop: bool,  // True if this is a for loop (needs to pop iterator on break)
 }
 
 impl<'a> BytecodeEmitter<'a> {
@@ -21,6 +28,7 @@ impl<'a> BytecodeEmitter<'a> {
             instructions: InstructionSet::new(),
             source_ref,
             depth: 0, // Start at global scope
+            loop_stack: Vec::new(),
         }
     }
 
@@ -28,7 +36,8 @@ impl<'a> BytecodeEmitter<'a> {
         Self {
             instructions: InstructionSet::new_child_with_globals(self.instructions.globals.clone()),
             source_ref: self.source_ref,
-            depth: 1, // Functions start at local scope depth 1
+            depth: 1,               // Functions start at local scope depth 1
+            loop_stack: Vec::new(), // Functions get their own loop stack
         }
     }
 
@@ -220,6 +229,13 @@ impl<'a> BytecodeEmitter<'a> {
             NodeKind::While(cond, body) => {
                 let start = self.instructions.len();
 
+                // Push loop context
+                self.loop_stack.push(LoopContext {
+                    start,
+                    breaks: Vec::new(),
+                    is_for_loop: false,
+                });
+
                 self.emit(*cond)?;
 
                 let jump = self.instructions.len();
@@ -236,6 +252,15 @@ impl<'a> BytecodeEmitter<'a> {
                     jump,
                     Instruction::new(Opcode::JumpIfFalse(self.instructions.len() as u32), span),
                 );
+
+                // Pop loop context and patch break jumps
+                if let Some(loop_ctx) = self.loop_stack.pop() {
+                    let end = self.instructions.len();
+                    for break_addr in loop_ctx.breaks {
+                        self.instructions
+                            .set(break_addr, Instruction::new(Opcode::Jump(end as u32), span));
+                    }
+                }
             }
             NodeKind::For(name, iter, body) => {
                 self.emit(*iter)?;
@@ -247,6 +272,13 @@ impl<'a> BytecodeEmitter<'a> {
 
                 self.instructions
                     .push(Instruction::new(Opcode::IterNext(0), span));
+
+                // Push loop context (continue jumps back to the IterNext instruction)
+                self.loop_stack.push(LoopContext {
+                    start: jump,
+                    breaks: Vec::new(),
+                    is_for_loop: true,
+                });
 
                 self.inc_depth();
 
@@ -266,6 +298,15 @@ impl<'a> BytecodeEmitter<'a> {
                     jump,
                     Instruction::new(Opcode::IterNext(self.instructions.len() as u32), span),
                 );
+
+                // Pop loop context and patch break jumps
+                if let Some(loop_ctx) = self.loop_stack.pop() {
+                    let end = self.instructions.len();
+                    for break_addr in loop_ctx.breaks {
+                        self.instructions
+                            .set(break_addr, Instruction::new(Opcode::Jump(end as u32), span));
+                    }
+                }
             }
             NodeKind::FunctionDefinition(name, args, body) => {
                 let is_global = self.depth == 0;
@@ -482,6 +523,38 @@ impl<'a> BytecodeEmitter<'a> {
 
                 self.instructions
                     .push(Instruction::new(Opcode::Return, span));
+            }
+            NodeKind::Break => {
+                if let Some(loop_ctx) = self.loop_stack.last_mut() {
+                    // For for-loops, pop the iterator from the stack before breaking
+                    if loop_ctx.is_for_loop {
+                        self.instructions.push(Instruction::new(Opcode::Pop, span));
+                    }
+                    // Add a placeholder jump that will be patched later
+                    let jump_addr = self.instructions.len();
+                    self.instructions
+                        .push(Instruction::new(Opcode::Jump(0), span));
+                    loop_ctx.breaks.push(jump_addr);
+                } else {
+                    return Err(WalrusError::BreakOutsideLoop {
+                        span,
+                        src: self.source_ref.source().to_string(),
+                        filename: self.source_ref.filename().to_string(),
+                    });
+                }
+            }
+            NodeKind::Continue => {
+                if let Some(loop_ctx) = self.loop_stack.last() {
+                    // Jump back to the loop start
+                    self.instructions
+                        .push(Instruction::new(Opcode::Jump(loop_ctx.start as u32), span));
+                } else {
+                    return Err(WalrusError::ContinueOutsideLoop {
+                        span,
+                        src: self.source_ref.source().to_string(),
+                        filename: self.source_ref.filename().to_string(),
+                    });
+                }
             }
             _ => unimplemented!("{}", kind),
         }
