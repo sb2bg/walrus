@@ -62,7 +62,8 @@ Unary = {
     Pow,
 };
 
-Pow = BinOp<PowOp, Postfix>;
+// Range sits between Pow and Postfix in precedence hierarchy
+Pow = BinOp<PowOp, Range>;
 
 Postfix: NodeKind = {
     <e: Sp<Postfix>> <args: Paren<Comma<RawSp<Expr>>>> => NodeKind::FunctionCall(e, args),
@@ -113,7 +114,6 @@ Atom: NodeKind = {
 	Dict,
 	Lambda,
 	Void,
-	Range,
 	Paren<Expr>,
 };
 
@@ -199,13 +199,9 @@ Lambda: NodeKind = {
 };
 
 Range: NodeKind = {
-    <l: Sp<Int>> <r: SpRange> => NodeKind::Range(Some(l), r),
-    <r: SpRange> => NodeKind::Range(None, r),
-};
-
-SpRange: Option<Box<Node>> = {
-    ".." <u: Sp<Int>> => Some(u),
-    ".." => None,
+    <l: Sp<Postfix>> ".." <r: Sp<Postfix>> => NodeKind::Range(Some(l), Some(r)),
+    ".." <r: Sp<Postfix>> => NodeKind::Range(None, Some(r)),
+    Postfix,
 };
 
 Void: NodeKind = {
