@@ -1,0 +1,500 @@
+println("╔════════════════════════════════════════╗");
+println("║   🦭 WALRUS LANGUAGE SHOWCASE 🦭      ║");
+println("╚════════════════════════════════════════╝");
+println("");
+
+println("▶ 1. BASIC TYPES & OPERATIONS");
+println("─────────────────────────────────────────");
+
+let integer = 42;
+let floating = 3.14159;
+let text = "Hello, Walrus!";
+let flag = true;
+
+println("  Integer: " + str(integer));
+println("  Float: " + str(floating));
+println("  String: " + text);
+println("  Boolean: " + str(flag));
+println("  Math: 2^10 = " + str(2 ** 10));
+println("");
+
+println("▶ 2. LISTS & COLLECTIONS");
+println("─────────────────────────────────────────");
+
+let fibonacci = [0, 1, 1, 2, 3, 5, 8, 13, 21, 34];
+println("  Fibonacci: " + str(fibonacci));
+println("  First element: " + str(fibonacci[0]));
+println("  Last element: " + str(fibonacci[-1]));
+println("  Length: " + str(len(fibonacci)));
+println("");
+
+println("▶ 3. DICTIONARIES");
+println("─────────────────────────────────────────");
+
+let person = {"name": "Alice", "age": 30, "city": "Seattle"};
+println("  Person: " + str(person));
+println("  Name: " + person["name"]);
+println("  Age: " + str(person["age"]));
+println("");
+
+println("▶ 4. CONTROL FLOW");
+println("─────────────────────────────────────────");
+
+let grade = 85;
+let result = "B";
+if grade >= 90 {
+    result = "A";
+} else if grade >= 80 {
+    result = "B";
+} else if grade >= 70 {
+    result = "C";
+} else {
+    result = "F";
+}
+println("  Grade " + str(grade) + " = " + result);
+
+let status = "Pass";
+if grade < 60 {
+    status = "Fail";
+}
+println("  Status: " + status);
+println("");
+
+println("▶ 5. LOOPS & ITERATION");
+println("─────────────────────────────────────────");
+
+print("  Countdown: ");
+let i = 5;
+while i > 0 {
+    print(str(i) + " ");
+    i = i - 1;
+}
+println("🚀");
+
+print("  For loop: ");
+for num in [1, 2, 3, 4, 5] {
+    print("★ ");
+}
+println("");
+
+print("  Range: ");
+for x in 0..5 {
+    print(str(x) + " ");
+}
+println("");
+println("");
+
+println("▶ 6. FUNCTIONS");
+println("─────────────────────────────────────────");
+
+fn factorial : n {
+    if n <= 1 {
+        return 1;
+    }
+    return n * factorial(n - 1);
+}
+
+fn fibonacci_recursive : n {
+    if n <= 1 {
+        return n;
+    }
+    return fibonacci_recursive(n - 1) + fibonacci_recursive(n - 2);
+}
+
+println("  factorial(5) = " + str(factorial(5)));
+println("  fibonacci(10) = " + str(fibonacci_recursive(10)));
+println("");
+
+
+let square = : x {
+    return x * x;
+};
+
+println("  square(7) = " + str(square(7)));
+
+println("▶ 7. HIGHER-ORDER FUNCTIONS");
+println("─────────────────────────────────────────");
+
+fn apply_twice : func, value {
+    return func(func(value));
+}
+
+fn double : x {
+    return x * 2;
+}
+
+println("  double(5) = " + str(double(5)));
+println("  apply_twice(double, 5) = " + str(apply_twice(double, 5)));
+println("");
+
+println("▶ 8. STRUCTS - BASIC");
+println("─────────────────────────────────────────");
+
+struct Point {
+    fn new : x, y {
+        return {"x": x, "y": y};
+    }
+
+    fn distance : p1, p2 {
+        let dx = p1["x"] - p2["x"];
+        let dy = p1["y"] - p2["y"];
+        return (dx * dx + dy * dy) ** 0.5;
+    }
+
+    fn describe : point {
+        return "(" + str(point["x"]) + ", " + str(point["y"]) + ")";
+    }
+}
+
+let p1 = Point.new(3, 4);
+let p2 = Point.new(0, 0);
+println("  Point 1: " + Point.describe(p1));
+println("  Point 2: " + Point.describe(p2));
+println("  Distance: " + str(Point.distance(p1, p2)));
+println("");
+
+println("▶ 9. STRUCTS - METHOD CALLING");
+println("─────────────────────────────────────────");
+
+struct Calculator {
+    fn add : a, b {
+        return a + b;
+    }
+
+    fn multiply : a, b {
+        return a * b;
+    }
+
+    fn power : base, exp {
+        return base ** exp;
+    }
+
+    fn complex_calc : x, y {
+        let sum = add(x, y);
+        let product = multiply(sum, 2);
+        return power(product, 2);
+    }
+}
+
+let result_calc = Calculator.complex_calc(3, 4);
+println("  Calculator.complex_calc(3, 4):");
+println("    ((3 + 4) * 2)^2 = " + str(result_calc));
+println("");
+
+println("▶ 10. STRING MANIPULATION");
+println("─────────────────────────────────────────");
+
+let message = "Walrus Language";
+println("  Original: " + message);
+println("  Length: " + str(len(message)));
+println("  First char: " + message[0]);
+println("  Slice: " + message[0..6]);
+println("");
+
+println("▶ 11. FIZZBUZZ");
+println("─────────────────────────────────────────");
+
+fn fizzbuzz : n {
+    let output = "";
+    for i in 1..(n + 1) {
+        let result = str(i);
+        if i % 15 == 0 {
+            result = "FizzBuzz";
+        } else if i % 3 == 0 {
+            result = "Fizz";
+        } else if i % 5 == 0 {
+            result = "Buzz";
+        }
+        output = output + result + " ";
+    }
+    return output;
+}
+
+println("  " + fizzbuzz(20));
+println("");
+
+println("▶ 12. RECURSIVE LIST OPERATIONS");
+println("─────────────────────────────────────────");
+
+fn sum_list : lst {
+    if len(lst) == 0 {
+        return 0;
+    }
+    return lst[0] + sum_list(lst[1..]);
+}
+
+let numbers = [10, 20, 30, 40, 50];
+println("  List: " + str(numbers));
+println("  Sum: " + str(sum_list(numbers)));
+println("");
+
+println("▶ 13. PATTERN MATCHING");
+println("─────────────────────────────────────────");
+
+fn classify_number : n {
+    let class = "large number";
+    if n < 0 {
+        class = "negative";
+    } else if n == 0 {
+        class = "zero";
+    } else if n < 10 {
+        class = "single digit";
+    } else if n < 100 {
+        class = "double digit";
+    }
+    return class;
+}
+
+for test in [-5, 0, 7, 42, 150] {
+    println("  " + str(test) + " is " + classify_number(test));
+}
+println("");
+
+println ("▶ 14. FILE PROCESSING SIMULATION");
+println("─────────────────────────────────────────");
+fn process_lines : lines {
+    let word_count = 0;
+    let line_count = 0;
+    for line in lines {
+        line_count = line_count + 1;
+        let words = line.split(" ");
+        word_count = word_count + len(words);
+    }
+    return {"lines": line_count, "words": word_count};
+}
+let sample_lines = [
+    "Walrus is a powerful language.",
+    "It supports structs, functions, and more.",
+    "This is a sample file processing simulation."
+];
+let stats = process_lines(sample_lines);
+println("  Lines: " + str(stats["lines"]));
+println("  Words: " + str(stats["words"]));
+println("");
+
+println("▶ 15. BANK ACCOUNT SYSTEM");
+println("─────────────────────────────────────────");
+
+struct BankAccount {
+    fn create : name, initial_balance {
+        return {
+            "name": name,
+            "balance": initial_balance,
+            "transactions": 0
+        };
+    }
+
+    fn deposit : account, amount {
+        account["balance"] = account["balance"] + amount;
+        account["transactions"] = account["transactions"] + 1;
+        return get_status(account);
+    }
+
+    fn withdraw : account, amount {
+        if amount > account["balance"] {
+            return "Insufficient funds!";
+        }
+        account["balance"] = account["balance"] - amount;
+        account["transactions"] = account["transactions"] + 1;
+        return get_status(account);
+    }
+
+    fn get_status : account {
+        return account["name"] + " | Balance: $" + 
+               str(account["balance"]) + " | Txns: " + 
+               str(account["transactions"]);
+    }
+}
+
+let alice_account = BankAccount.create("Alice", 1000);
+println("  Created: " + BankAccount.get_status(alice_account));
+println("  " + BankAccount.deposit(alice_account, 500));
+println("  " + BankAccount.withdraw(alice_account, 200));
+println("");
+
+println("▶ 16. PRIME NUMBERS");
+println("─────────────────────────────────────────");
+
+fn is_prime : n {
+    if n < 2 {
+        return false;
+    }
+    let i = 2;
+    while i * i <= n {
+        if n % i == 0 {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+fn get_primes : max {
+    let primes = [];
+    for i in 2..max {
+        if is_prime(i) {
+            primes = primes + [i];
+        }
+    }
+    return primes;
+}
+
+let primes = get_primes(30);
+println("  Primes up to 30: " + str(primes));
+println("");
+
+println("▶ 17. ADVANCED RECURSION - QUICKSORT");
+println("─────────────────────────────────────────");
+
+fn quicksort : arr {
+    if len(arr) <= 1 {
+        return arr;
+    }
+    
+    let pivot = arr[0];
+    let less = [];
+    let equal = [];
+    let greater = [];
+    
+    for x in arr {
+        if x < pivot {
+            less = less + [x];
+        } else if x == pivot {
+            equal = equal + [x];
+        } else {
+            greater = greater + [x];
+        }
+    }
+    
+    return quicksort(less) + equal + quicksort(greater);
+}
+
+let unsorted = [64, 34, 25, 12, 22, 11, 90, 88];
+let sorted = quicksort(unsorted);
+println("  Unsorted: " + str(unsorted));
+println("  Sorted:   " + str(sorted));
+println("");
+
+println("▶ 18. TEXT PROCESSING");
+println("─────────────────────────────────────────");
+
+fn reverse_string : s {
+    if len(s) <= 1 {
+        return s;
+    }
+    return reverse_string(s[1..]) + s[0];
+}
+
+fn is_palindrome : s {
+    return s == reverse_string(s);
+}
+
+let word1 = "racecar";
+let word2 = "walrus";
+println("  '" + word1 + "' reversed: " + reverse_string(word1));
+println("  '" + word1 + "' is palindrome: " + str(is_palindrome(word1)));
+println("  '" + word2 + "' is palindrome: " + str(is_palindrome(word2)));
+println("");
+
+println("▶ 19. MATHEMATICAL SEQUENCES");
+println("─────────────────────────────────────────");
+
+fn square_func : x {
+    return x * x;
+}
+
+fn cube_func : x {
+    return x * x * x;
+}
+
+fn generate_sequence : n, func {
+    let result = [];
+    for i in 0..n {
+        result = result + [func(i)];
+    }
+    return result;
+}
+
+let squares = generate_sequence(10, square_func);
+let cubes = generate_sequence(10, cube_func);
+
+println("  Squares: " + str(squares));
+println("  Cubes:   " + str(cubes));
+println("");
+
+println("▶ 20. PUTTING IT ALL TOGETHER");
+println("─────────────────────────────────────────");
+
+struct GameCharacter {
+    fn create : name, health, attack {
+        return {
+            "name": name,
+            "health": health,
+            "attack": attack,
+            "alive": true
+        };
+    }
+
+    fn take_damage : char, damage {
+        char["health"] = char["health"] - damage;
+        if char["health"] <= 0 {
+            char["health"] = 0;
+            char["alive"] = false;
+        }
+        return show_status(char);
+    }
+
+    fn heal : char, amount {
+        if char["alive"] {
+            char["health"] = char["health"] + amount;
+            return show_status(char);
+        }
+        return char["name"] + " cannot be healed!";
+    }
+
+    fn show_status : char {
+        let status_text = "💚 ALIVE";
+        if not char["alive"] {
+            status_text = "💀 DEFEATED";
+        }
+        return char["name"] + " | HP: " + str(char["health"]) + 
+               " | ATK: " + str(char["attack"]) + " | " + status_text;
+    }
+
+    fn battle : char1, char2 {
+        println("  ⚔️  " + char1["name"] + " vs " + char2["name"] + " ⚔️");
+        println("  " + show_status(char1));
+        println("  " + show_status(char2));
+        println("");
+        
+        while char1["alive"] and char2["alive"] {
+            println("  " + char1["name"] + " attacks!");
+            take_damage(char2, char1["attack"]);
+            println("  " + show_status(char2));
+            
+            if char2["alive"] {
+                println("  " + char2["name"] + " counter-attacks!");
+                take_damage(char1, char2["attack"]);
+                println("  " + show_status(char1));
+            }
+            println("");
+        }
+        
+        let winner = char2["name"];
+        if char1["alive"] {
+            winner = char1["name"];
+        }
+        return "🏆 " + winner + " wins the battle!";
+    }
+}
+
+let hero = GameCharacter.create("Hero", 100, 25);
+let dragon = GameCharacter.create("Dragon", 80, 30);
+
+println(GameCharacter.battle(hero, dragon));
+println("");
+
+println("╔════════════════════════════════════════╗");
+println("║   🎉 SHOWCASE COMPLETE! 🎉            ║");
+println("║   Walrus is powerful & expressive!    ║");
+println("╚════════════════════════════════════════╝");
