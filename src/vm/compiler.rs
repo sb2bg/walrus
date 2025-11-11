@@ -12,8 +12,8 @@ use crate::vm::opcode::{Instruction, Opcode};
 pub struct BytecodeEmitter<'a> {
     instructions: InstructionSet,
     source_ref: SourceRef<'a>,
-    depth: usize,                 // 0 = global scope, >0 = local scope
-    loop_stack: Vec<LoopContext>, // Track nested loops for break/continue
+    depth: usize,                   // 0 = global scope, >0 = local scope
+    loop_stack: Vec<LoopContext>,   // Track nested loops for break/continue
     current_struct: Option<String>, // Name of struct currently being compiled (for method access)
 }
 
@@ -465,9 +465,10 @@ impl<'a> BytecodeEmitter<'a> {
                     // If we're inside a struct method and the identifier isn't found,
                     // try to resolve it as a method of the current struct
                     // This will load the struct and then get the method
-                    
+
                     // Load the struct definition
-                    if let Some(struct_index) = self.instructions.resolve_global_index(struct_name) {
+                    if let Some(struct_index) = self.instructions.resolve_global_index(struct_name)
+                    {
                         let opcode = match struct_index {
                             0 => Opcode::LoadGlobal0,
                             1 => Opcode::LoadGlobal1,
@@ -476,7 +477,7 @@ impl<'a> BytecodeEmitter<'a> {
                             _ => Opcode::LoadGlobal(struct_index as u32),
                         };
                         self.instructions.push(Instruction::new(opcode, span));
-                        
+
                         // Push the method name as a string
                         let method_str = self
                             .instructions
@@ -489,7 +490,7 @@ impl<'a> BytecodeEmitter<'a> {
                             _ => Opcode::LoadConst(index),
                         };
                         self.instructions.push(Instruction::new(opcode, span));
-                        
+
                         // Get the method from the struct
                         self.instructions
                             .push(Instruction::new(Opcode::GetMethod, span));
