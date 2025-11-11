@@ -2,9 +2,24 @@
 
 This directory contains the comprehensive test suite for the Walrus programming language.
 
-## ⚠️ Note on Comments
+## 💬 Comments Support
 
-Walrus does **not** currently support comments in `.walrus` files. All test files are written without comments. Comments describing tests are in this README or in the Rust test code.
+Walrus supports both single-line (`//`) and multi-line (`/* */`) comments in `.walrus` files. You can use comments to document your code and explain test behavior.
+
+**Single-line comments:**
+
+```walrus
+// This is a single-line comment
+let x = 42; // Comment after code
+```
+
+**Multi-line comments:**
+
+```walrus
+/* This is a multi-line comment
+   that spans multiple lines */
+let y = 84; /* Inline multi-line comment */
+```
 
 ## Test Files
 

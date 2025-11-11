@@ -85,6 +85,21 @@ cargo run -- --help
 println("Hello, World!");
 ```
 
+### Comments
+
+Walrus supports both single-line and multi-line comments:
+
+```walrus
+// This is a single-line comment
+
+/* This is a multi-line comment
+   that can span multiple lines */
+
+let x = 42; // Comments can appear after code
+
+/* Multi-line comments can also be inline */ let y = 84;
+```
+
 ### Variables & Types
 
 ```walrus
