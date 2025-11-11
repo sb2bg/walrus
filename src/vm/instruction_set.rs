@@ -10,6 +10,7 @@ use crate::vm::symbol_table::SymbolTable;
 
 #[derive(Default, Debug, Clone)]
 pub struct InstructionSet {
+    // TODO: name these so we can have better disassembly output
     pub instructions: Vec<Instruction>,
     pub constants: Vec<Value>,
     pub locals: SymbolTable,
