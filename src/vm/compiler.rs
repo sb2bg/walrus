@@ -360,7 +360,39 @@ impl<'a> BytecodeEmitter<'a> {
                 }
             }
             NodeKind::AnonFunctionDefinition(args, body) => {
-                // TODO: model this after FunctionDefinition
+                // Create a child emitter - functions are always local scope
+                let mut emitter = self.new_child();
+                let arg_len = args.len();
+
+                // Define function parameters as locals in the function scope
+                // Don't emit Store opcodes - values will already be in locals when called
+                for arg in args {
+                    emitter.define_parameter(arg);
+                }
+
+                emitter.emit(*body)?;
+
+                // Should this include the arity?
+                let name = format!("[{:p}]", &emitter.instructions);
+
+                // Create the function heap value
+                let func =
+                    self.instructions
+                        .get_heap_mut()
+                        .push(HeapValue::Function(WalrusFunction::Vm(VmFunction::new(
+                            name,
+                            arg_len,
+                            emitter.instruction_set(),
+                        ))));
+
+                // Load the function constant
+                let index = self.instructions.push_constant(func);
+                let opcode = match index {
+                    0 => Opcode::LoadConst0,
+                    1 => Opcode::LoadConst1,
+                    _ => Opcode::LoadConst(index),
+                };
+                self.instructions.push(Instruction::new(opcode, span));
             }
             NodeKind::FunctionCall(func, args) => {
                 // TODO: try to check arity at compile time, if possible
@@ -555,6 +587,22 @@ impl<'a> BytecodeEmitter<'a> {
                         filename: self.source_ref.filename().to_string(),
                     });
                 }
+            }
+            NodeKind::StructDefinition(name, _) => {
+                return Err(WalrusError::TodoError {
+                    message: format!(
+                        "Struct '{}' is not yet supported by the bytecode compiler",
+                        name
+                    ),
+                });
+            }
+            NodeKind::StructFunctionDefinition(name, _, _) => {
+                return Err(WalrusError::TodoError {
+                    message: format!(
+                        "Struct function '{}' is not yet supported by the bytecode compiler",
+                        name
+                    ),
+                });
             }
             _ => unimplemented!("{}", kind),
         }
