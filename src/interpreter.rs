@@ -85,6 +85,10 @@ impl<'a> Interpreter<'a> {
             }
             NodeKind::Print(value) => Ok(self.visit_print(*value)?),
             NodeKind::Println(value) => Ok(self.visit_println(*value)?),
+            NodeKind::ExpressionStatement(expr) => {
+                let _ = self.interpret(*expr)?;
+                Ok(Value::Void)
+            }
             NodeKind::Throw(value) => Ok(self.visit_throw(*value, span)?),
             NodeKind::Free(value) => Ok(self.visit_free(*value)?),
             NodeKind::FunctionCall(value, args) => Ok(self.visit_fn_call(*value, args, span)?),

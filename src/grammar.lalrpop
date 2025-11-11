@@ -29,7 +29,10 @@ Statement: Node = {
     RawSp<Func>,
     RawSp<Struct>,
     <RawSp<TestBlock>> ";",
-    <RawSp<Expr>> ";",
+    <expr: RawSp<Expr>> ";" => {
+        let span = *expr.span();
+        Node::new(NodeKind::ExpressionStatement(Box::new(expr)), span)
+    },
     <RawSp<Assign>> ";",
     <RawSp<Return>> ";",
     <RawSp<Break>> ";",

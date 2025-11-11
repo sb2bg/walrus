@@ -76,12 +76,7 @@ impl<'a> BytecodeEmitter<'a> {
         match node.into_kind() {
             NodeKind::Program(nodes) => {
                 for node in nodes {
-                    let span = *node.span();
-                    let discard = Self::should_discard_result(node.kind());
                     self.emit(node)?;
-                    if discard {
-                        self.instructions.push(Instruction::new(Opcode::Pop, span));
-                    }
                 }
             }
             NodeKind::Int(value) => {
@@ -494,6 +489,11 @@ impl<'a> BytecodeEmitter<'a> {
                 self.instructions
                     .push(Instruction::new(Opcode::Print, span));
             }
+            NodeKind::ExpressionStatement(expr) => {
+                self.emit(*expr)?;
+
+                self.instructions.push(Instruction::new(Opcode::Pop, span));
+            }
             NodeKind::Ident(name) => {
                 // Check locals first, then globals
                 if let Some(index) = self.instructions.resolve_local_index(&name) {
@@ -645,24 +645,14 @@ impl<'a> BytecodeEmitter<'a> {
                 self.inc_depth();
 
                 for node in nodes {
-                    let span = *node.span();
-                    let discard = Self::should_discard_result(node.kind());
                     self.emit(node)?;
-                    if discard {
-                        self.instructions.push(Instruction::new(Opcode::Pop, span));
-                    }
                 }
 
                 self.dec_depth(span);
             }
             NodeKind::UnscopedStatements(nodes) => {
                 for node in nodes {
-                    let span = *node.span();
-                    let discard = Self::should_discard_result(node.kind());
                     self.emit(node)?;
-                    if discard {
-                        self.instructions.push(Instruction::new(Opcode::Pop, span));
-                    }
                 }
             }
             NodeKind::Return(node) => {
@@ -817,28 +807,6 @@ impl<'a> BytecodeEmitter<'a> {
 
     fn inc_depth(&mut self) {
         self.instructions.inc_depth();
-    }
-
-    fn should_discard_result(kind: &NodeKind) -> bool {
-        matches!(
-            kind,
-            NodeKind::Int(_)
-                | NodeKind::Float(_)
-                | NodeKind::String(_)
-                | NodeKind::List(_)
-                | NodeKind::Dict(_)
-                | NodeKind::Range(_, _)
-                | NodeKind::Bool(_)
-                | NodeKind::BinOp(_, _, _)
-                | NodeKind::UnaryOp(_, _)
-                | NodeKind::Ident(_)
-                | NodeKind::FunctionCall(_, _)
-                | NodeKind::Index(_, _)
-                | NodeKind::AnonFunctionDefinition(_, _)
-                | NodeKind::Ternary(_, _, _)
-                | NodeKind::MemberAccess(_, _)
-                | NodeKind::Void
-        )
     }
 
     fn dec_depth(&mut self, span: Span) {
