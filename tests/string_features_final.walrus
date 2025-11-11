@@ -1,0 +1,37 @@
+// Comprehensive test showing all string improvements
+
+println("=== Escape Sequences ===");
+println("Quotes: \"Hello World\"");
+println("Backslash: C:\\Users\\Path");
+println("Tab:\tTabbed");
+println("Newline:\nNext line");
+
+println("\n=== F-Strings: Basic ===");
+let name = "Alice";
+let age = 30;
+println(f"Name: {name}");
+println(f"Age: {age}");
+println(f"{name} is {age} years old");
+
+println("\n=== F-Strings: Expressions ===");
+let x = 10;
+let y = 20;
+println(f"Sum: {x + y}");
+println(f"Product: {x * y}");
+println(f"Average: {(x + y) / 2}");
+println(f"Comparison: {x} < {y} is {x < y}");
+
+println("\n=== F-Strings: Functions ===");
+let items = [1, 2, 3, 4, 5];
+println(f"List has {len(items)} items");
+
+println("\n=== F-Strings: Complex ===");
+let dict = {"a": 1, "b": 2};
+println(f"Dictionary: {dict}");
+println(f"Nested: {name} has {len(items)} items");
+
+println("\n=== Error Handling Test ===");
+// This should give proper error with correct span:
+// println(f"Error: {undefined}");
+
+println("\nAll tests passed!");

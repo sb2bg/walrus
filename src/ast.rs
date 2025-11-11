@@ -6,7 +6,7 @@ use std::fmt::{Debug, Display, Formatter};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FStringPart {
     Literal(String),
-    Expr(String), // Store expression as string to be parsed at runtime
+    Expr(Box<Node>), // Store parsed expression node with proper span
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

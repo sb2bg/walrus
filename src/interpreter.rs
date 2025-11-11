@@ -219,49 +219,19 @@ impl<'a> Interpreter<'a> {
     fn visit_fstring(
         &mut self,
         parts: Vec<crate::ast::FStringPart>,
-        span: Span,
+        _span: Span,
     ) -> InterpreterResult {
         use crate::ast::FStringPart;
 
-        let parser = crate::grammar::ProgramParser::new();
         let mut result = String::new();
 
         for part in parts {
             match part {
                 FStringPart::Literal(s) => result.push_str(&s),
-                FStringPart::Expr(expr_str) => {
-                    // Parse the expression string
-                    match parser.parse(&expr_str) {
-                        Ok(node) => {
-                            // The parser returns a Program node with Statements
-                            // We need to unwrap it to get the actual expression
-                            let value = match node.kind() {
-                                NodeKind::Statements(stmts) => {
-                                    if let Some(stmt) = stmts.first() {
-                                        match stmt.kind() {
-                                            NodeKind::ExpressionStatement(expr) => {
-                                                self.interpret(*expr.clone())?
-                                            }
-                                            _ => self.interpret(stmt.clone())?,
-                                        }
-                                    } else {
-                                        Value::Void
-                                    }
-                                }
-                                _ => self.interpret(node)?,
-                            };
-                            result.push_str(&value.stringify()?);
-                        }
-                        Err(e) => {
-                            return Err(WalrusError::FStringParseError {
-                                expr: expr_str.clone(),
-                                error: format!("{:?}", e),
-                                span,
-                                src: self.source_ref.source().into(),
-                                filename: self.source_ref.filename().into(),
-                            });
-                        }
-                    }
+                FStringPart::Expr(node) => {
+                    // The expression is already parsed with proper span
+                    let value = self.interpret(*node)?;
+                    result.push_str(&value.stringify()?);
                 }
             }
         }

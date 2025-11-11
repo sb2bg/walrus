@@ -18,6 +18,7 @@ pub enum RecoveredParseError {
     NumberTooLarge(String, Span),
     InvalidEscapeSequence(String, Span),
     InvalidUnicodeEscapeSequence(Span),
+    InvalidFStringExpression(String, Span),
 }
 
 pub fn parse_int<T>(
@@ -81,20 +82,27 @@ pub fn parse_fstring<T>(
     spanned: Spanned<String>,
 ) -> Result<NodeKind, ParseError<usize, T, RecoveredParseError>> {
     use crate::ast::FStringPart;
+    use lalrpop_util::lalrpop_mod;
+
+    lalrpop_mod!(pub grammar);
+    let parser = grammar::ExpressionParser::new();
 
     let raw = spanned.value();
-    // Remove f" and trailing "
+    let base_offset = spanned.span().0; // Start position of the f-string
+
+    // Remove f" and trailing " -> f" is 2 chars, so content starts at base_offset + 2
     let content = &raw[2..raw.len() - 1];
+    let content_offset = base_offset + 2;
 
     let mut parts = Vec::new();
     let mut current_literal = String::new();
-    let mut chars = content.chars().peekable();
+    let mut char_indices = content.char_indices().peekable();
 
-    while let Some(ch) = chars.next() {
+    while let Some((byte_pos, ch)) = char_indices.next() {
         if ch == '\\' {
             // Handle escape sequences
-            if let Some(&next_ch) = chars.peek() {
-                chars.next();
+            if let Some(&(_, next_ch)) = char_indices.peek() {
+                char_indices.next();
                 match next_ch {
                     'n' => current_literal.push('\n'),
                     't' => current_literal.push('\t'),
@@ -117,10 +125,11 @@ pub fn parse_fstring<T>(
             }
 
             // Find the matching closing brace
+            let expr_start = byte_pos + 1; // Position after {
             let mut expr_str = String::new();
             let mut brace_depth = 1;
 
-            while let Some(expr_ch) = chars.next() {
+            while let Some((_, expr_ch)) = char_indices.next() {
                 if expr_ch == '{' {
                     brace_depth += 1;
                     expr_str.push(expr_ch);
@@ -135,9 +144,33 @@ pub fn parse_fstring<T>(
                 }
             }
 
-            // Store the expression as a string to be parsed later during interpretation
+            // Parse the expression with proper span
             if !expr_str.is_empty() {
-                parts.push(FStringPart::Expr(expr_str));
+                match parser.parse(&expr_str) {
+                    Ok(node) => {
+                        // Adjust the span to reflect the actual position in the source file
+                        let expr_span = node.span();
+                        let adjusted_span = crate::span::Span(
+                            content_offset + expr_start + expr_span.0,
+                            content_offset + expr_start + expr_span.1,
+                        );
+                        // Create a new node with the adjusted span
+                        let adjusted_node = crate::ast::Node::new(node.into_kind(), adjusted_span);
+                        parts.push(FStringPart::Expr(Box::new(adjusted_node)));
+                    }
+                    Err(_) => {
+                        // If parsing fails, return an error
+                        let expr_span = crate::span::Span(
+                            content_offset + expr_start,
+                            content_offset + expr_start + expr_str.len(),
+                        );
+                        return Err(ParseError::User {
+                            error: RecoveredParseError::InvalidFStringExpression(
+                                expr_str, expr_span,
+                            ),
+                        });
+                    }
+                }
             }
         } else {
             current_literal.push(ch);
@@ -490,6 +523,15 @@ pub fn parser_err_mapper(
             RecoveredParseError::InvalidUnicodeEscapeSequence(span) => {
                 WalrusError::InvalidUnicodeEscapeSequence {
                     line: get_line(source, filename, span),
+                }
+            }
+            RecoveredParseError::InvalidFStringExpression(expr, span) => {
+                WalrusError::GenericError {
+                    message: format!(
+                        "Invalid f-string expression '{}' at {}",
+                        expr,
+                        get_line(source, filename, span)
+                    ),
                 }
             }
         },
