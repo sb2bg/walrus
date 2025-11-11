@@ -363,6 +363,12 @@ impl<'a> VM<'a> {
                         (Value::Float(FloatOrd(a)), Value::Float(FloatOrd(b))) => {
                             self.push(Value::Float(FloatOrd(a + b)));
                         }
+                        (Value::Int(a), Value::Float(FloatOrd(b))) => {
+                            self.push(Value::Float(FloatOrd(a as f64 + b)));
+                        }
+                        (Value::Float(FloatOrd(a)), Value::Int(b)) => {
+                            self.push(Value::Float(FloatOrd(a + b as f64)));
+                        }
                         (Value::String(a), Value::String(b)) => {
                             let a = self.is.get_heap().get_string(a)?;
                             let b = self.is.get_heap().get_string(b)?;
@@ -404,6 +410,12 @@ impl<'a> VM<'a> {
                         (Value::Float(FloatOrd(a)), Value::Float(FloatOrd(b))) => {
                             self.push(Value::Float(FloatOrd(a - b)));
                         }
+                        (Value::Int(a), Value::Float(FloatOrd(b))) => {
+                            self.push(Value::Float(FloatOrd(a as f64 - b)));
+                        }
+                        (Value::Float(FloatOrd(a)), Value::Int(b)) => {
+                            self.push(Value::Float(FloatOrd(a - b as f64)));
+                        }
                         _ => return Err(self.construct_err(opcode, a, Some(b), span)),
                     }
                 }
@@ -417,6 +429,12 @@ impl<'a> VM<'a> {
                         }
                         (Value::Float(FloatOrd(a)), Value::Float(FloatOrd(b))) => {
                             self.push(Value::Float(FloatOrd(a * b)));
+                        }
+                        (Value::Int(a), Value::Float(FloatOrd(b))) => {
+                            self.push(Value::Float(FloatOrd(a as f64 * b)));
+                        }
+                        (Value::Float(FloatOrd(a)), Value::Int(b)) => {
+                            self.push(Value::Float(FloatOrd(a * b as f64)));
                         }
                         (Value::List(a), Value::Int(b)) | (Value::Int(b), Value::List(a)) => {
                             let a = self.is.get_heap().get_list(a)?;
@@ -454,6 +472,12 @@ impl<'a> VM<'a> {
                         (Value::Float(FloatOrd(a)), Value::Float(FloatOrd(b))) => {
                             self.push(Value::Float(FloatOrd(a / b)));
                         }
+                        (Value::Int(a), Value::Float(FloatOrd(b))) => {
+                            self.push(Value::Float(FloatOrd(a as f64 / b)));
+                        }
+                        (Value::Float(FloatOrd(a)), Value::Int(b)) => {
+                            self.push(Value::Float(FloatOrd(a / b as f64)));
+                        }
                         _ => return Err(self.construct_err(opcode, a, Some(b), span)),
                     }
                 }
@@ -474,6 +498,12 @@ impl<'a> VM<'a> {
                         (Value::Float(FloatOrd(a)), Value::Float(FloatOrd(b))) => {
                             self.push(Value::Float(FloatOrd(a.powf(b))));
                         }
+                        (Value::Int(a), Value::Float(FloatOrd(b))) => {
+                            self.push(Value::Float(FloatOrd((a as f64).powf(b))));
+                        }
+                        (Value::Float(FloatOrd(a)), Value::Int(b)) => {
+                            self.push(Value::Float(FloatOrd(a.powf(b as f64))));
+                        }
                         _ => return Err(self.construct_err(opcode, a, Some(b), span)),
                     }
                 }
@@ -487,6 +517,12 @@ impl<'a> VM<'a> {
                         }
                         (Value::Float(FloatOrd(a)), Value::Float(FloatOrd(b))) => {
                             self.push(Value::Float(FloatOrd(a % b)));
+                        }
+                        (Value::Int(a), Value::Float(FloatOrd(b))) => {
+                            self.push(Value::Float(FloatOrd(a as f64 % b)));
+                        }
+                        (Value::Float(FloatOrd(a)), Value::Int(b)) => {
+                            self.push(Value::Float(FloatOrd(a % b as f64)));
                         }
                         _ => return Err(self.construct_err(opcode, a, Some(b), span)),
                     }
