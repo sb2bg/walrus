@@ -6,6 +6,15 @@ use lalrpop_util::ErrorRecovery;
 
 grammar;
 
+match {
+    // Skip whitespace and comments
+    r"\s+" => { },
+    r"//[^\n\r]*[\n\r]*" => { }, // Single-line comments
+    r"/\*[^*]*\*+(?:[^/*][^*]*\*+)*/" => { }, // Multi-line comments
+} else {
+    _
+}
+
 extern {
     type Error = RecoveredParseError;
 }
