@@ -1,5 +1,5 @@
 <div align="center">
-  <img src=".github/logo.png" alt="Walrus Logo" width="200">
+  <img src=".github/logo_alt.png" alt="Walrus Logo" width="200">
   <h1>🦭 Walrus Programming Language</h1>
 </div>
 
