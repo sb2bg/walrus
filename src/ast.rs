@@ -4,6 +4,12 @@ use float_ord::FloatOrd;
 use std::fmt::{Debug, Display, Formatter};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FStringPart {
+    Literal(String),
+    Expr(String), // Store expression as string to be parsed at runtime
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Node {
     pub kind: NodeKind,
     span: Span,
@@ -17,6 +23,7 @@ pub enum NodeKind {
     Int(i64),
     Float(FloatOrd<f64>),
     String(String),
+    FString(Vec<FStringPart>),
     List(Vec<Node>),
     Bool(bool),
     Dict(Vec<(Node, Node)>),
@@ -82,6 +89,7 @@ impl Display for NodeKind {
             NodeKind::Int(_) => write!(f, "Int"),
             NodeKind::Float(_) => write!(f, "Float"),
             NodeKind::String(_) => write!(f, "String"),
+            NodeKind::FString(_) => write!(f, "FString"),
             NodeKind::List(_) => write!(f, "List"),
             NodeKind::Bool(_) => write!(f, "Bool"),
             NodeKind::Dict(_) => write!(f, "Dict"),

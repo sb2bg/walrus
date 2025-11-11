@@ -116,6 +116,62 @@ impl<'a> BytecodeEmitter<'a> {
                 };
                 self.instructions.push(Instruction::new(opcode, span));
             }
+            NodeKind::FString(parts) => {
+                // Compile f-strings by emitting each part and concatenating them
+                use crate::ast::FStringPart;
+
+                let parser = crate::grammar::ExpressionParser::new();
+                let mut part_count = 0;
+
+                for part in parts {
+                    match part {
+                        FStringPart::Literal(s) => {
+                            // Push literal string constant
+                            let value =
+                                self.instructions.get_heap_mut().push(HeapValue::String(&s));
+                            let index = self.instructions.push_constant(value);
+                            let opcode = match index {
+                                0 => Opcode::LoadConst0,
+                                1 => Opcode::LoadConst1,
+                                _ => Opcode::LoadConst(index),
+                            };
+                            self.instructions.push(Instruction::new(opcode, span));
+                            part_count += 1;
+                        }
+                        FStringPart::Expr(expr_str) => {
+                            // Parse and compile the expression
+                            match parser.parse(&expr_str) {
+                                Ok(expr) => {
+                                    self.emit(expr)?;
+                                    // Convert to string using builtin str function
+                                    self.instructions.push(Instruction::new(Opcode::Str, span));
+                                    part_count += 1;
+                                }
+                                Err(_) => {
+                                    // If parsing fails, treat as empty string
+                                    let value = self
+                                        .instructions
+                                        .get_heap_mut()
+                                        .push(HeapValue::String(""));
+                                    let index = self.instructions.push_constant(value);
+                                    let opcode = match index {
+                                        0 => Opcode::LoadConst0,
+                                        1 => Opcode::LoadConst1,
+                                        _ => Opcode::LoadConst(index),
+                                    };
+                                    self.instructions.push(Instruction::new(opcode, span));
+                                    part_count += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Concatenate all parts using Add operations
+                for _ in 1..part_count {
+                    self.instructions.push(Instruction::new(Opcode::Add, span));
+                }
+            }
             NodeKind::List(nodes) => {
                 let cap = nodes.len();
 

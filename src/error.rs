@@ -13,6 +13,7 @@ use crate::ast::NodeKind;
 use crate::span::{Span, Spanned};
 use crate::vm::opcode::Opcode;
 
+#[derive(Debug)]
 pub enum RecoveredParseError {
     NumberTooLarge(String, Span),
     InvalidEscapeSequence(String, Span),
@@ -74,6 +75,80 @@ pub fn escape_string<T>(
             }
         }
     }
+}
+
+pub fn parse_fstring<T>(
+    spanned: Spanned<String>,
+) -> Result<NodeKind, ParseError<usize, T, RecoveredParseError>> {
+    use crate::ast::FStringPart;
+
+    let raw = spanned.value();
+    // Remove f" and trailing "
+    let content = &raw[2..raw.len() - 1];
+
+    let mut parts = Vec::new();
+    let mut current_literal = String::new();
+    let mut chars = content.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch == '\\' {
+            // Handle escape sequences
+            if let Some(&next_ch) = chars.peek() {
+                chars.next();
+                match next_ch {
+                    'n' => current_literal.push('\n'),
+                    't' => current_literal.push('\t'),
+                    'r' => current_literal.push('\r'),
+                    '\\' => current_literal.push('\\'),
+                    '"' => current_literal.push('"'),
+                    '{' => current_literal.push('{'),
+                    '}' => current_literal.push('}'),
+                    _ => {
+                        current_literal.push('\\');
+                        current_literal.push(next_ch);
+                    }
+                }
+            }
+        } else if ch == '{' {
+            // Start of an interpolation
+            if !current_literal.is_empty() {
+                parts.push(FStringPart::Literal(current_literal.clone()));
+                current_literal.clear();
+            }
+
+            // Find the matching closing brace
+            let mut expr_str = String::new();
+            let mut brace_depth = 1;
+
+            while let Some(expr_ch) = chars.next() {
+                if expr_ch == '{' {
+                    brace_depth += 1;
+                    expr_str.push(expr_ch);
+                } else if expr_ch == '}' {
+                    brace_depth -= 1;
+                    if brace_depth == 0 {
+                        break;
+                    }
+                    expr_str.push(expr_ch);
+                } else {
+                    expr_str.push(expr_ch);
+                }
+            }
+
+            // Store the expression as a string to be parsed later during interpretation
+            if !expr_str.is_empty() {
+                parts.push(FStringPart::Expr(expr_str));
+            }
+        } else {
+            current_literal.push(ch);
+        }
+    }
+
+    if !current_literal.is_empty() {
+        parts.push(FStringPart::Literal(current_literal));
+    }
+
+    Ok(NodeKind::FString(parts))
 }
 
 // todo: accept &str instead of String, and source_refs when possible
@@ -204,6 +279,17 @@ pub enum WalrusError {
 
     #[error("Invalid unicode escape sequence at {line}")]
     InvalidUnicodeEscapeSequence { line: String },
+
+    #[error("Failed to parse f-string expression '{expr}': {error} at {}",
+        get_line(src, filename, *span)
+    )]
+    FStringParseError {
+        expr: String,
+        error: String,
+        span: Span,
+        src: String,
+        filename: String,
+    },
 
     #[error("Cannot free memory not in the heap at {}",
         get_line(src, filename, *span)

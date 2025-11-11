@@ -1,0 +1,42 @@
+// Test escaped quotes
+let quote1 = "He said \"Hello!\"";
+println(quote1);
+
+let quote2 = "She replied \"Hi there!\"";
+println(quote2);
+
+// Test other escape sequences
+let newline = "Line 1\nLine 2";
+println(newline);
+
+let tab = "Name:\tJohn";
+println(tab);
+
+let backslash = "Path: C:\\Users\\Documents";
+println(backslash);
+
+// Test f-strings
+let name = "Walrus";
+let age = 5;
+println(f"Hello, my name is {name}");
+println(f"I am {age} years old");
+
+// Test f-strings with expressions
+let x = 10;
+let y = 20;
+println(f"The sum of {x} and {y} is {x + y}");
+
+// Test f-strings with nested expressions
+let items = [1, 2, 3, 4, 5];
+println(f"The list has {len(items)} items");
+
+// Test mixing literals and expressions
+println(f"Result: {x * 2} (which is double of {x})");
+
+// Test with string concatenation still works
+let greeting = "Hello" + " " + name;
+println(greeting);
+
+// Complex f-string
+let price = 99;
+println(f"The price is ${price}.00");

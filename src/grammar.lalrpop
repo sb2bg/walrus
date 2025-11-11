@@ -1,7 +1,7 @@
 use crate::ast::{Node, NodeKind};
 use crate::vm::opcode::Opcode;
 use crate::span::{Span, Spanned};
-use crate::error::{RecoveredParseError, parse_int, parse_float, escape_string};
+use crate::error::{RecoveredParseError, parse_int, parse_float, escape_string, parse_fstring};
 use lalrpop_util::ErrorRecovery;
 
 grammar;
@@ -21,6 +21,10 @@ extern {
 
 pub Program: Node = {
     RawSp<Statements>,
+};
+
+pub Expression: Node = {
+    RawSp<Expr>,
 };
 
 Statements: NodeKind = {
@@ -139,7 +143,8 @@ Float: NodeKind = {
 };
 
 String: NodeKind = {
-	StrSp<r#""[^"]*""#> =>? escape_string(<>),
+	StrSp<r#""([^"\\]|\\.)*""#> =>? escape_string(<>),
+	StrSp<r#"f"([^"\\]|\\.)*""#> =>? parse_fstring(<>),
 };
 
 Bool: NodeKind = {
@@ -248,8 +253,8 @@ Continue: NodeKind = {
 };
 
 Import: NodeKind = {
-    "import" <m: r#""[^"]*""#> => NodeKind::ModuleImport(m[1..m.len() - 1].to_string(), None),
-    "import" <m: r#""[^"]*""#> "as" <a: IdentStr> => NodeKind::ModuleImport(m[1..m.len() - 1].to_string(), Some(a)),
+    "import" <m: r#""([^"\\]|\\.)*""#> => NodeKind::ModuleImport(m[1..m.len() - 1].to_string(), None),
+    "import" <m: r#""([^"\\]|\\.)*""#> "as" <a: IdentStr> => NodeKind::ModuleImport(m[1..m.len() - 1].to_string(), Some(a)),
     "import" "@" <p: IdentStr> => NodeKind::PackageImport(p, None),
     "import" "@" <p: IdentStr> "as" <a: IdentStr> => NodeKind::PackageImport(p, Some(a)),
 };

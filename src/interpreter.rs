@@ -5,6 +5,7 @@ use log::debug;
 use rustc_hash::FxHashMap;
 use uuid::Uuid;
 
+use crate::WalrusResult;
 use crate::arenas::{Free, HeapValue, Resolve, ResolveMut};
 use crate::ast::{Node, NodeKind};
 use crate::error::WalrusError;
@@ -16,7 +17,6 @@ use crate::source_ref::SourceRef;
 use crate::span::{Span, Spanned};
 use crate::value::Value;
 use crate::vm::opcode::Opcode;
-use crate::WalrusResult;
 
 pub struct Interpreter<'a> {
     scope: Scope,
@@ -65,6 +65,7 @@ impl<'a> Interpreter<'a> {
             NodeKind::Float(num) => Ok(Value::Float(num)),
             NodeKind::Bool(boolean) => Ok(Value::Bool(boolean)),
             NodeKind::String(string) => Ok(HeapValue::String(&string).alloc()),
+            NodeKind::FString(parts) => Ok(self.visit_fstring(parts, span)?),
             NodeKind::Dict(dict) => Ok(self.visit_dict(dict)?),
             NodeKind::List(list) => Ok(self.visit_list(list)?),
             NodeKind::FunctionDefinition(name, args, body) => {
@@ -213,6 +214,59 @@ impl<'a> Interpreter<'a> {
         }
 
         Ok(HeapValue::List(vec).alloc())
+    }
+
+    fn visit_fstring(
+        &mut self,
+        parts: Vec<crate::ast::FStringPart>,
+        span: Span,
+    ) -> InterpreterResult {
+        use crate::ast::FStringPart;
+
+        let parser = crate::grammar::ProgramParser::new();
+        let mut result = String::new();
+
+        for part in parts {
+            match part {
+                FStringPart::Literal(s) => result.push_str(&s),
+                FStringPart::Expr(expr_str) => {
+                    // Parse the expression string
+                    match parser.parse(&expr_str) {
+                        Ok(node) => {
+                            // The parser returns a Program node with Statements
+                            // We need to unwrap it to get the actual expression
+                            let value = match node.kind() {
+                                NodeKind::Statements(stmts) => {
+                                    if let Some(stmt) = stmts.first() {
+                                        match stmt.kind() {
+                                            NodeKind::ExpressionStatement(expr) => {
+                                                self.interpret(*expr.clone())?
+                                            }
+                                            _ => self.interpret(stmt.clone())?,
+                                        }
+                                    } else {
+                                        Value::Void
+                                    }
+                                }
+                                _ => self.interpret(node)?,
+                            };
+                            result.push_str(&value.stringify()?);
+                        }
+                        Err(e) => {
+                            return Err(WalrusError::FStringParseError {
+                                expr: expr_str.clone(),
+                                error: format!("{:?}", e),
+                                span,
+                                src: self.source_ref.source().into(),
+                                filename: self.source_ref.filename().into(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(HeapValue::String(&result).alloc())
     }
 
     fn visit_anon_fn_def(&mut self, args: Vec<String>, body: Node) -> InterpreterResult {
@@ -758,11 +812,7 @@ impl<'a> Interpreter<'a> {
         }
     }
 
-    fn visit_range(
-        &mut self,
-        start: Option<Box<Node>>,
-        end: Box<Node>,
-    ) -> InterpreterResult {
+    fn visit_range(&mut self, start: Option<Box<Node>>, end: Box<Node>) -> InterpreterResult {
         let (start, start_span) = if let Some(start) = start {
             let start_span = *start.span();
             (self.interpret(*start)?, start_span)

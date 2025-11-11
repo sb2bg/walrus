@@ -1,0 +1,23 @@
+// Test escaped quotes in strings
+println("She said \"Hello!\"");
+println("Path: C:\\Users\\Name");
+println("Tab:\there\nNewline");
+
+// Test f-strings
+let name = "World";
+let age = 25;
+println(f"Hello, {name}!");
+println(f"I am {age} years old");
+
+// Test f-strings with expressions
+let x = 10;
+let y = 20;
+println(f"Sum: {x + y}");
+println(f"Product: {x * y}");
+
+// Test nested braces
+let dict = {"key": "value"};
+println(f"Dictionary: {dict}");
+
+// Test escaped braces in f-strings
+println(f"Use \{braces\} for interpolation: {name}");
