@@ -1,21 +1,27 @@
+// ╔════════════════════════════════════════╗
+// ║   🦭 WALRUS LANGUAGE SHOWCASE 🦭      ║
+// ╚════════════════════════════════════════╝
+
 println("╔════════════════════════════════════════╗");
 println("║   🦭 WALRUS LANGUAGE SHOWCASE 🦭      ║");
 println("╚════════════════════════════════════════╝");
 println("");
 
+/* Section 1: Basic Types & Operations
+   Demonstrates fundamental data types and arithmetic */
 println("▶ 1. BASIC TYPES & OPERATIONS");
 println("─────────────────────────────────────────");
 
-let integer = 42;
-let floating = 3.14159;
-let text = "Hello, Walrus!";
-let flag = true;
+let integer = 42; // Integer type
+let floating = 3.14159; // Float type
+let text = "Hello, Walrus!"; // String type
+let flag = true; // Boolean type
 
 println("  Integer: " + str(integer));
 println("  Float: " + str(floating));
 println("  String: " + text);
 println("  Boolean: " + str(flag));
-println("  Math: 2^10 = " + str(2 ** 10));
+println("  Math: 2^10 = " + str(2 ** 10)); // Power operator
 println("");
 
 println("▶ 2. LISTS & COLLECTIONS");
@@ -220,7 +226,7 @@ fn sum_list : lst {
     if len(lst) == 0 {
         return 0;
     }
-    return lst[0] + sum_list(lst[1..]);
+    return lst[0] + sum_list(lst[1..(-1)]);
 }
 
 let numbers = [10, 20, 30, 40, 50];
@@ -382,7 +388,7 @@ fn reverse_string : s {
     if len(s) <= 1 {
         return s;
     }
-    return reverse_string(s[1..]) + s[0];
+    return reverse_string(s[1..(-1)]) + s[0];
 }
 
 fn is_palindrome : s {
