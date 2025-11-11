@@ -834,6 +834,83 @@ impl<'a> VM<'a> {
                     self.pop(opcode, span)?;
                 }
                 Opcode::Nop => {}
+                Opcode::MakeStruct => {
+                    // Pop struct definition from stack and create an instance
+                    let struct_def_value = self.pop(opcode, span)?;
+
+                    if let Value::StructDef(struct_def_key) = struct_def_value {
+                        let struct_def = self.is.get_heap().get_struct_def(struct_def_key)?;
+                        let struct_name = struct_def.name().to_string();
+
+                        // Create a new struct instance
+                        let instance = crate::structs::StructInstance::new(struct_name);
+                        let instance_value =
+                            self.is.get_heap_mut().push(HeapValue::StructInst(instance));
+
+                        self.push(instance_value);
+                    } else {
+                        return Err(WalrusError::Exception {
+                            message: format!(
+                                "Expected struct definition, got {}",
+                                struct_def_value.get_type()
+                            ),
+                            span,
+                            src: self.source_ref.source().into(),
+                            filename: self.source_ref.filename().into(),
+                        });
+                    }
+                }
+                Opcode::GetMethod => {
+                    // Pop method name (string) and struct definition from stack
+                    let method_name_value = self.pop(opcode, span)?;
+                    let struct_def_value = self.pop(opcode, span)?;
+
+                    if let (Value::String(method_name_sym), Value::StructDef(struct_def_key)) =
+                        (method_name_value, struct_def_value)
+                    {
+                        let method_name =
+                            self.is.get_heap().get_string(method_name_sym)?.to_string();
+                        let method_clone = {
+                            let struct_def = self.is.get_heap().get_struct_def(struct_def_key)?;
+                            if let Some(method) = struct_def.get_method(&method_name) {
+                                method.clone()
+                            } else {
+                                return Err(WalrusError::Exception {
+                                    message: format!(
+                                        "Method '{}' not found on struct '{}'",
+                                        method_name,
+                                        struct_def.name()
+                                    ),
+                                    span,
+                                    src: self.source_ref.source().into(),
+                                    filename: self.source_ref.filename().into(),
+                                });
+                            }
+                        };
+
+                        // Push the method as a function value
+                        let func_value = self
+                            .is
+                            .get_heap_mut()
+                            .push(HeapValue::Function(method_clone));
+                        self.push(func_value);
+                    } else {
+                        return Err(WalrusError::Exception {
+                            message: "GetMethod expects string method name and struct definition"
+                                .to_string(),
+                            span,
+                            src: self.source_ref.source().into(),
+                            filename: self.source_ref.filename().into(),
+                        });
+                    }
+                }
+                Opcode::CallMethod => {
+                    // For now, methods are called like regular functions
+                    // In the future, we might want to pass 'this' as an implicit first argument
+                    return Err(WalrusError::TodoError {
+                        message: "CallMethod opcode not yet implemented".to_string(),
+                    });
+                }
             }
 
             self.stack_trace();

@@ -67,6 +67,9 @@ pub enum Opcode {
     Println,
     Index,
     Nop,
+    MakeStruct, // Create a struct instance from a struct definition
+    GetMethod,  // Get a method from a struct definition
+    CallMethod, // Call a method on a struct instance
 }
 
 impl Display for Opcode {

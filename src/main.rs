@@ -21,6 +21,7 @@ mod range;
 mod scope;
 mod source_ref;
 mod span;
+mod structs;
 mod value;
 pub mod vm;
 

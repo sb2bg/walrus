@@ -372,7 +372,7 @@ impl<'a> BytecodeEmitter<'a> {
 
                 emitter.emit(*body)?;
 
-                // Should this include the arity?
+                // TODO: Should this include the arity?
                 let name = format!("[{:p}]", &emitter.instructions);
 
                 // Create the function heap value
@@ -588,18 +588,75 @@ impl<'a> BytecodeEmitter<'a> {
                     });
                 }
             }
-            NodeKind::StructDefinition(name, _) => {
-                return Err(WalrusError::TodoError {
-                    message: format!(
-                        "Struct '{}' is not yet supported by the bytecode compiler",
-                        name
-                    ),
-                });
+            NodeKind::StructDefinition(name, members) => {
+                let is_global = self.depth == 0;
+
+                // Create a new struct definition
+                let mut struct_def = crate::structs::StructDefinition::new(name.clone());
+
+                // Process struct members (methods)
+                for member in members {
+                    let member_kind = member.kind().to_string();
+                    match member.into_kind() {
+                        NodeKind::StructFunctionDefinition(method_name, args, body) => {
+                            // Create a child emitter for the method
+                            let mut emitter = self.new_child();
+                            let arg_len = args.len();
+
+                            // Define method parameters as locals
+                            for arg in args {
+                                emitter.define_parameter(arg);
+                            }
+
+                            emitter.emit(*body)?;
+
+                            // Create the method function
+                            let func = crate::function::WalrusFunction::Vm(
+                                crate::function::VmFunction::new(
+                                    format!("{}::{}", name, method_name),
+                                    arg_len,
+                                    emitter.instruction_set(),
+                                ),
+                            );
+
+                            struct_def.add_method(method_name, func);
+                        }
+                        _ => {
+                            return Err(WalrusError::TodoError {
+                                message: format!("Unexpected struct member type: {}", member_kind),
+                            });
+                        }
+                    }
+                }
+
+                // Push the struct definition to the heap
+                let struct_value = self
+                    .instructions
+                    .get_heap_mut()
+                    .push(HeapValue::StructDef(struct_def));
+
+                // Load the struct definition constant
+                let index = self.instructions.push_constant(struct_value);
+                let opcode = match index {
+                    0 => Opcode::LoadConst0,
+                    1 => Opcode::LoadConst1,
+                    _ => Opcode::LoadConst(index),
+                };
+                self.instructions.push(Instruction::new(opcode, span));
+
+                // Store the struct definition in the appropriate scope
+                if is_global {
+                    let struct_index = self.instructions.push_global(name);
+                    self.instructions
+                        .push(Instruction::new(Opcode::StoreGlobal(struct_index), span));
+                } else {
+                    self.define_variable(name, span);
+                }
             }
             NodeKind::StructFunctionDefinition(name, _, _) => {
                 return Err(WalrusError::TodoError {
                     message: format!(
-                        "Struct function '{}' is not yet supported by the bytecode compiler",
+                        "Struct function '{}' should only appear inside struct definitions",
                         name
                     ),
                 });

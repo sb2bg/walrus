@@ -8,6 +8,7 @@ use crate::WalrusResult;
 use crate::error::WalrusError;
 use crate::function::WalrusFunction;
 use crate::iter::{CollectionIter, DictIter, RangeIter, StrIter};
+use crate::structs::{StructDefinition, StructInstance};
 use crate::value::{Value, ValueIter};
 
 pub static mut ARENA: Lazy<ValueHolder> = Lazy::new(ValueHolder::new);
@@ -28,6 +29,8 @@ pub struct ValueHolder {
     strings: Interner,
     functions: DenseSlotMap<FuncKey, WalrusFunction>,
     iterators: DenseSlotMap<IterKey, ValueIter>,
+    struct_defs: DenseSlotMap<StructDefKey, StructDefinition>,
+    struct_instances: DenseSlotMap<StructInstKey, StructInstance>,
 }
 
 impl ValueHolder {
@@ -39,6 +42,8 @@ impl ValueHolder {
             strings: Interner::default(), // todo: use FxHasher
             functions: DenseSlotMap::with_key(),
             iterators: DenseSlotMap::with_key(),
+            struct_defs: DenseSlotMap::with_key(),
+            struct_instances: DenseSlotMap::with_key(),
         }
     }
 
@@ -54,6 +59,8 @@ impl ValueHolder {
             Value::Function(key) => self.functions.remove(key).is_some(),
             Value::Tuple(key) => self.tuples.remove(key).is_some(),
             Value::Iter(key) => self.iterators.remove(key).is_some(),
+            Value::StructDef(key) => self.struct_defs.remove(key).is_some(),
+            Value::StructInst(key) => self.struct_instances.remove(key).is_some(),
             _ => false,
         }
     }
@@ -67,6 +74,8 @@ impl ValueHolder {
             HeapValue::Function(func) => Value::Function(self.functions.insert(func)),
             HeapValue::String(string) => Value::String(self.strings.get_or_insert(string)),
             HeapValue::Iter(iter) => Value::Iter(self.iterators.insert(iter)),
+            HeapValue::StructDef(def) => Value::StructDef(self.struct_defs.insert(def)),
+            HeapValue::StructInst(inst) => Value::StructInst(self.struct_instances.insert(inst)),
         }
     }
 
@@ -82,6 +91,8 @@ impl ValueHolder {
             Value::Range(range) => !range.is_empty(),
             Value::Function(_) => true,
             Value::Iter(_) => true,
+            Value::StructDef(_) => true,
+            Value::StructInst(_) => true,
             Value::Void => false,
         })
     }
@@ -124,6 +135,18 @@ impl ValueHolder {
 
     pub fn get_mut_iter(&mut self, key: IterKey) -> WalrusResult<&mut ValueIter> {
         Self::check(self.iterators.get_mut(key))
+    }
+
+    pub fn get_struct_def(&self, key: StructDefKey) -> WalrusResult<&StructDefinition> {
+        Self::check(self.struct_defs.get(key))
+    }
+
+    pub fn get_struct_inst(&self, key: StructInstKey) -> WalrusResult<&StructInstance> {
+        Self::check(self.struct_instances.get(key))
+    }
+
+    pub fn get_mut_struct_inst(&mut self, key: StructInstKey) -> WalrusResult<&mut StructInstance> {
+        Self::check(self.struct_instances.get_mut(key))
     }
 
     pub fn value_to_iter(&mut self, value: Value) -> WalrusResult<Value> {
@@ -228,6 +251,14 @@ impl ValueHolder {
                 func.to_string()
             }
             Value::Iter(_) => "<iter object>".to_string(),
+            Value::StructDef(s) => {
+                let def = self.get_struct_def(s)?;
+                def.to_string()
+            }
+            Value::StructInst(s) => {
+                let inst = self.get_struct_inst(s)?;
+                inst.to_string()
+            }
             Value::Void => "void".to_string(),
         })
     }
@@ -240,6 +271,8 @@ pub enum HeapValue<'a> {
     Function(WalrusFunction),
     String(&'a str),
     Iter(ValueIter),
+    StructDef(StructDefinition),
+    StructInst(StructInstance),
 }
 
 impl HeapValue<'_> {
@@ -254,6 +287,8 @@ new_key_type! {
     pub struct FuncKey;
     pub struct TupleKey;
     pub struct IterKey;
+    pub struct StructDefKey;
+    pub struct StructInstKey;
 }
 
 pub trait Free {
@@ -329,5 +364,29 @@ impl<'a> Resolve<'a> for TupleKey {
 
     fn resolve(self) -> WalrusResult<Self::Output> {
         unsafe { (*std::ptr::addr_of_mut!(ARENA)).get_tuple(self) }
+    }
+}
+
+impl<'a> Resolve<'a> for StructDefKey {
+    type Output = &'a StructDefinition;
+
+    fn resolve(self) -> WalrusResult<Self::Output> {
+        unsafe { (*std::ptr::addr_of_mut!(ARENA)).get_struct_def(self) }
+    }
+}
+
+impl<'a> Resolve<'a> for StructInstKey {
+    type Output = &'a StructInstance;
+
+    fn resolve(self) -> WalrusResult<Self::Output> {
+        unsafe { (*std::ptr::addr_of_mut!(ARENA)).get_struct_inst(self) }
+    }
+}
+
+impl<'a> ResolveMut<'a> for StructInstKey {
+    type Output = &'a mut StructInstance;
+
+    fn resolve_mut(self) -> WalrusResult<Self::Output> {
+        unsafe { (*std::ptr::addr_of_mut!(ARENA)).get_mut_struct_inst(self) }
     }
 }

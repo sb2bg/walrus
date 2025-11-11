@@ -6,7 +6,9 @@ use float_ord::FloatOrd;
 use strena::Symbol;
 
 use crate::WalrusResult;
-use crate::arenas::{DictKey, FuncKey, IterKey, ListKey, Resolve, TupleKey, ValueHolder};
+use crate::arenas::{
+    DictKey, FuncKey, IterKey, ListKey, Resolve, StructDefKey, StructInstKey, TupleKey, ValueHolder,
+};
 use crate::iter::{CollectionIter, DictIter, RangeIter, StrIter, ValueIterator};
 use crate::range::RangeValue;
 
@@ -42,6 +44,8 @@ pub enum Value {
     Dict(DictKey),
     Function(FuncKey),
     Iter(IterKey),
+    StructDef(StructDefKey),
+    StructInst(StructInstKey),
     Void,
 }
 
@@ -58,6 +62,8 @@ impl Value {
             Value::Dict(_) => "dict",
             Value::Function(_) => "function",
             Value::Iter(_) => "iter",
+            Value::StructDef(_) => "struct",
+            Value::StructInst(_) => "struct instance",
             Value::Void => "void",
         }
     }
@@ -75,6 +81,8 @@ impl Value {
             Value::Range(r) => !r.is_empty(),
             Value::Function(_) => true,
             Value::Iter(_) => true,
+            Value::StructDef(_) => true,
+            Value::StructInst(_) => true,
         })
     }
 
@@ -140,6 +148,16 @@ impl Value {
                 func.to_string()
             }
             Value::Iter(_) => "iter".to_string(),
+            Value::StructDef(s) => {
+                use crate::arenas::ARENA;
+                let def = unsafe { (*std::ptr::addr_of_mut!(ARENA)).get_struct_def(s)? };
+                def.to_string()
+            }
+            Value::StructInst(s) => {
+                use crate::arenas::ARENA;
+                let inst = unsafe { (*std::ptr::addr_of_mut!(ARENA)).get_struct_inst(s)? };
+                inst.to_string()
+            }
             Value::Void => "void".to_string(),
         })
     }
@@ -159,6 +177,8 @@ impl Display for Value {
             Value::Dict(dict) => write!(f, "{:?}", dict),
             Value::Function(func) => write!(f, "{:?}", func),
             Value::Iter(iter) => write!(f, "{:?}", iter),
+            Value::StructDef(s) => write!(f, "{:?}", s),
+            Value::StructInst(s) => write!(f, "{:?}", s),
             Value::Void => write!(f, "void"),
         }
     }
