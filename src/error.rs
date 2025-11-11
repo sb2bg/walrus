@@ -348,6 +348,17 @@ pub enum WalrusError {
         src: String,
         filename: String,
     },
+
+    #[error("Range start '{start}' must be less than or equal to range end '{end}' at {}",
+        get_line(src, filename, *span)
+    )]
+    InvalidRange {
+        start: i64,
+        end: i64,
+        span: Span,
+        src: String,
+        filename: String,
+    },
 }
 
 pub fn parser_err_mapper(

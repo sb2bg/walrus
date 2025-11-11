@@ -752,6 +752,51 @@ impl<'a> VM<'a> {
                                 });
                             }
                         }
+                        (Value::String(a), Value::Range(range)) => {
+                            let a = self.is.get_heap().get_string(a)?;
+                            let a_len = a.len();
+
+                            let start = if range.start < 0 {
+                                a_len as i64 + range.start + 1
+                            } else {
+                                range.start
+                            };
+
+                            let end = if range.end < 0 {
+                                a_len as i64 + range.end + 1
+                            } else {
+                                range.end
+                            };
+
+                            if start < 0
+                                || end < 0
+                                || start as usize > a_len
+                                || end as usize > a_len
+                            {
+                                return Err(WalrusError::IndexOutOfBounds {
+                                    index: range.start,
+                                    len: a.len(),
+                                    span,
+                                    src: self.source_ref.source().to_string(),
+                                    filename: self.source_ref.filename().to_string(),
+                                });
+                            }
+
+                            if start > end {
+                                return Err(WalrusError::InvalidRange {
+                                    start: range.start,
+                                    end: range.end,
+                                    span,
+                                    src: self.source_ref.source().to_string(),
+                                    filename: self.source_ref.filename().to_string(),
+                                });
+                            }
+
+                            let res = a[start as usize..end as usize].to_string();
+                            let value = self.is.get_heap_mut().push(HeapValue::String(&res));
+
+                            self.push(value);
+                        }
                         _ => return Err(self.construct_err(opcode, a, Some(b), span)),
                     }
                 }

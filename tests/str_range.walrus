@@ -1,0 +1,5 @@
+println("Xavier"[1]);
+println("Xavier"[0..3]);
+println("Xavier"[2..4]);
+println("Xavier"[2..]);
+println("Xavier"[..]);
