@@ -808,6 +808,32 @@ impl<'a> VM<'a> {
                     let a = self.pop(opcode, span)?;
                     println!("{}", self.is.stringify(a)?);
                 }
+                Opcode::Len => {
+                    let a = self.pop(opcode, span)?;
+                    
+                    match a {
+                        Value::String(key) => {
+                            let s = self.is.get_heap().get_string(key)?;
+                            self.push(Value::Int(s.len() as i64));
+                        }
+                        Value::List(key) => {
+                            let list = self.is.get_heap().get_list(key)?;
+                            self.push(Value::Int(list.len() as i64));
+                        }
+                        Value::Dict(key) => {
+                            let dict = self.is.get_heap().get_dict(key)?;
+                            self.push(Value::Int(dict.len() as i64));
+                        }
+                        _ => {
+                            return Err(WalrusError::NoLength {
+                                type_name: a.get_type().to_string(),
+                                span,
+                                src: self.source_ref.source().to_string(),
+                                filename: self.source_ref.filename().to_string(),
+                            });
+                        }
+                    }
+                }
                 Opcode::Return => {
                     let a = self.pop(opcode, span)?;
                     return Ok(a);

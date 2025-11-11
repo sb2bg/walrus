@@ -70,6 +70,9 @@ pub enum Opcode {
     MakeStruct, // Create a struct instance from a struct definition
     GetMethod,  // Get a method from a struct definition
     CallMethod, // Call a method on a struct instance
+
+    // Builtins
+    Len, // Get length of a string, list, or dict
 }
 
 impl Display for Opcode {

@@ -9,6 +9,23 @@ use crate::value::Value;
 use crate::vm::instruction_set::InstructionSet;
 use crate::vm::opcode::{Instruction, Opcode};
 
+// Builtin function metadata
+struct BuiltinInfo {
+    opcode: Opcode,
+    arity: usize,
+}
+
+// Registry of builtin functions
+fn get_builtin(name: &str) -> Option<BuiltinInfo> {
+    match name {
+        "len" => Some(BuiltinInfo {
+            opcode: Opcode::Len,
+            arity: 1,
+        }),
+        _ => None,
+    }
+}
+
 pub struct BytecodeEmitter<'a> {
     instructions: InstructionSet,
     source_ref: SourceRef<'a>,
@@ -406,11 +423,34 @@ impl<'a> BytecodeEmitter<'a> {
                 self.instructions.push(Instruction::new(opcode, span));
             }
             NodeKind::FunctionCall(func, args) => {
-                // TODO: try to check arity at compile time, if possible
-                // we may need to evaluate func first, which is a Box<Node>
-                // and resolve it to a function, then check the arity, then
-                // evaluate the arguments, but we can't do that because we
-                // don't have the function table here
+                // Check if this is a builtin function call
+                if let NodeKind::Ident(name) = func.kind() {
+                    if let Some(builtin) = get_builtin(name) {
+                        // Emit builtin opcode
+                        if args.len() != builtin.arity {
+                            return Err(WalrusError::InvalidArgCount {
+                                name: name.to_string(),
+                                expected: builtin.arity,
+                                got: args.len(),
+                                span,
+                                src: self.source_ref.source().to_string(),
+                                filename: self.source_ref.filename().to_string(),
+                            });
+                        }
+
+                        // Emit arguments
+                        for arg in args {
+                            self.emit(arg)?;
+                        }
+
+                        // Emit the builtin opcode
+                        self.instructions
+                            .push(Instruction::new(builtin.opcode, span));
+                        return Ok(());
+                    }
+                }
+
+                // Regular function call
                 let arg_len = args.len();
 
                 for arg in args {
