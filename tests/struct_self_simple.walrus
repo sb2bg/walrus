@@ -1,0 +1,32 @@
+struct Point {
+    fn display : self {
+        print("Point(");
+        print(self);
+        println(")");
+        return void;
+    }
+    
+    fn add : self, other {
+        return self + other;
+    }
+}
+
+println("=== Testing self as parameter ===");
+println("");
+
+println("Test 1: Calling method with self");
+let p = 42;
+Point.display(p);
+println("");
+
+println("Test 2: Using self in computation");
+let result = Point.add(10, 5);
+print("10 + 5 = ");
+println(result);
+println("");
+
+println("Test 3: Struct definition");
+println(Point);
+println("");
+
+println("=== All self tests passed! ===")

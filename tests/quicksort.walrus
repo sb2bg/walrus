@@ -1,0 +1,25 @@
+fn quicksort : arr {
+    if len(arr) <= 1 {
+        return arr;
+    }
+
+    let pivot = arr[0];
+    let less = [];
+    let equal = [];
+    let greater = [];
+
+    for x in arr {
+        if x < pivot {
+            less = less + [x];
+        } else if x == pivot {
+            equal = equal + [x];
+        } else {
+            greater = greater + [x];
+        }
+    }
+
+    return quicksort(less) + equal + quicksort(greater);
+}
+
+let sorted = quicksort([64, 34, 25, 12, 22, 11, 90, 88]);
+println(sorted);

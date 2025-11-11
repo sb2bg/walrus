@@ -1,0 +1,45 @@
+struct Counter {
+    fn new : {
+        let instance = MakeStruct(Counter);
+        instance.value = 0;
+        return instance;
+    }
+    
+    fn increment : self {
+        self.value = self.value + 1;
+        return self;
+    }
+    
+    fn get_value : self {
+        return self.value;
+    }
+    
+    fn set_value : self, val {
+        self.value = val;
+        return self;
+    }
+}
+
+println("Creating counter instance...");
+let counter = Counter.new();
+println("Counter created");
+
+println("Initial value:");
+println(counter.get_value());
+
+println("Incrementing...");
+counter.increment();
+println("After increment:");
+println(counter.get_value());
+
+println("Setting to 10...");
+counter.set_value(10);
+println("After set:");
+println(counter.get_value());
+
+println("Incrementing again...");
+counter.increment();
+println("Final value:");
+println(counter.get_value());
+
+println("Self support working!");

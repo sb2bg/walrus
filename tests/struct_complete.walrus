@@ -1,0 +1,49 @@
+struct Calculator {
+    fn add : a, b {
+        return a + b;
+    }
+    
+    fn multiply : a, b {
+        return a * b;
+    }
+    
+    fn power : base, exp {
+        let result = 1;
+        let i = 0;
+        while i < exp {
+            result = result * base;
+            i = i + 1;
+        }
+        return result;
+    }
+}
+
+println("=== Struct Implementation Test ===");
+println("");
+
+println("Calculator struct:");
+println(Calculator);
+println("");
+
+println("Basic operations:");
+let sum = Calculator.add(10, 20);
+print("10 + 20 = ");
+println(sum);
+
+let product = Calculator.multiply(5, 7);
+print("5 * 7 = ");
+println(product);
+println("");
+
+println("Complex operation (power):");
+let powered = Calculator.power(2, 10);
+print("2^10 = ");
+println(powered);
+println("");
+
+println("Chained operations:");
+let step1 = Calculator.add(3, 4);
+let step2 = Calculator.multiply(step1, 2);
+let step3 = Calculator.power(step2, 2);
+print("((3 + 4) * 2)^2 = ");
+println(step3);

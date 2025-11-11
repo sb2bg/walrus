@@ -1,0 +1,30 @@
+struct Counter {
+    fn display : self {
+        print("Counter instance: ");
+        println(self);
+        return void;
+    }
+    
+    fn process : self, value {
+        print("Processing ");
+        print(value);
+        print(" with self = ");
+        println(self);
+        return value * 2;
+    }
+}
+
+println("=== Testing self with struct instances ===");
+println("");
+
+println("Test: Struct definition");
+println(Counter);
+println("");
+
+println("Test: Calling static method");
+let result = Counter.process(5, 10);
+print("Counter.process(5, 10) = ");
+println(result);
+println("");
+
+println("=== Tests complete ===");

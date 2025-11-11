@@ -1,0 +1,14 @@
+println((: {
+  return 3;
+})());
+
+struct test {
+  fn test_fn : {
+    return ["abc", 123, true];
+  }
+}
+
+println(test.test_fn());
+println(test.test_fn()[0]);
+let x = test.test_fn()[1] + 100;
+println(x);

@@ -1,0 +1,14 @@
+struct tri_o {
+  fn convert_to_tri_o : name {
+    return name[0] + "ullivan";
+  }
+
+  fn print_names : names {
+    for name in names {
+      println(convert_to_tri_o(name));
+    }
+  }
+}
+
+let names = ["Sullivan", "Ryan", "Joseph", "Xavier"];
+tri_o.print_names(names);

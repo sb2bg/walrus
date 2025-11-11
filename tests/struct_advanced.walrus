@@ -1,0 +1,27 @@
+struct Counter {
+    fn increment : x {
+        return x + 1;
+    }
+    
+    fn decrement : x {
+        return x - 1;
+    }
+    
+    fn multiply : x, y {
+        return x * y;
+    }
+}
+
+println("Counter struct defined:");
+println(Counter);
+
+struct Simple {
+    fn get_value : {
+        return 42;
+    }
+}
+
+println("Simple struct defined:");
+println(Simple);
+
+println("Struct tests passed!");

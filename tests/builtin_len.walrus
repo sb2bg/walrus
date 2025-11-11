@@ -1,0 +1,19 @@
+let s = "Hello";
+println("len(Hello) = " + str(len(s)));
+
+let list = [1, 2, 3, 4, 5];
+println("len([1,2,3,4,5]) = " + str(len(list)));
+
+let dict = {"a": 1, "b": 2, "c": 3};
+println("len(dict) = " + str(len(dict)));
+
+let empty_str = "";
+let empty_list = [];
+let empty_dict = {};
+
+println("len(empty str) = " + str(len(empty_str)));
+println("len(empty list) = " + str(len(empty_list)));
+println("len(empty dict) = " + str(len(empty_dict)));
+
+println("len(Walrus) = " + str(len("Walrus")));
+println("len([1,2,3]) = " + str(len([1, 2, 3])));

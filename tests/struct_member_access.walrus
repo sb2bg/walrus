@@ -1,0 +1,31 @@
+struct Math {
+    fn add : x, y {
+        return x + y;
+    }
+    
+    fn subtract : x, y {
+        return x - y;
+    }
+    
+    fn square : x {
+        return x * x;
+    }
+}
+
+println("Math struct created:");
+println(Math);
+
+println("");
+println("Testing member access:");
+
+let result1 = Math.add(5, 3);
+print("Math.add(5, 3) = ");
+println(result1);
+
+let result2 = Math.subtract(10, 4);
+print("Math.subtract(10, 4) = ");
+println(result2);
+
+let result3 = Math.square(7);
+print("Math.square(7) = ");
+println(result3);
