@@ -800,6 +800,52 @@ impl<'a> VM<'a> {
                         _ => return Err(self.construct_err(opcode, a, Some(b), span)),
                     }
                 }
+                Opcode::StoreIndex => {
+                    // Stack: [object, index, value]
+                    let value = self.pop(opcode, span)?;
+                    let index = self.pop(opcode, span)?;
+                    let object = self.pop(opcode, span)?;
+
+                    match (object, index) {
+                        (Value::List(list_key), Value::Int(idx)) => {
+                            let list = self.is.get_heap_mut().get_mut_list(list_key)?;
+                            let mut idx = idx;
+                            let original = idx;
+
+                            // Handle negative indices
+                            if idx < 0 {
+                                idx += list.len() as i64;
+                            }
+
+                            if idx < 0 || idx >= list.len() as i64 {
+                                return Err(WalrusError::IndexOutOfBounds {
+                                    index: original,
+                                    len: list.len(),
+                                    span,
+                                    src: self.source_ref.source().to_string(),
+                                    filename: self.source_ref.filename().to_string(),
+                                });
+                            }
+
+                            list[idx as usize] = value;
+                            self.push(Value::Void);
+                        }
+                        (Value::Dict(dict_key), key) => {
+                            let dict = self.is.get_heap_mut().get_mut_dict(dict_key)?;
+                            dict.insert(key, value);
+                            self.push(Value::Void);
+                        }
+                        _ => {
+                            return Err(WalrusError::InvalidIndexType {
+                                non_indexable: object.get_type().to_string(),
+                                index_type: index.get_type().to_string(),
+                                span,
+                                src: self.source_ref.source().to_string(),
+                                filename: self.source_ref.filename().to_string(),
+                            });
+                        }
+                    }
+                }
                 Opcode::Print => {
                     let a = self.pop(opcode, span)?;
                     print!("{}", self.is.stringify(a)?);

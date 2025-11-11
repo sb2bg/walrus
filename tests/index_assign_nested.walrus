@@ -1,0 +1,13 @@
+let nested = [[1, 2], [3, 4], [5, 6]];
+println(nested);
+
+nested[0][1] = 99;
+println(nested);
+
+let dict_in_list = [{"a": 1}, {"b": 2}];
+println(dict_in_list);
+
+dict_in_list[0]["a"] = 100;
+println(dict_in_list);
+
+println("Nested tests passed!");

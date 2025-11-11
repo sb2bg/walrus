@@ -1,0 +1,26 @@
+let list = [1, 2, 3, 4, 5];
+println(list);
+
+list[0] = 10;
+println(list);
+
+list[2] = 30;
+println(list);
+
+list[-1] = 50;
+println(list);
+
+let dict = {"a": 1, "b": 2};
+println(dict);
+
+dict["a"] = 10;
+println(dict);
+
+dict["c"] = 3;
+println(dict);
+
+let arr = [0, 0, 0];
+arr[1 + 1] = 42;
+println(arr);
+
+println("All tests passed!");

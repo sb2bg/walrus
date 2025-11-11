@@ -796,6 +796,17 @@ impl<'a> BytecodeEmitter<'a> {
                 self.instructions
                     .push(Instruction::new(Opcode::GetMethod, span));
             }
+            NodeKind::IndexAssign(object, index, value) => {
+                // Emit the object to index into
+                self.emit(*object)?;
+                // Emit the index
+                self.emit(*index)?;
+                // Emit the value to store
+                self.emit(*value)?;
+                // Emit the StoreIndex opcode (pops value, index, object; performs assignment)
+                self.instructions
+                    .push(Instruction::new(Opcode::StoreIndex, span));
+            }
             _ => unimplemented!("{}", kind),
         }
 

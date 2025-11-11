@@ -66,6 +66,7 @@ pub enum Opcode {
     Print,
     Println,
     Index,
+    StoreIndex, // Store value at index (for list[i] = x and dict[k] = v)
     Nop,
     MakeStruct, // Create a struct instance from a struct definition
     GetMethod,  // Get a method from a struct definition
