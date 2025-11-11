@@ -72,7 +72,9 @@ pub enum Opcode {
     CallMethod, // Call a method on a struct instance
 
     // Builtins
-    Len, // Get length of a string, list, or dict
+    Len,  // Get length of a string, list, or dict
+    Str,  // Convert value to string
+    Type, // Get type name of a value
 }
 
 impl Display for Opcode {

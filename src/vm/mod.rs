@@ -810,7 +810,7 @@ impl<'a> VM<'a> {
                 }
                 Opcode::Len => {
                     let a = self.pop(opcode, span)?;
-                    
+
                     match a {
                         Value::String(key) => {
                             let s = self.is.get_heap().get_string(key)?;
@@ -833,6 +833,18 @@ impl<'a> VM<'a> {
                             });
                         }
                     }
+                }
+                Opcode::Str => {
+                    let a = self.pop(opcode, span)?;
+                    let s = self.is.stringify(a)?;
+                    let value = self.is.get_heap_mut().push(HeapValue::String(&s));
+                    self.push(value);
+                }
+                Opcode::Type => {
+                    let a = self.pop(opcode, span)?;
+                    let type_name = a.get_type();
+                    let value = self.is.get_heap_mut().push(HeapValue::String(type_name));
+                    self.push(value);
                 }
                 Opcode::Return => {
                     let a = self.pop(opcode, span)?;

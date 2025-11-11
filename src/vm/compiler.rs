@@ -22,6 +22,14 @@ fn get_builtin(name: &str) -> Option<BuiltinInfo> {
             opcode: Opcode::Len,
             arity: 1,
         }),
+        "str" => Some(BuiltinInfo {
+            opcode: Opcode::Str,
+            arity: 1,
+        }),
+        "type" => Some(BuiltinInfo {
+            opcode: Opcode::Type,
+            arity: 1,
+        }),
         _ => None,
     }
 }
