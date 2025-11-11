@@ -80,8 +80,7 @@ impl<'a> BytecodeEmitter<'a> {
                     let discard = Self::should_discard_result(node.kind());
                     self.emit(node)?;
                     if discard {
-                        self.instructions
-                            .push(Instruction::new(Opcode::Pop, span));
+                        self.instructions.push(Instruction::new(Opcode::Pop, span));
                     }
                 }
             }
@@ -650,8 +649,7 @@ impl<'a> BytecodeEmitter<'a> {
                     let discard = Self::should_discard_result(node.kind());
                     self.emit(node)?;
                     if discard {
-                        self.instructions
-                            .push(Instruction::new(Opcode::Pop, span));
+                        self.instructions.push(Instruction::new(Opcode::Pop, span));
                     }
                 }
 
@@ -663,8 +661,7 @@ impl<'a> BytecodeEmitter<'a> {
                     let discard = Self::should_discard_result(node.kind());
                     self.emit(node)?;
                     if discard {
-                        self.instructions
-                            .push(Instruction::new(Opcode::Pop, span));
+                        self.instructions.push(Instruction::new(Opcode::Pop, span));
                     }
                 }
             }
