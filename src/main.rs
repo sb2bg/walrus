@@ -3,7 +3,7 @@ use std::{backtrace, panic};
 
 use clap::Parser as ClapParser;
 use lalrpop_util::lalrpop_mod;
-use log::{trace, LevelFilter};
+use log::{LevelFilter, trace};
 use simplelog::SimpleLogger;
 
 use crate::error::WalrusError;
@@ -103,7 +103,7 @@ fn try_main() -> WalrusResult<()> {
         (true, true) => {
             return Err(WalrusError::GenericError {
                 message: "Invalid combination of program arguments.".to_string(),
-            })
+            });
         }
     };
 
