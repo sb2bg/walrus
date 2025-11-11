@@ -1,0 +1,35 @@
+println("=== Testing Builtin Functions ===");
+println("");
+
+println("1. len() tests:");
+let mystr = "Walrus";
+let mylist = [1, 2, 3, 4, 5];
+let mydict = {"a": 1, "b": 2};
+
+println("  len(mystr) = " + str(len(mystr)));
+println("  len(mylist) = " + str(len(mylist)));
+println("  len(mydict) = " + str(len(mydict)));
+println("");
+
+println("2. str() tests:");
+println("  str(42) = " + str(42));
+println("  str(3.14) = " + str(3.14));
+println("  str(true) = " + str(true));
+println("  str([1,2,3]) = " + str([1, 2, 3]));
+println("");
+
+println("3. type() tests:");
+println("  type(42) = " + type(42));
+println("  type(3.14) = " + type(3.14));
+println("  type(true) = " + type(true));
+println("  type(mystr) = " + type(mystr));
+println("  type(mylist) = " + type(mylist));
+println("  type(mydict) = " + type(mydict));
+println("");
+
+println("4. Combined tests:");
+let numbers = [10, 20, 30, 40, 50];
+println("  Array has " + str(len(numbers)) + " elements of type " + type(numbers));
+println("");
+
+println("=== All tests passed! ===");
