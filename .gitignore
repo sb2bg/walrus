@@ -1,6 +1,5 @@
 /target/
 /.idea/
-/*.walrus
 walrus.iml
 /dhat-heap.json
 .DS_Store
