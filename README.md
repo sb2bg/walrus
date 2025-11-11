@@ -1,6 +1,6 @@
 <div align="center">
-  <img src=".github/logo_alt.png" alt="Walrus Logo" width="200">
-  <h1>🦭 Walrus Programming Language</h1>
+    <img src=".github/logo_alt.png" alt="Walrus Logo" width="200">
+    <h1>🦭 Walrus Programming Language</h1>
 </div>
 
 A fast, expressive programming language with a clean syntax and powerful features, built in Rust.
@@ -24,6 +24,7 @@ Walrus is a dynamically-typed, interpreted programming language that combines si
 - **Comprehensive Data Types**: integers, floats, strings, booleans, lists, dictionaries, ranges
 - **Control Flow**: if/else conditionals, while loops, for loops with iterators
 - **Pattern Matching**: Advanced conditional logic and type checking
+- **Format Strings**: Embedded expressions within string literals
 - **Short-Circuit Evaluation**: Optimized boolean logic with `and`/`or` operators
 - **Recursion**: Full support for recursive functions and algorithms
 - **String Manipulation**: Slicing, indexing, and string operations
@@ -93,7 +94,7 @@ Walrus supports both single-line and multi-line comments:
 // This is a single-line comment
 
 /* This is a multi-line comment
-   that can span multiple lines */
+     that can span multiple lines */
 
 let x = 42; // Comments can appear after code
 
@@ -111,14 +112,36 @@ let items = [1, 2, 3, 4, 5];
 let data = {"key": "value", "count": 10};
 ```
 
+### Format Strings
+
+```walrus
+let name = "Alice";
+let age = 30;
+let score = 95.5;
+
+// Basic interpolation
+println(f"Hello, {name}!");
+
+// Multiple expressions
+println(f"User: {name}, Age: {age}");
+
+// Arithmetic expressions
+println(f"Next year you'll be {age + 1}");
+
+// Complex expressions
+let items = [1, 2, 3];
+println(f"List has {len(items)} items: {items}");
+println(f"Score: {score * 100 / 100}%");
+```
+
 ### Functions
 
 ```walrus
 fn factorial : n {
-    if n <= 1 {
-        return 1;
-    }
-    return n * factorial(n - 1);
+        if n <= 1 {
+                return 1;
+        }
+        return n * factorial(n - 1);
 }
 
 let result = factorial(5);  // 120
@@ -128,7 +151,7 @@ let result = factorial(5);  // 120
 
 ```walrus
 let square = : x {
-    return x * x;
+        return x * x;
 };
 
 let result = square(7);  // 49
@@ -138,15 +161,15 @@ let result = square(7);  // 49
 
 ```walrus
 struct Point {
-    fn new : x, y {
-        return {"x": x, "y": y};
-    }
+        fn new : x, y {
+                return {"x": x, "y": y};
+        }
 
-    fn distance : p1, p2 {
-        let dx = p1["x"] - p2["x"];
-        let dy = p1["y"] - p2["y"];
-        return (dx * dx + dy * dy) ** 0.5;
-    }
+        fn distance : p1, p2 {
+                let dx = p1["x"] - p2["x"];
+                let dy = p1["y"] - p2["y"];
+                return (dx * dx + dy * dy) ** 0.5;
+        }
 }
 
 let p1 = Point.new(3, 4);
@@ -159,28 +182,28 @@ let dist = Point.distance(p1, p2);  // 5.0
 ```walrus
 // Conditionals
 if score >= 90 {
-    println("A");
+        println("A");
 } else if score >= 80 {
-    println("B");
+        println("B");
 } else {
-    println("C");
+        println("C");
 }
 
 // While loop
 let i = 0;
 while i < 5 {
-    println(i);
-    i = i + 1;
+        println(i);
+        i = i + 1;
 }
 
 // For loop with range
 for x in 0..10 {
-    println(x);
+        println(x);
 }
 
 // For loop with list
 for item in [1, 2, 3, 4, 5] {
-    println(item);
+        println(item);
 }
 ```
 
@@ -188,21 +211,21 @@ for item in [1, 2, 3, 4, 5] {
 
 ```walrus
 for n in 1..101 {
-    let result = "";
+        let result = "";
 
-    if n % 3 == 0 {
-        result += "Fizz";
-    }
+        if n % 3 == 0 {
+                result += "Fizz";
+        }
 
-    if n % 5 == 0 {
-        result += "Buzz";
-    }
+        if n % 5 == 0 {
+                result += "Buzz";
+        }
 
-    if result == "" {
-        result = n;
-    }
+        if result == "" {
+                result = n;
+        }
 
-    println(result);
+        println(result);
 }
 ```
 
@@ -210,26 +233,26 @@ for n in 1..101 {
 
 ```walrus
 fn quicksort : arr {
-    if len(arr) <= 1 {
-        return arr;
-    }
-
-    let pivot = arr[0];
-    let less = [];
-    let equal = [];
-    let greater = [];
-
-    for x in arr {
-        if x < pivot {
-            less = less + [x];
-        } else if x == pivot {
-            equal = equal + [x];
-        } else {
-            greater = greater + [x];
+        if len(arr) <= 1 {
+                return arr;
         }
-    }
 
-    return quicksort(less) + equal + quicksort(greater);
+        let pivot = arr[0];
+        let less = [];
+        let equal = [];
+        let greater = [];
+
+        for x in arr {
+                if x < pivot {
+                        less = less + [x];
+                } else if x == pivot {
+                        equal = equal + [x];
+                } else {
+                        greater = greater + [x];
+                }
+        }
+
+        return quicksort(less) + equal + quicksort(greater);
 }
 
 let sorted = quicksort([64, 34, 25, 12, 22, 11, 90, 88]);
