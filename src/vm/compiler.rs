@@ -14,6 +14,7 @@ pub struct BytecodeEmitter<'a> {
     source_ref: SourceRef<'a>,
     depth: usize,                 // 0 = global scope, >0 = local scope
     loop_stack: Vec<LoopContext>, // Track nested loops for break/continue
+    current_struct: Option<String>, // Name of struct currently being compiled (for method access)
 }
 
 struct LoopContext {
@@ -29,6 +30,7 @@ impl<'a> BytecodeEmitter<'a> {
             source_ref,
             depth: 0, // Start at global scope
             loop_stack: Vec::new(),
+            current_struct: None,
         }
     }
 
@@ -38,6 +40,7 @@ impl<'a> BytecodeEmitter<'a> {
             source_ref: self.source_ref,
             depth: 1,               // Functions start at local scope depth 1
             loop_stack: Vec::new(), // Functions get their own loop stack
+            current_struct: self.current_struct.clone(),
         }
     }
 
@@ -330,6 +333,10 @@ impl<'a> BytecodeEmitter<'a> {
 
                 emitter.emit(*body)?;
 
+                // Add implicit void return if the function doesn't end with an explicit return
+                emitter.emit_void(span);
+                emitter.emit_return(span);
+
                 // Create the function heap value
                 let func =
                     self.instructions
@@ -371,6 +378,10 @@ impl<'a> BytecodeEmitter<'a> {
                 }
 
                 emitter.emit(*body)?;
+
+                // Add implicit void return if the function doesn't end with an explicit return
+                emitter.emit_void(span);
+                emitter.emit_return(span);
 
                 // TODO: Should this include the arity?
                 let name = format!("[{:p}]", &emitter.instructions);
@@ -450,6 +461,46 @@ impl<'a> BytecodeEmitter<'a> {
                         _ => Opcode::LoadGlobal(index as u32),
                     };
                     self.instructions.push(Instruction::new(opcode, span));
+                } else if let Some(ref struct_name) = self.current_struct {
+                    // If we're inside a struct method and the identifier isn't found,
+                    // try to resolve it as a method of the current struct
+                    // This will load the struct and then get the method
+                    
+                    // Load the struct definition
+                    if let Some(struct_index) = self.instructions.resolve_global_index(struct_name) {
+                        let opcode = match struct_index {
+                            0 => Opcode::LoadGlobal0,
+                            1 => Opcode::LoadGlobal1,
+                            2 => Opcode::LoadGlobal2,
+                            3 => Opcode::LoadGlobal3,
+                            _ => Opcode::LoadGlobal(struct_index as u32),
+                        };
+                        self.instructions.push(Instruction::new(opcode, span));
+                        
+                        // Push the method name as a string
+                        let method_str = self
+                            .instructions
+                            .get_heap_mut()
+                            .push(HeapValue::String(&name));
+                        let index = self.instructions.push_constant(method_str);
+                        let opcode = match index {
+                            0 => Opcode::LoadConst0,
+                            1 => Opcode::LoadConst1,
+                            _ => Opcode::LoadConst(index),
+                        };
+                        self.instructions.push(Instruction::new(opcode, span));
+                        
+                        // Get the method from the struct
+                        self.instructions
+                            .push(Instruction::new(Opcode::GetMethod, span));
+                    } else {
+                        return Err(WalrusError::UndefinedVariable {
+                            name,
+                            span,
+                            src: self.source_ref.source().to_string(),
+                            filename: self.source_ref.filename().to_string(),
+                        });
+                    }
                 } else {
                     return Err(WalrusError::UndefinedVariable {
                         name,
@@ -591,6 +642,13 @@ impl<'a> BytecodeEmitter<'a> {
             NodeKind::StructDefinition(name, members) => {
                 let is_global = self.depth == 0;
 
+                // Pre-register the struct name in globals so methods can reference it
+                let struct_global_index = if is_global {
+                    Some(self.instructions.push_global(name.clone()))
+                } else {
+                    None
+                };
+
                 // Create a new struct definition
                 let mut struct_def = crate::structs::StructDefinition::new(name.clone());
 
@@ -599,8 +657,9 @@ impl<'a> BytecodeEmitter<'a> {
                     let member_kind = member.kind().to_string();
                     match member.into_kind() {
                         NodeKind::StructFunctionDefinition(method_name, args, body) => {
-                            // Create a child emitter for the method
+                            // Create a child emitter for the method with struct context
                             let mut emitter = self.new_child();
+                            emitter.current_struct = Some(name.clone());
                             let arg_len = args.len();
 
                             // Define method parameters as locals
@@ -609,6 +668,10 @@ impl<'a> BytecodeEmitter<'a> {
                             }
 
                             emitter.emit(*body)?;
+
+                            // Add implicit void return if the method doesn't end with an explicit return
+                            emitter.emit_void(span);
+                            emitter.emit_return(span);
 
                             // Create the method function
                             let func = crate::function::WalrusFunction::Vm(
@@ -646,7 +709,7 @@ impl<'a> BytecodeEmitter<'a> {
 
                 // Store the struct definition in the appropriate scope
                 if is_global {
-                    let struct_index = self.instructions.push_global(name);
+                    let struct_index = struct_global_index.unwrap();
                     self.instructions
                         .push(Instruction::new(Opcode::StoreGlobal(struct_index), span));
                 } else {
