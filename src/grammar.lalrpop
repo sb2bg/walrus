@@ -27,6 +27,7 @@ Statement: Node = {
     RawSp<For>,
     RawSp<While>,
     RawSp<Func>,
+    RawSp<Struct>,
     <RawSp<TestBlock>> ";",
     <RawSp<Expr>> ";",
     <RawSp<Assign>> ";",
@@ -58,11 +59,12 @@ Unary = {
     Pow,
 };
 
-Pow = BinOp<PowOp, Call>;
+Pow = BinOp<PowOp, Postfix>;
 
-Call = {
-    <e: Sp<Atom>> <args: Paren<Comma<RawSp<Expr>>>> => NodeKind::FunctionCall(e, args),
-    <e: Sp<Atom>> <args: Bracket<SpExpr>> => NodeKind::Index(e, args),
+Postfix: NodeKind = {
+    <e: Sp<Postfix>> <args: Paren<Comma<RawSp<Expr>>>> => NodeKind::FunctionCall(e, args),
+    <e: Sp<Postfix>> <args: Bracket<SpExpr>> => NodeKind::Index(e, args),
+    <e: Sp<Postfix>> "." <m: IdentStr> => NodeKind::MemberAccess(e, m),
     Atom,
 };
 
@@ -173,6 +175,22 @@ Func: NodeKind = {
     "fn" <n: IdentStr> ":" <a: Comma<IdentStr>> <b: SpBlock> => NodeKind::FunctionDefinition(n, a, b),
 };
 
+Struct: NodeKind = {
+    "struct" <n: IdentStr> <m: Brace<StructMembers>> => NodeKind::StructDefinition(n, m),
+};
+
+StructMembers: Vec<Node> = {
+    StructMember* => <>,
+};
+
+StructMember: Node = {
+    RawSp<StructFunc>,
+};
+
+StructFunc: NodeKind = {
+    "fn" <n: IdentStr> ":" <a: Comma<IdentStr>> <b: SpBlock> => NodeKind::StructFunctionDefinition(n, a, b),
+};
+
 Lambda: NodeKind = {
     ":" <a: Comma<IdentStr>> <b: SpBlock> => NodeKind::AnonFunctionDefinition(a, b),
 };
@@ -206,7 +224,7 @@ Assign: NodeKind = {
     <n: StrSp<IdentStr>> "**=" <e: SpExpr> => NodeKind::Reassign(n, e, Opcode::Power),
     <n: StrSp<IdentStr>> "or=" <e: SpExpr> => NodeKind::Reassign(n, e, Opcode::Or),
     <n: StrSp<IdentStr>> "and=" <e: SpExpr> => NodeKind::Reassign(n, e, Opcode::And),
-    <n: Sp<Atom>> "[" <i: SpExpr> "]" "=" <e: SpExpr> => NodeKind::IndexAssign(n, i, e), // fixme: add ops, make x[n][m] work
+    <n: Sp<Postfix>> "[" <i: SpExpr> "]" "=" <e: SpExpr> => NodeKind::IndexAssign(n, i, e),
 };
 
 Return: NodeKind = {
