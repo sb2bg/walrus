@@ -761,7 +761,7 @@ impl<'a> Interpreter<'a> {
     fn visit_range(
         &mut self,
         start: Option<Box<Node>>,
-        end: Option<Box<Node>>,
+        end: Box<Node>,
     ) -> InterpreterResult {
         let (start, start_span) = if let Some(start) = start {
             let start_span = *start.span();
@@ -770,12 +770,8 @@ impl<'a> Interpreter<'a> {
             (Value::Int(0), Span::default())
         };
 
-        let (end, end_span) = if let Some(end) = end {
-            let end_span = *end.span();
-            (self.interpret(*end)?, end_span)
-        } else {
-            (Value::Int(-1), Span::default())
-        };
+        let end_span = *end.span();
+        let end = self.interpret(*end)?;
 
         match (start, end) {
             (Value::Int(start), Value::Int(end)) => {

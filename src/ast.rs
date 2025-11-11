@@ -47,7 +47,7 @@ pub enum NodeKind {
     Throw(Box<Node>),
     Try(Box<Node>, String, Box<Node>),
     Free(Box<Node>),
-    Range(Option<Box<Node>>, Option<Box<Node>>),
+    Range(Option<Box<Node>>, Box<Node>),
     Defer(Box<Node>),
     MemberAccess(Box<Node>, String),
     Break,

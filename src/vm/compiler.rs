@@ -139,11 +139,8 @@ impl<'a> BytecodeEmitter<'a> {
                     .push(Instruction::new(Opcode::Dict(cap as u32), span));
             }
             NodeKind::Range(left, right) => {
-                if let Some(right) = right {
-                    self.emit(*right)?;
-                } else {
-                    self.instructions.push(Instruction::new(Opcode::Void, span));
-                }
+                // Right is always present
+                self.emit(*right)?;
 
                 if let Some(left) = left {
                     self.emit(*left)?;
