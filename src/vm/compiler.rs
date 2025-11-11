@@ -661,6 +661,27 @@ impl<'a> BytecodeEmitter<'a> {
                     ),
                 });
             }
+            NodeKind::MemberAccess(object, member) => {
+                // Emit the object (should be a struct definition or instance)
+                self.emit(*object)?;
+
+                // Push the member name as a string constant
+                let member_str = self
+                    .instructions
+                    .get_heap_mut()
+                    .push(HeapValue::String(&member));
+                let index = self.instructions.push_constant(member_str);
+                let opcode = match index {
+                    0 => Opcode::LoadConst0,
+                    1 => Opcode::LoadConst1,
+                    _ => Opcode::LoadConst(index),
+                };
+                self.instructions.push(Instruction::new(opcode, span));
+
+                // Emit GetMethod opcode to retrieve the method from the struct
+                self.instructions
+                    .push(Instruction::new(Opcode::GetMethod, span));
+            }
             _ => unimplemented!("{}", kind),
         }
 
