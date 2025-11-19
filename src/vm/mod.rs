@@ -304,10 +304,30 @@ impl<'a> VM<'a> {
 
                             match func {
                                 WalrusFunction::Rust(func) => {
+                                    if args.len() != func.args {
+                                        return Err(WalrusError::InvalidArgCount {
+                                            name: func.name.clone(),
+                                            expected: func.args,
+                                            got: args.len(),
+                                            span,
+                                            src: self.source_ref.source().into(),
+                                            filename: self.source_ref.filename().into(),
+                                        });
+                                    }
                                     let result = func.call(args, self.source_ref, span)?;
                                     self.push(result);
                                 }
                                 WalrusFunction::Vm(func) => {
+                                    if args.len() != func.arity {
+                                        return Err(WalrusError::InvalidArgCount {
+                                            name: func.name.clone(),
+                                            expected: func.arity,
+                                            got: args.len(),
+                                            span,
+                                            src: self.source_ref.source().into(),
+                                            filename: self.source_ref.filename().into(),
+                                        });
+                                    }
                                     // All VMs share the global ARENA heap now
                                     let mut child = self.create_child(
                                         InstructionSet {
@@ -467,6 +487,13 @@ impl<'a> VM<'a> {
 
                     match (a, b) {
                         (Value::Int(a), Value::Int(b)) => {
+                            if b == 0 {
+                                return Err(WalrusError::DivisionByZero {
+                                    span,
+                                    src: self.source_ref.source().to_string(),
+                                    filename: self.source_ref.filename().to_string(),
+                                });
+                            }
                             self.push(Value::Int(a / b));
                         }
                         (Value::Float(FloatOrd(a)), Value::Float(FloatOrd(b))) => {
@@ -513,6 +540,13 @@ impl<'a> VM<'a> {
 
                     match (a, b) {
                         (Value::Int(a), Value::Int(b)) => {
+                            if b == 0 {
+                                return Err(WalrusError::DivisionByZero {
+                                    span,
+                                    src: self.source_ref.source().to_string(),
+                                    filename: self.source_ref.filename().to_string(),
+                                });
+                            }
                             self.push(Value::Int(a % b));
                         }
                         (Value::Float(FloatOrd(a)), Value::Float(FloatOrd(b))) => {
