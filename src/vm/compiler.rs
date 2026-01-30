@@ -9,6 +9,7 @@ use crate::span::Span;
 use crate::value::Value;
 use crate::vm::instruction_set::InstructionSet;
 use crate::vm::opcode::{Instruction, Opcode};
+use crate::vm::optimize;
 
 // Builtin function metadata
 struct BuiltinInfo {
@@ -104,6 +105,12 @@ impl<'a> BytecodeEmitter<'a> {
 
         match node.into_kind() {
             NodeKind::Program(nodes) => {
+                // Two-pass compilation for forward declarations:
+                // Pass 1: Pre-register all top-level function and struct names
+                for node in &nodes {
+                    self.pre_register_declarations(node);
+                }
+                // Pass 2: Compile everything normally
                 for node in nodes {
                     self.emit(node)?;
                 }
@@ -218,6 +225,12 @@ impl<'a> BytecodeEmitter<'a> {
                 self.instructions.push(Instruction::new(Opcode::Void, span));
             }
             NodeKind::BinOp(left, op, right) => {
+                // Try constant folding first
+                if let Some(folded) = optimize::try_fold_binop(&left, op, &right) {
+                    self.emit_constant(folded, span);
+                    return Ok(());
+                }
+
                 // Short-circuit evaluation for And/Or
                 match op {
                     Opcode::And => {
@@ -280,6 +293,12 @@ impl<'a> BytecodeEmitter<'a> {
                 }
             }
             NodeKind::UnaryOp(op, node) => {
+                // Try constant folding first
+                if let Some(folded) = optimize::try_fold_unary(op, &node) {
+                    self.emit_constant(folded, span);
+                    return Ok(());
+                }
+
                 self.emit(*node)?;
 
                 self.instructions.push(Instruction::new(op, span));
@@ -410,9 +429,16 @@ impl<'a> BytecodeEmitter<'a> {
             NodeKind::FunctionDefinition(name, args, body) => {
                 let is_global = self.depth == 0;
 
-                // Pre-register the function name
+                // Get the function index - use pre-registered index if it exists (forward declaration),
+                // otherwise register it now
                 let func_index = if is_global {
-                    self.instructions.push_global(name.clone())
+                    if let Some(index) = self.instructions.resolve_global_index(&name) {
+                        // Already pre-registered in Pass 1
+                        index as u32
+                    } else {
+                        // Not pre-registered (shouldn't happen for top-level, but handle it)
+                        self.instructions.push_global(name.clone())
+                    }
                 } else {
                     self.instructions.push_local(name.clone())
                 };
@@ -676,13 +702,44 @@ impl<'a> BytecodeEmitter<'a> {
                 }
             }
             NodeKind::Statements(nodes) => {
-                self.inc_depth();
+                // Two-pass compilation for forward declarations at global scope:
+                if self.depth == 0 {
+                    // Pass 1: Pre-register all top-level function and struct names
+                    for node in &nodes {
+                        self.pre_register_declarations(node);
+                    }
 
-                for node in nodes {
-                    self.emit(node)?;
+                    // Pass 2a: Compile function and struct definitions first (hoisting)
+                    for node in &nodes {
+                        match node.kind() {
+                            NodeKind::FunctionDefinition(_, _, _)
+                            | NodeKind::StructDefinition(_, _) => {
+                                self.emit(node.clone())?;
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    // Pass 2b: Compile everything else
+                    for node in nodes {
+                        match node.kind() {
+                            NodeKind::FunctionDefinition(_, _, _)
+                            | NodeKind::StructDefinition(_, _) => {
+                                // Already compiled above
+                            }
+                            _ => {
+                                self.emit(node)?;
+                            }
+                        }
+                    }
+                } else {
+                    // Non-global scope: just compile in order
+                    self.inc_depth();
+                    for node in nodes {
+                        self.emit(node)?;
+                    }
+                    self.dec_depth(span);
                 }
-
-                self.dec_depth(span);
             }
             NodeKind::UnscopedStatements(nodes) => {
                 for node in nodes {
@@ -762,9 +819,18 @@ impl<'a> BytecodeEmitter<'a> {
             NodeKind::StructDefinition(name, members) => {
                 let is_global = self.depth == 0;
 
-                // Pre-register the struct name in globals so methods can reference it
+                // Get the struct index - use pre-registered index if it exists (forward declaration),
+                // otherwise register it now
                 let struct_global_index = if is_global {
-                    Some(self.instructions.push_global(name.clone()))
+                    Some(
+                        if let Some(index) = self.instructions.resolve_global_index(&name) {
+                            // Already pre-registered in Pass 1
+                            index as u32
+                        } else {
+                            // Not pre-registered (shouldn't happen for top-level, but handle it)
+                            self.instructions.push_global(name.clone())
+                        },
+                    )
                 } else {
                     None
                 };
@@ -882,6 +948,28 @@ impl<'a> BytecodeEmitter<'a> {
         Ok(())
     }
 
+    /// Pre-register top-level declarations (functions, structs) for forward references.
+    /// This is called in Pass 1 before the main compilation Pass 2.
+    fn pre_register_declarations(&mut self, node: &Node) {
+        match node.kind() {
+            NodeKind::FunctionDefinition(name, _, _) => {
+                // Only pre-register at global scope
+                if self.depth == 0 {
+                    self.instructions.push_global(name.clone());
+                }
+            }
+            NodeKind::StructDefinition(name, _) => {
+                // Structs are also global declarations
+                if self.depth == 0 {
+                    self.instructions.push_global(name.clone());
+                }
+            }
+            _ => {
+                // Other node types don't need pre-registration
+            }
+        }
+    }
+
     fn inc_depth(&mut self) {
         self.instructions.inc_depth();
     }
@@ -990,5 +1078,27 @@ impl<'a> BytecodeEmitter<'a> {
     pub fn emit_return(&mut self, span: Span) {
         self.instructions
             .push(Instruction::new(Opcode::Return, span));
+    }
+
+    /// Emit a constant value (used by constant folding).
+    fn emit_constant(&mut self, value: Value, span: Span) {
+        match value {
+            Value::Bool(true) => {
+                self.instructions.push(Instruction::new(Opcode::True, span));
+            }
+            Value::Bool(false) => {
+                self.instructions
+                    .push(Instruction::new(Opcode::False, span));
+            }
+            _ => {
+                let index = self.instructions.push_constant(value);
+                let opcode = match index {
+                    0 => Opcode::LoadConst0,
+                    1 => Opcode::LoadConst1,
+                    _ => Opcode::LoadConst(index),
+                };
+                self.instructions.push(Instruction::new(opcode, span));
+            }
+        }
     }
 }

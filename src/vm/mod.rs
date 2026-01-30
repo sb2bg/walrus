@@ -24,6 +24,7 @@ use crate::vm::opcode::Opcode;
 pub mod compiler;
 pub mod instruction_set;
 pub mod opcode;
+pub mod optimize;
 mod symbol_table;
 
 /// Represents a single call frame on the call stack.
