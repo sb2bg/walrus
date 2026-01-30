@@ -147,7 +147,63 @@ impl<'a> VM<'a> {
         self.get_heap().stringify(value)
     }
 
+    /// Format the current call stack as a human-readable stack trace
+    /// Truncates the middle if there are too many frames (like Python does)
+    fn format_stack_trace(&self) -> String {
+        if self.call_stack.len() <= 1 {
+            return String::new();
+        }
+        
+        const MAX_FRAMES_TOP: usize = 5;    // Show first N frames (oldest)
+        const MAX_FRAMES_BOTTOM: usize = 5; // Show last N frames (most recent)
+        
+        let mut trace = String::from("\nStack trace (most recent call last):\n");
+        let len = self.call_stack.len();
+        
+        if len <= MAX_FRAMES_TOP + MAX_FRAMES_BOTTOM {
+            // Show all frames
+            for (i, frame) in self.call_stack.iter().enumerate() {
+                trace.push_str(&format!("  {}: {}\n", i, frame.function_name));
+            }
+        } else {
+            // Show first N frames
+            for (i, frame) in self.call_stack.iter().take(MAX_FRAMES_TOP).enumerate() {
+                trace.push_str(&format!("  {}: {}\n", i, frame.function_name));
+            }
+            
+            // Show truncation message
+            let hidden = len - MAX_FRAMES_TOP - MAX_FRAMES_BOTTOM;
+            trace.push_str(&format!("  ... {} more frames ...\n", hidden));
+            
+            // Show last N frames
+            for (i, frame) in self.call_stack.iter().skip(len - MAX_FRAMES_BOTTOM).enumerate() {
+                let actual_index = len - MAX_FRAMES_BOTTOM + i;
+                trace.push_str(&format!("  {}: {}\n", actual_index, frame.function_name));
+            }
+        }
+        trace
+    }
+
+    /// Run the VM and add stack trace information to any errors
     pub fn run(&mut self) -> WalrusResult<Value> {
+        match self.run_inner() {
+            Ok(value) => Ok(value),
+            Err(err) => {
+                // Add stack trace to the error message
+                let stack_trace = self.format_stack_trace();
+                if stack_trace.is_empty() {
+                    Err(err)
+                } else {
+                    // Wrap the error with stack trace info
+                    Err(WalrusError::GenericError {
+                        message: format!("{}{}", err, stack_trace),
+                    })
+                }
+            }
+        }
+    }
+
+    fn run_inner(&mut self) -> WalrusResult<Value> {
         loop {
             // Get current frame's instruction set
             let instructions = Rc::clone(&self.current_frame().instructions);
