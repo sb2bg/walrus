@@ -3,6 +3,7 @@
 
 import time
 
+
 def nested_loop_sum(n):
     total = 0
     for i in range(n):
@@ -10,6 +11,7 @@ def nested_loop_sum(n):
             for k in range(n):
                 total += i + j + k
     return total
+
 
 start = time.time()
 result = nested_loop_sum(100)

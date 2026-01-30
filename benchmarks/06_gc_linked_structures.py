@@ -3,10 +3,12 @@
 
 import time
 
+
 def create_chain(depth):
     if depth <= 0:
         return {"value": 0, "next": None}
     return {"value": depth, "next": create_chain(depth - 1)}
+
 
 def sum_chain(node):
     total = 0
@@ -14,6 +16,7 @@ def sum_chain(node):
         total += node["value"]
         node = node["next"]
     return total
+
 
 start = time.time()
 total = 0

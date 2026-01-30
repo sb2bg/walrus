@@ -3,6 +3,7 @@
 
 import time
 
+
 def while_count(n):
     i = 0
     total = 0
@@ -10,6 +11,7 @@ def while_count(n):
         total += i
         i += 1
     return total
+
 
 start = time.time()
 result = while_count(1000000)

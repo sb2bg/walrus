@@ -3,11 +3,13 @@
 
 import time
 
+
 def string_benchmark(n):
     result = ""
     for i in range(n):
         result = result + "a"
     return len(result)
+
 
 start = time.time()
 length = string_benchmark(10000)

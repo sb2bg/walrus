@@ -3,21 +3,23 @@
 
 import time
 
+
 def dict_benchmark(n):
     d = {}
-    
+
     # Insert n items
     for i in range(n):
         key = f"key_{i}"
         d[key] = i * 2
-    
+
     # Look up all items
     total = 0
     for i in range(n):
         key = f"key_{i}"
         total += d[key]
-    
+
     return total
+
 
 start = time.time()
 result = dict_benchmark(10000)

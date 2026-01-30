@@ -3,26 +3,27 @@
 
 import time
 import sys
+
 sys.setrecursionlimit(50000)
+
 
 def make_tree(depth):
     if depth <= 0:
         return None
-    return {
-        "value": depth,
-        "left": make_tree(depth - 1),
-        "right": make_tree(depth - 1)
-    }
+    return {"value": depth, "left": make_tree(depth - 1), "right": make_tree(depth - 1)}
+
 
 def count_nodes(tree):
     if tree is None:
         return 0
     return 1 + count_nodes(tree["left"]) + count_nodes(tree["right"])
 
+
 def sum_tree(tree):
     if tree is None:
         return 0
     return tree["value"] + sum_tree(tree["left"]) + sum_tree(tree["right"])
+
 
 depth = 15
 start = time.time()

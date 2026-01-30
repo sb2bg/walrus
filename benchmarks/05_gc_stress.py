@@ -3,6 +3,7 @@
 
 import time
 
+
 def create_and_discard(iterations):
     for i in range(iterations):
         # Create lots of temporary lists that get discarded
@@ -12,6 +13,7 @@ def create_and_discard(iterations):
         temp4 = {"a": 1, "b": 2, "c": 3}
         temp5 = [temp1, temp2, temp3]
         # All these become garbage at end of iteration
+
 
 start = time.time()
 create_and_discard(50000)

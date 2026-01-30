@@ -3,6 +3,7 @@
 
 import time
 
+
 def fib_iter(n):
     if n <= 1:
         return n
@@ -10,6 +11,7 @@ def fib_iter(n):
     for i in range(2, n + 1):
         a, b = b, a + b
     return b
+
 
 start = time.time()
 total = 0

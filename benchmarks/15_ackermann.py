@@ -3,7 +3,9 @@
 
 import time
 import sys
+
 sys.setrecursionlimit(10000)
+
 
 def ackermann(m, n):
     if m == 0:
@@ -11,6 +13,7 @@ def ackermann(m, n):
     if n == 0:
         return ackermann(m - 1, 1)
     return ackermann(m - 1, ackermann(m, n - 1))
+
 
 start = time.time()
 result = ackermann(3, 7)

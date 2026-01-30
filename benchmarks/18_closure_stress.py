@@ -3,9 +3,11 @@
 
 import time
 
+
 def make_adder(x):
     # Since the Walrus version doesn't use closures, we keep it simple
     return x
+
 
 def closure_benchmark(n):
     total = 0
@@ -13,6 +15,7 @@ def closure_benchmark(n):
         val = make_adder(i)
         total += val + i * 2
     return total
+
 
 start = time.time()
 result = closure_benchmark(50000)
