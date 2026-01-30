@@ -54,7 +54,11 @@ pub struct VmFunction {
 
 impl VmFunction {
     pub fn new(name: String, arity: usize, code: InstructionSet) -> Self {
-        Self { name, arity, code: Rc::new(code) }
+        Self {
+            name,
+            arity,
+            code: Rc::new(code),
+        }
     }
 }
 

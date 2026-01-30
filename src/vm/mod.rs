@@ -27,7 +27,7 @@ pub mod opcode;
 mod symbol_table;
 
 /// Represents a single call frame on the call stack.
-/// 
+///
 /// Each function invocation creates a new CallFrame which tracks:
 /// - Where to return to after the function completes
 /// - Where this function's local variables start in the shared locals vector
@@ -78,10 +78,10 @@ struct CallFrame {
 /// only keys that index into the arena.
 #[derive(Debug)]
 pub struct VM<'a> {
-    stack: Vec<Value>,              // Operand stack for expression evaluation
-    locals: Vec<Value>,             // Shared across all call frames
-    call_stack: Vec<CallFrame>,     // Stack of call frames
-    ip: usize,                      // Current instruction pointer
+    stack: Vec<Value>,          // Operand stack for expression evaluation
+    locals: Vec<Value>,         // Shared across all call frames
+    call_stack: Vec<CallFrame>, // Stack of call frames
+    ip: usize,                  // Current instruction pointer
     globals: Rc<RefCell<Vec<Value>>>,
     source_ref: SourceRef<'a>,
     paused: bool,
@@ -113,7 +113,9 @@ impl<'a> VM<'a> {
     /// Get the current call frame (the one at the top of the call stack)
     #[inline]
     fn current_frame(&self) -> &CallFrame {
-        self.call_stack.last().expect("Call stack should never be empty")
+        self.call_stack
+            .last()
+            .expect("Call stack should never be empty")
     }
 
     /// Get the current frame pointer (start of current frame's locals)
@@ -149,7 +151,7 @@ impl<'a> VM<'a> {
         loop {
             // Get current frame's instruction set
             let instructions = Rc::clone(&self.current_frame().instructions);
-            
+
             // Check if we've reached the end of the current frame's instructions
             if self.ip >= instructions.instructions.len() {
                 // If we're in the main frame, we're done
@@ -429,18 +431,18 @@ impl<'a> VM<'a> {
                                             filename: self.source_ref.filename().into(),
                                         });
                                     }
-                                    
+
                                     // Create a new call frame instead of a child VM
                                     let new_frame = CallFrame {
-                                        return_ip: self.ip,  // Where to return after this function
-                                        frame_pointer: self.locals.len(),  // New frame starts at current locals end
-                                        instructions: Rc::clone(&func.code),  // Share the instruction set via Rc
+                                        return_ip: self.ip,                  // Where to return after this function
+                                        frame_pointer: self.locals.len(), // New frame starts at current locals end
+                                        instructions: Rc::clone(&func.code), // Share the instruction set via Rc
                                         function_name: format!("fn<{}>", func.name),
                                     };
 
                                     // Push the new frame
                                     self.call_stack.push(new_frame);
-                                    
+
                                     // Push arguments as locals for the new frame
                                     for arg in args {
                                         self.locals.push(arg);
@@ -1111,21 +1113,24 @@ impl<'a> VM<'a> {
                 }
                 Opcode::Return => {
                     let return_value = self.pop(opcode, span)?;
-                    
+
                     // Pop the current call frame
-                    let frame = self.call_stack.pop().expect("Call stack should never be empty on return");
-                    
+                    let frame = self
+                        .call_stack
+                        .pop()
+                        .expect("Call stack should never be empty on return");
+
                     // If this was the last frame (main), return the value
                     if self.call_stack.is_empty() {
                         return Ok(return_value);
                     }
-                    
+
                     // Truncate locals back to the frame pointer (cleanup this frame's locals)
                     self.locals.truncate(frame.frame_pointer);
-                    
+
                     // Restore the instruction pointer to where we should continue
                     self.ip = frame.return_ip;
-                    
+
                     // Push return value onto operand stack for the caller
                     self.push(return_value);
                 }
@@ -1185,8 +1190,7 @@ impl<'a> VM<'a> {
                     if let (Value::String(method_name_sym), Value::StructDef(struct_def_key)) =
                         (method_name_value, struct_def_value)
                     {
-                        let method_name =
-                            self.get_heap().get_string(method_name_sym)?.to_string();
+                        let method_name = self.get_heap().get_string(method_name_sym)?.to_string();
                         let method_clone = {
                             let struct_def = self.get_heap().get_struct_def(struct_def_key)?;
                             if let Some(method) = struct_def.get_method(&method_name) {
@@ -1206,9 +1210,8 @@ impl<'a> VM<'a> {
                         };
 
                         // Push the method as a function value
-                        let func_value = self
-                            .get_heap_mut()
-                            .push(HeapValue::Function(method_clone));
+                        let func_value =
+                            self.get_heap_mut().push(HeapValue::Function(method_clone));
                         self.push(func_value);
                     } else {
                         return Err(WalrusError::Exception {
