@@ -1542,39 +1542,33 @@ impl<'a> VM<'a> {
 
                     // Dispatch based on object type
                     let result = match object {
-                        Value::List(key) => {
-                            methods::dispatch_list_method(
-                                self.get_heap_mut(),
-                                key,
-                                &method_name,
-                                args,
-                                span,
-                                &src,
-                                &filename,
-                            )?
-                        }
-                        Value::String(key) => {
-                            methods::dispatch_string_method(
-                                self.get_heap_mut(),
-                                key,
-                                &method_name,
-                                args,
-                                span,
-                                &src,
-                                &filename,
-                            )?
-                        }
-                        Value::Dict(key) => {
-                            methods::dispatch_dict_method(
-                                self.get_heap_mut(),
-                                key,
-                                &method_name,
-                                args,
-                                span,
-                                &src,
-                                &filename,
-                            )?
-                        }
+                        Value::List(key) => methods::dispatch_list_method(
+                            self.get_heap_mut(),
+                            key,
+                            &method_name,
+                            args,
+                            span,
+                            &src,
+                            &filename,
+                        )?,
+                        Value::String(key) => methods::dispatch_string_method(
+                            self.get_heap_mut(),
+                            key,
+                            &method_name,
+                            args,
+                            span,
+                            &src,
+                            &filename,
+                        )?,
+                        Value::Dict(key) => methods::dispatch_dict_method(
+                            self.get_heap_mut(),
+                            key,
+                            &method_name,
+                            args,
+                            span,
+                            &src,
+                            &filename,
+                        )?,
                         Value::StructDef(key) => {
                             // For struct definitions, look up the method and call it
                             let method_clone = {
@@ -1598,13 +1592,13 @@ impl<'a> VM<'a> {
                             // Push the method as a function value and call it
                             let func_value =
                                 self.get_heap_mut().push(HeapValue::Function(method_clone));
-                            
+
                             // Push args back, then function, to set up for Call
                             for arg in args.iter() {
                                 self.push(*arg);
                             }
                             self.push(func_value);
-                            
+
                             // Re-execute as a regular Call
                             let func = self.pop(opcode, span)?;
                             if let Value::Function(fkey) = func {
