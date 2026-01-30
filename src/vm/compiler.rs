@@ -1,5 +1,6 @@
 use crate::WalrusResult;
 use crate::arenas::HeapValue;
+use crate::ast::FStringPart;
 use crate::ast::{Node, NodeKind};
 use crate::error::WalrusError;
 use crate::function::{VmFunction, WalrusFunction};
@@ -118,8 +119,6 @@ impl<'a> BytecodeEmitter<'a> {
             }
             NodeKind::FString(parts) => {
                 // Compile f-strings by emitting each part and concatenating them
-                use crate::ast::FStringPart;
-
                 let mut part_count = 0;
 
                 for part in parts {
@@ -350,7 +349,10 @@ impl<'a> BytecodeEmitter<'a> {
 
                 self.emit(*body)?;
 
-                self.dec_depth_no_pop();
+                // Pop locals declared in the loop body (but not the loop variable itself)
+                // This is crucial: without this, variables declared inside the loop body
+                // would reuse their slots on subsequent iterations, seeing stale values
+                self.dec_depth(span);
 
                 self.instructions
                     .push(Instruction::new(Opcode::Jump(jump as u32), span));
@@ -860,10 +862,6 @@ impl<'a> BytecodeEmitter<'a> {
             self.instructions
                 .push(Instruction::new(Opcode::PopLocal(popped as u32), span));
         }
-    }
-
-    fn dec_depth_no_pop(&mut self) {
-        self.instructions.dec_depth();
     }
 
     fn define_variable(&mut self, name: String, span: Span) {
