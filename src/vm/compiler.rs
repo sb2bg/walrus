@@ -71,9 +71,10 @@ pub struct BytecodeEmitter<'a> {
 }
 
 struct LoopContext {
-    start: usize,       // Address of loop start (for continue)
-    breaks: Vec<usize>, // Addresses of break jumps to patch
-    is_for_loop: bool,  // True if this is a for loop (needs to pop iterator on break)
+    start: usize,          // Address of loop start (for continue)
+    breaks: Vec<usize>,    // Addresses of break jumps to patch
+    is_for_loop: bool,     // True if this is a for loop (needs to pop iterator on break)
+    locals_at_start: usize, // Number of locals at loop body start (for continue cleanup)
 }
 
 impl<'a> BytecodeEmitter<'a> {
@@ -316,11 +317,13 @@ impl<'a> BytecodeEmitter<'a> {
             NodeKind::While(cond, body) => {
                 let start = self.instructions.len();
 
-                // Push loop context
+                // Push loop context - for while loops, body handles its own scoping,
+                // so locals_at_start is the current count
                 self.loop_stack.push(LoopContext {
                     start,
                     breaks: Vec::new(),
                     is_for_loop: false,
+                    locals_at_start: self.instructions.local_len(),
                 });
 
                 self.emit(*cond)?;
@@ -360,13 +363,6 @@ impl<'a> BytecodeEmitter<'a> {
                 self.instructions
                     .push(Instruction::new(Opcode::IterNext(0), span));
 
-                // Push loop context (continue jumps back to the IterNext instruction)
-                self.loop_stack.push(LoopContext {
-                    start: jump,
-                    breaks: Vec::new(),
-                    is_for_loop: true,
-                });
-
                 self.inc_depth();
 
                 let index = self.instructions.push_local(name);
@@ -374,7 +370,20 @@ impl<'a> BytecodeEmitter<'a> {
                 self.instructions
                     .push(Instruction::new(Opcode::StoreAt(index), span));
 
+                // Push loop context AFTER defining loop variable
+                // locals_at_start is the count including the loop variable,
+                // so continue will pop body-declared vars but keep the loop var
+                self.loop_stack.push(LoopContext {
+                    start: jump,
+                    breaks: Vec::new(),
+                    is_for_loop: true,
+                    locals_at_start: self.instructions.local_len(),
+                });
+
                 self.emit(*body)?;
+
+                // Pop loop context before dec_depth so continue can reference it
+                let loop_ctx = self.loop_stack.pop();
 
                 // Pop locals declared in the loop body (but not the loop variable itself)
                 // This is crucial: without this, variables declared inside the loop body
@@ -389,8 +398,8 @@ impl<'a> BytecodeEmitter<'a> {
                     Instruction::new(Opcode::IterNext(self.instructions.len() as u32), span),
                 );
 
-                // Pop loop context and patch break jumps
-                if let Some(loop_ctx) = self.loop_stack.pop() {
+                // Patch break jumps
+                if let Some(loop_ctx) = loop_ctx {
                     let end = self.instructions.len();
                     for break_addr in loop_ctx.breaks {
                         self.instructions
@@ -725,6 +734,13 @@ impl<'a> BytecodeEmitter<'a> {
             }
             NodeKind::Break => {
                 if let Some(loop_ctx) = self.loop_stack.last_mut() {
+                    // Pop any locals declared inside the loop body before breaking
+                    let current_locals = self.instructions.local_len();
+                    let to_pop = current_locals - loop_ctx.locals_at_start;
+                    if to_pop > 0 {
+                        self.instructions
+                            .push(Instruction::new(Opcode::PopLocal(to_pop as u32), span));
+                    }
                     // For for-loops, pop the iterator from the stack before breaking
                     if loop_ctx.is_for_loop {
                         self.instructions.push(Instruction::new(Opcode::Pop, span));
@@ -744,6 +760,14 @@ impl<'a> BytecodeEmitter<'a> {
             }
             NodeKind::Continue => {
                 if let Some(loop_ctx) = self.loop_stack.last() {
+                    // Pop any locals declared inside the loop body before jumping back
+                    // This ensures the locals vector is in the correct state for the next iteration
+                    let current_locals = self.instructions.local_len();
+                    let to_pop = current_locals - loop_ctx.locals_at_start;
+                    if to_pop > 0 {
+                        self.instructions
+                            .push(Instruction::new(Opcode::PopLocal(to_pop as u32), span));
+                    }
                     // Jump back to the loop start
                     self.instructions
                         .push(Instruction::new(Opcode::Jump(loop_ctx.start as u32), span));
