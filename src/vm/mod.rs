@@ -19,12 +19,31 @@ use crate::range::RangeValue;
 use crate::source_ref::SourceRef;
 use crate::span::Span;
 use crate::value::Value;
-use crate::vm::opcode::{Instruction, Opcode};
+use crate::vm::opcode::Opcode;
 
 pub mod compiler;
 pub mod instruction_set;
 pub mod opcode;
 mod symbol_table;
+
+/// Represents a single call frame on the call stack.
+/// 
+/// Each function invocation creates a new CallFrame which tracks:
+/// - Where to return to after the function completes
+/// - Where this function's local variables start in the shared locals vector
+/// - The function's bytecode (via Rc to avoid cloning)
+/// - The function name for debugging/stack traces
+#[derive(Debug)]
+struct CallFrame {
+    /// Instruction pointer to return to after this frame completes
+    return_ip: usize,
+    /// Index into the shared `locals` vector where this frame's variables start
+    frame_pointer: usize,
+    /// Reference to the function's InstructionSet (shared via Rc to avoid cloning)
+    instructions: Rc<InstructionSet>,
+    /// Function name for debugging and stack traces
+    function_name: String,
+}
 
 /// The Walrus Virtual Machine executes compiled bytecode.
 ///
@@ -35,22 +54,23 @@ mod symbol_table;
 /// from the stack and push results back.
 ///
 /// ## Local Variables
-/// Local variables are stored in a separate `locals` vector, indexed by compile-time
-/// assigned indices. This is more efficient than stack-relative access for frequently
-/// accessed locals.
+/// Local variables are stored in a shared `locals` vector, indexed by compile-time
+/// assigned indices plus the current frame pointer. Each call frame has a frame_pointer
+/// that indicates where its local variables begin in this shared vector.
+///
+/// ## Call Frames
+/// Function calls use a call frame stack instead of creating child VMs. Each frame
+/// tracks:
+/// - `return_ip`: where to resume execution after the function returns
+/// - `frame_pointer`: where this frame's locals start in the shared locals vector
+/// - `instructions`: the function's bytecode (shared via Rc, avoiding clones)
+/// - `function_name`: for debugging and stack traces
+///
+/// This is more memory-efficient than creating child VMs and supports deep recursion.
 ///
 /// ## Global Variables
-/// Globals are stored in a shared `Rc<RefCell<Vec<Value>>>` so all VMs (including
-/// child VMs for function calls) can access and modify them.
-///
-/// ## Function Calls
-/// Currently, each function call creates a child VM with:
-/// - Its own empty locals vector
-/// - Shared globals reference
-/// - Cloned instruction set from the function definition
-///
-/// This provides clean isolation but is less efficient than a call frame stack.
-/// A future optimization could use a single locals vector with frame pointers.
+/// Globals are stored in a shared `Rc<RefCell<Vec<Value>>>` so they persist across
+/// all call frames.
 ///
 /// ## Memory Model
 /// Heap-allocated values (strings, lists, dicts, functions) are stored in a global
@@ -58,55 +78,99 @@ mod symbol_table;
 /// only keys that index into the arena.
 #[derive(Debug)]
 pub struct VM<'a> {
-    title: String,
-    stack: Vec<Value>,
-    ip: usize,
-    is: InstructionSet,
-    source_ref: SourceRef<'a>,
-    locals: Vec<Value>,
+    stack: Vec<Value>,              // Operand stack for expression evaluation
+    locals: Vec<Value>,             // Shared across all call frames
+    call_stack: Vec<CallFrame>,     // Stack of call frames
+    ip: usize,                      // Current instruction pointer
     globals: Rc<RefCell<Vec<Value>>>,
+    source_ref: SourceRef<'a>,
     paused: bool,
     breakpoints: Vec<usize>,
 }
 
 impl<'a> VM<'a> {
     pub fn new(source_ref: SourceRef<'a>, is: InstructionSet) -> Self {
+        // Create the initial call frame for the main program
+        let main_frame = CallFrame {
+            return_ip: 0,
+            frame_pointer: 0,
+            instructions: Rc::new(is),
+            function_name: "<main>".to_string(),
+        };
+
         Self {
-            title: "<main>".to_string(),
             stack: Vec::new(),
             locals: Vec::new(),
-            globals: Rc::new(RefCell::new(Vec::new())),
+            call_stack: vec![main_frame],
             ip: 0,
-            is,
+            globals: Rc::new(RefCell::new(Vec::new())),
             source_ref,
             paused: false,
             breakpoints: Vec::new(),
         }
     }
 
-    fn create_child(&self, new_is: InstructionSet, title: String) -> Self {
-        Self {
-            title,
-            stack: Vec::new(),
-            locals: Vec::new(),                // Functions start with empty locals
-            globals: Rc::clone(&self.globals), // Share globals with parent via Rc
-            ip: 0,
-            is: new_is,
-            source_ref: self.source_ref,
-            paused: self.paused,
-            breakpoints: self.breakpoints.clone(),
-        }
+    /// Get the current call frame (the one at the top of the call stack)
+    #[inline]
+    fn current_frame(&self) -> &CallFrame {
+        self.call_stack.last().expect("Call stack should never be empty")
+    }
+
+    /// Get the current frame pointer (start of current frame's locals)
+    #[inline]
+    fn frame_pointer(&self) -> usize {
+        self.current_frame().frame_pointer
+    }
+
+    /// Get the current function name
+    #[inline]
+    fn function_name(&self) -> &str {
+        &self.current_frame().function_name
+    }
+
+    /// Helper to access heap - uses global ARENA
+    #[inline]
+    fn get_heap(&self) -> &crate::arenas::ValueHolder {
+        unsafe { &*std::ptr::addr_of!(crate::arenas::ARENA) }
+    }
+
+    /// Helper to access heap mutably - uses global ARENA
+    #[inline]
+    fn get_heap_mut(&mut self) -> &mut crate::arenas::ValueHolder {
+        unsafe { &mut *std::ptr::addr_of_mut!(crate::arenas::ARENA) }
+    }
+
+    /// Stringify a value using the global heap
+    fn stringify_value(&self, value: Value) -> WalrusResult<String> {
+        self.get_heap().stringify(value)
     }
 
     pub fn run(&mut self) -> WalrusResult<Value> {
-        while self.ip < self.is.instructions.len() {
-            self.is.disassemble_single(self.ip, &self.title);
+        loop {
+            // Get current frame's instruction set
+            let instructions = Rc::clone(&self.current_frame().instructions);
+            
+            // Check if we've reached the end of the current frame's instructions
+            if self.ip >= instructions.instructions.len() {
+                // If we're in the main frame, we're done
+                if self.call_stack.len() == 1 {
+                    return Err(WalrusError::UnknownError {
+                        message: "Instruction pointer out of bounds".to_string(),
+                    });
+                }
+                // Otherwise this shouldn't happen (Return should have been called)
+                return Err(WalrusError::UnknownError {
+                    message: "Function ended without return".to_string(),
+                });
+            }
+
+            instructions.disassemble_single(self.ip, self.function_name());
 
             if self.paused || self.breakpoints.contains(&self.ip) {
                 self.debug_prompt()?;
             }
 
-            let instruction = self.is.get(self.ip);
+            let instruction = instructions.get(self.ip);
             let opcode = instruction.opcode();
             let span = instruction.span();
 
@@ -114,28 +178,33 @@ impl<'a> VM<'a> {
 
             match opcode {
                 Opcode::LoadConst(index) => {
-                    self.push(self.is.get_constant(index));
+                    self.push(instructions.get_constant(index));
                 }
                 Opcode::LoadConst0 => {
-                    self.push(self.is.get_constant(0));
+                    self.push(instructions.get_constant(0));
                 }
                 Opcode::LoadConst1 => {
-                    self.push(self.is.get_constant(1));
+                    self.push(instructions.get_constant(1));
                 }
                 Opcode::Load(index) => {
-                    self.push(self.locals[index as usize]);
+                    let fp = self.frame_pointer();
+                    self.push(self.locals[fp + index as usize]);
                 }
                 Opcode::LoadLocal0 => {
-                    self.push(self.locals[0]);
+                    let fp = self.frame_pointer();
+                    self.push(self.locals[fp]);
                 }
                 Opcode::LoadLocal1 => {
-                    self.push(self.locals[1]);
+                    let fp = self.frame_pointer();
+                    self.push(self.locals[fp + 1]);
                 }
                 Opcode::LoadLocal2 => {
-                    self.push(self.locals[2]);
+                    let fp = self.frame_pointer();
+                    self.push(self.locals[fp + 2]);
                 }
                 Opcode::LoadLocal3 => {
-                    self.push(self.locals[3]);
+                    let fp = self.frame_pointer();
+                    self.push(self.locals[fp + 3]);
                 }
                 Opcode::LoadGlobal(index) => {
                     let value = {
@@ -178,12 +247,13 @@ impl<'a> VM<'a> {
                 }
                 Opcode::StoreAt(index) => {
                     let value = self.pop(opcode, span)?;
-                    let index = index as usize;
+                    let fp = self.frame_pointer();
+                    let abs_index = fp + index as usize;
 
-                    if index == self.locals.len() {
+                    if abs_index == self.locals.len() {
                         self.locals.push(value);
                     } else {
-                        self.locals[index] = value;
+                        self.locals[abs_index] = value;
                     }
                 }
                 Opcode::StoreGlobal(index) => {
@@ -199,7 +269,8 @@ impl<'a> VM<'a> {
                 }
                 Opcode::Reassign(index) => {
                     let value = self.pop(opcode, span)?;
-                    self.locals[index as usize] = value;
+                    let fp = self.frame_pointer();
+                    self.locals[fp + index as usize] = value;
                 }
                 Opcode::ReassignGlobal(index) => {
                     let value = self.pop(opcode, span)?;
@@ -223,7 +294,7 @@ impl<'a> VM<'a> {
                     // split_off gives us the last cap items in correct order
                     let list = self.stack.split_off(self.stack.len() - cap);
 
-                    let value = self.is.get_heap_mut().push(HeapValue::List(list));
+                    let value = self.get_heap_mut().push(HeapValue::List(list));
                     self.push(value);
                 }
                 Opcode::Dict(cap) => {
@@ -237,7 +308,7 @@ impl<'a> VM<'a> {
                         dict.insert(key, value);
                     }
 
-                    let value = self.is.get_heap_mut().push(HeapValue::Dict(dict));
+                    let value = self.get_heap_mut().push(HeapValue::Dict(dict));
                     self.push(value);
                 }
                 Opcode::Range => {
@@ -294,7 +365,7 @@ impl<'a> VM<'a> {
                 }
                 Opcode::GetIter => {
                     let value = self.pop(opcode, span)?;
-                    let iter = self.is.get_heap_mut().value_to_iter(value)?;
+                    let iter = self.get_heap_mut().value_to_iter(value)?;
                     self.push(iter);
                 }
                 Opcode::IterNext(offset) => {
@@ -302,10 +373,10 @@ impl<'a> VM<'a> {
 
                     match iter {
                         Value::Iter(key) => unsafe {
-                            let mut ptr = NonNull::from(self.is.get_heap_mut());
+                            let mut ptr = NonNull::from(self.get_heap_mut());
                             let iter = ptr.as_mut().get_mut_iter(key)?;
 
-                            if let Some(value) = iter.next(self.is.get_heap_mut()) {
+                            if let Some(value) = iter.next(self.get_heap_mut()) {
                                 // fixme: if another value gets pushed on the stack, this cause a non iterable error
                                 self.push(Value::Iter(key));
                                 self.push(value);
@@ -324,13 +395,13 @@ impl<'a> VM<'a> {
                     }
                 }
                 Opcode::Call(args) => {
-                    let args = args as usize;
+                    let arg_count = args as usize;
                     let func = self.pop(opcode, span)?;
-                    let args = self.pop_n(args, opcode, span)?;
+                    let args = self.pop_n(arg_count, opcode, span)?;
 
                     match func {
                         Value::Function(key) => {
-                            let func = self.is.get_heap().get_function(key)?;
+                            let func = self.get_heap().get_function(key)?;
 
                             match func {
                                 WalrusFunction::Rust(func) => {
@@ -358,25 +429,25 @@ impl<'a> VM<'a> {
                                             filename: self.source_ref.filename().into(),
                                         });
                                     }
-                                    // All VMs share the global ARENA heap now
-                                    let mut child = self.create_child(
-                                        InstructionSet {
-                                            instructions: func.code.instructions.clone(),
-                                            constants: func.code.constants.clone(),
-                                            locals: func.code.locals.clone(),
-                                            globals: func.code.globals.clone(),
-                                        },
-                                        format!("fn<{}>", func.name),
-                                    );
+                                    
+                                    // Create a new call frame instead of a child VM
+                                    let new_frame = CallFrame {
+                                        return_ip: self.ip,  // Where to return after this function
+                                        frame_pointer: self.locals.len(),  // New frame starts at current locals end
+                                        instructions: Rc::clone(&func.code),  // Share the instruction set via Rc
+                                        function_name: format!("fn<{}>", func.name),
+                                    };
 
-                                    // Store the arguments as local variables
-                                    // The function parameters are already defined as locals during compilation
+                                    // Push the new frame
+                                    self.call_stack.push(new_frame);
+                                    
+                                    // Push arguments as locals for the new frame
                                     for arg in args {
-                                        child.locals.push(arg);
+                                        self.locals.push(arg);
                                     }
 
-                                    let result = child.run()?;
-                                    self.push(result);
+                                    // Start execution at the beginning of the new function
+                                    self.ip = 0;
                                 }
                                 _ => {
                                     // In theory, this should never happen because the compiler
@@ -420,30 +491,30 @@ impl<'a> VM<'a> {
                             self.push(Value::Float(FloatOrd(a + b as f64)));
                         }
                         (Value::String(a), Value::String(b)) => {
-                            let a = self.is.get_heap().get_string(a)?;
-                            let b = self.is.get_heap().get_string(b)?;
+                            let a = self.get_heap().get_string(a)?;
+                            let b = self.get_heap().get_string(b)?;
 
                             let mut s = String::with_capacity(a.len() + b.len());
                             s.push_str(a);
                             s.push_str(b);
 
-                            let value = self.is.get_heap_mut().push(HeapValue::String(&s));
+                            let value = self.get_heap_mut().push(HeapValue::String(&s));
                             self.push(value);
                         }
                         (Value::List(a), Value::List(b)) => {
-                            let mut a = self.is.get_heap().get_list(a)?.to_vec();
-                            let b = self.is.get_heap().get_list(b)?;
+                            let mut a = self.get_heap().get_list(a)?.to_vec();
+                            let b = self.get_heap().get_list(b)?;
                             a.extend(b);
 
-                            let value = self.is.get_heap_mut().push(HeapValue::List(a));
+                            let value = self.get_heap_mut().push(HeapValue::List(a));
                             self.push(value);
                         }
                         (Value::Dict(a), Value::Dict(b)) => {
-                            let mut a = self.is.get_heap().get_dict(a)?.clone();
-                            let b = self.is.get_heap().get_dict(b)?;
+                            let mut a = self.get_heap().get_dict(a)?.clone();
+                            let b = self.get_heap().get_dict(b)?;
                             a.extend(b);
 
-                            let value = self.is.get_heap_mut().push(HeapValue::Dict(a));
+                            let value = self.get_heap_mut().push(HeapValue::Dict(a));
                             self.push(value);
                         }
                         _ => return Err(self.construct_err(opcode, a, Some(b), span)),
@@ -487,25 +558,25 @@ impl<'a> VM<'a> {
                             self.push(Value::Float(FloatOrd(a * b as f64)));
                         }
                         (Value::List(a), Value::Int(b)) | (Value::Int(b), Value::List(a)) => {
-                            let a = self.is.get_heap().get_list(a)?;
+                            let a = self.get_heap().get_list(a)?;
                             let mut list = Vec::with_capacity(a.len() * b as usize);
 
                             for _ in 0..b {
                                 list.extend(a);
                             }
 
-                            let value = self.is.get_heap_mut().push(HeapValue::List(list));
+                            let value = self.get_heap_mut().push(HeapValue::List(list));
                             self.push(value);
                         }
                         (Value::String(a), Value::Int(b)) | (Value::Int(b), Value::String(a)) => {
-                            let a = self.is.get_heap().get_string(a)?;
+                            let a = self.get_heap().get_string(a)?;
                             let mut s = String::with_capacity(a.len() * b as usize);
 
                             for _ in 0..b {
                                 s.push_str(a);
                             }
 
-                            let value = self.is.get_heap_mut().push(HeapValue::String(&s));
+                            let value = self.get_heap_mut().push(HeapValue::String(&s));
                             self.push(value);
                         }
                         _ => return Err(self.construct_err(opcode, a, Some(b), span)),
@@ -642,20 +713,20 @@ impl<'a> VM<'a> {
 
                     match (a, b) {
                         (Value::List(a), Value::List(b)) => {
-                            let a = self.is.get_heap().get_list(a)?;
-                            let b = self.is.get_heap().get_list(b)?;
+                            let a = self.get_heap().get_list(a)?;
+                            let b = self.get_heap().get_list(b)?;
 
                             self.push(Value::Bool(a == b));
                         }
                         (Value::Dict(a), Value::Dict(b)) => {
-                            let a = self.is.get_heap().get_dict(a)?;
-                            let b = self.is.get_heap().get_dict(b)?;
+                            let a = self.get_heap().get_dict(a)?;
+                            let b = self.get_heap().get_dict(b)?;
 
                             self.push(Value::Bool(a == b));
                         }
                         (Value::Function(a), Value::Function(b)) => {
-                            let a_func = self.is.get_heap().get_function(a)?;
-                            let b_func = self.is.get_heap().get_function(b)?;
+                            let a_func = self.get_heap().get_function(a)?;
+                            let b_func = self.get_heap().get_function(b)?;
 
                             self.push(Value::Bool(a_func == b_func));
                         }
@@ -674,20 +745,20 @@ impl<'a> VM<'a> {
 
                     match (a, b) {
                         (Value::List(a), Value::List(b)) => {
-                            let a = self.is.get_heap().get_list(a)?;
-                            let b = self.is.get_heap().get_list(b)?;
+                            let a = self.get_heap().get_list(a)?;
+                            let b = self.get_heap().get_list(b)?;
 
                             self.push(Value::Bool(a != b));
                         }
                         (Value::Dict(a), Value::Dict(b)) => {
-                            let a = self.is.get_heap().get_dict(a)?;
-                            let b = self.is.get_heap().get_dict(b)?;
+                            let a = self.get_heap().get_dict(a)?;
+                            let b = self.get_heap().get_dict(b)?;
 
                             self.push(Value::Bool(a != b));
                         }
                         (Value::Function(a), Value::Function(b)) => {
-                            let a_func = self.is.get_heap().get_function(a)?;
-                            let b_func = self.is.get_heap().get_function(b)?;
+                            let a_func = self.get_heap().get_function(a)?;
+                            let b_func = self.get_heap().get_function(b)?;
 
                             self.push(Value::Bool(a_func != b_func));
                         }
@@ -786,7 +857,7 @@ impl<'a> VM<'a> {
 
                     match (a, b) {
                         (Value::List(a), Value::Int(b)) => {
-                            let a = self.is.get_heap().get_list(a)?;
+                            let a = self.get_heap().get_list(a)?;
                             let mut b = b;
                             let original = b;
 
@@ -808,7 +879,7 @@ impl<'a> VM<'a> {
                             self.push(a[b as usize]);
                         }
                         (Value::String(a), Value::Int(b)) => {
-                            let a = self.is.get_heap().get_string(a)?;
+                            let a = self.get_heap().get_string(a)?;
                             let mut b = b;
                             let original = b;
 
@@ -828,12 +899,12 @@ impl<'a> VM<'a> {
 
                             let b = b as usize;
                             let res = a[b..b + 1].to_string();
-                            let value = self.is.get_heap_mut().push(HeapValue::String(&res));
+                            let value = self.get_heap_mut().push(HeapValue::String(&res));
 
                             self.push(value);
                         }
                         (Value::Dict(a), b) => {
-                            let a = self.is.get_heap().get_dict(a)?;
+                            let a = self.get_heap().get_dict(a)?;
 
                             if let Some(value) = a.get(&b) {
                                 self.push(*value);
@@ -853,7 +924,7 @@ impl<'a> VM<'a> {
                             }
                         }
                         (Value::String(a), Value::Range(range)) => {
-                            let a = self.is.get_heap().get_string(a)?;
+                            let a = self.get_heap().get_string(a)?;
                             let a_len = a.len();
 
                             let start = if range.start < 0 {
@@ -893,12 +964,12 @@ impl<'a> VM<'a> {
                             }
 
                             let res = a[start as usize..end as usize].to_string();
-                            let value = self.is.get_heap_mut().push(HeapValue::String(&res));
+                            let value = self.get_heap_mut().push(HeapValue::String(&res));
 
                             self.push(value);
                         }
                         (Value::List(a), Value::Range(range)) => {
-                            let a = self.is.get_heap().get_list(a)?;
+                            let a = self.get_heap().get_list(a)?;
                             let a_len = a.len();
 
                             let start = if range.start < 0 {
@@ -938,7 +1009,7 @@ impl<'a> VM<'a> {
                             }
 
                             let res = a[start as usize..end as usize].to_vec();
-                            let value = self.is.get_heap_mut().push(HeapValue::List(res));
+                            let value = self.get_heap_mut().push(HeapValue::List(res));
 
                             self.push(value);
                         }
@@ -954,7 +1025,7 @@ impl<'a> VM<'a> {
 
                     match (object, index) {
                         (Value::List(list_key), Value::Int(idx)) => {
-                            let list = self.is.get_heap_mut().get_mut_list(list_key)?;
+                            let list = self.get_heap_mut().get_mut_list(list_key)?;
                             let mut idx = idx;
                             let original = idx;
 
@@ -977,7 +1048,7 @@ impl<'a> VM<'a> {
                             self.push(Value::Void);
                         }
                         (Value::Dict(dict_key), key) => {
-                            let dict = self.is.get_heap_mut().get_mut_dict(dict_key)?;
+                            let dict = self.get_heap_mut().get_mut_dict(dict_key)?;
                             dict.insert(key, value);
                             self.push(Value::Void);
                         }
@@ -994,26 +1065,26 @@ impl<'a> VM<'a> {
                 }
                 Opcode::Print => {
                     let a = self.pop(opcode, span)?;
-                    print!("{}", self.is.stringify(a)?);
+                    print!("{}", self.stringify_value(a)?);
                 }
                 Opcode::Println => {
                     let a = self.pop(opcode, span)?;
-                    println!("{}", self.is.stringify(a)?);
+                    println!("{}", self.stringify_value(a)?);
                 }
                 Opcode::Len => {
                     let a = self.pop(opcode, span)?;
 
                     match a {
                         Value::String(key) => {
-                            let s = self.is.get_heap().get_string(key)?;
+                            let s = self.get_heap().get_string(key)?;
                             self.push(Value::Int(s.len() as i64));
                         }
                         Value::List(key) => {
-                            let list = self.is.get_heap().get_list(key)?;
+                            let list = self.get_heap().get_list(key)?;
                             self.push(Value::Int(list.len() as i64));
                         }
                         Value::Dict(key) => {
-                            let dict = self.is.get_heap().get_dict(key)?;
+                            let dict = self.get_heap().get_dict(key)?;
                             self.push(Value::Int(dict.len() as i64));
                         }
                         _ => {
@@ -1028,19 +1099,35 @@ impl<'a> VM<'a> {
                 }
                 Opcode::Str => {
                     let a = self.pop(opcode, span)?;
-                    let s = self.is.stringify(a)?;
-                    let value = self.is.get_heap_mut().push(HeapValue::String(&s));
+                    let s = self.stringify_value(a)?;
+                    let value = self.get_heap_mut().push(HeapValue::String(&s));
                     self.push(value);
                 }
                 Opcode::Type => {
                     let a = self.pop(opcode, span)?;
                     let type_name = a.get_type();
-                    let value = self.is.get_heap_mut().push(HeapValue::String(type_name));
+                    let value = self.get_heap_mut().push(HeapValue::String(type_name));
                     self.push(value);
                 }
                 Opcode::Return => {
-                    let a = self.pop(opcode, span)?;
-                    return Ok(a);
+                    let return_value = self.pop(opcode, span)?;
+                    
+                    // Pop the current call frame
+                    let frame = self.call_stack.pop().expect("Call stack should never be empty on return");
+                    
+                    // If this was the last frame (main), return the value
+                    if self.call_stack.is_empty() {
+                        return Ok(return_value);
+                    }
+                    
+                    // Truncate locals back to the frame pointer (cleanup this frame's locals)
+                    self.locals.truncate(frame.frame_pointer);
+                    
+                    // Restore the instruction pointer to where we should continue
+                    self.ip = frame.return_ip;
+                    
+                    // Push return value onto operand stack for the caller
+                    self.push(return_value);
                 }
                 // Stack manipulation opcodes
                 Opcode::Dup => {
@@ -1069,13 +1156,13 @@ impl<'a> VM<'a> {
                     let struct_def_value = self.pop(opcode, span)?;
 
                     if let Value::StructDef(struct_def_key) = struct_def_value {
-                        let struct_def = self.is.get_heap().get_struct_def(struct_def_key)?;
+                        let struct_def = self.get_heap().get_struct_def(struct_def_key)?;
                         let struct_name = struct_def.name().to_string();
 
                         // Create a new struct instance
                         let instance = crate::structs::StructInstance::new(struct_name);
                         let instance_value =
-                            self.is.get_heap_mut().push(HeapValue::StructInst(instance));
+                            self.get_heap_mut().push(HeapValue::StructInst(instance));
 
                         self.push(instance_value);
                     } else {
@@ -1099,9 +1186,9 @@ impl<'a> VM<'a> {
                         (method_name_value, struct_def_value)
                     {
                         let method_name =
-                            self.is.get_heap().get_string(method_name_sym)?.to_string();
+                            self.get_heap().get_string(method_name_sym)?.to_string();
                         let method_clone = {
-                            let struct_def = self.is.get_heap().get_struct_def(struct_def_key)?;
+                            let struct_def = self.get_heap().get_struct_def(struct_def_key)?;
                             if let Some(method) = struct_def.get_method(&method_name) {
                                 method.clone()
                             } else {
@@ -1120,7 +1207,6 @@ impl<'a> VM<'a> {
 
                         // Push the method as a function value
                         let func_value = self
-                            .is
                             .get_heap_mut()
                             .push(HeapValue::Function(method_clone));
                         self.push(func_value);
@@ -1145,10 +1231,8 @@ impl<'a> VM<'a> {
 
             self.stack_trace();
         }
-
-        Err(WalrusError::UnknownError {
-            message: "Instruction pointer out of bounds".to_string(),
-        })
+        // Note: This is unreachable because the loop only exits via return statements
+        // (either from Return opcode, errors, or end of main frame)
     }
 
     fn construct_err(&self, op: Opcode, a: Value, b: Option<Value>, span: Span) -> WalrusError {
@@ -1174,23 +1258,6 @@ impl<'a> VM<'a> {
 
     fn push(&mut self, value: Value) {
         self.stack.push(value);
-    }
-
-    fn get(&self, index: usize) -> WalrusResult<&Value> {
-        self.stack.get(index).ok_or(WalrusError::UnknownError {
-            message: "Failed to resolve local variable stack index".to_string(),
-        })
-    }
-
-    fn set(&mut self, index: usize, value: Value) -> WalrusResult<()> {
-        if let Some(slot) = self.stack.get_mut(index) {
-            *slot = value;
-            Ok(())
-        } else {
-            Err(WalrusError::UnknownError {
-                message: "Failed to resolve local variable stack index".to_string(),
-            })
-        }
     }
 
     fn pop(&mut self, op: Opcode, span: Span) -> WalrusResult<Value> {
@@ -1219,7 +1286,7 @@ impl<'a> VM<'a> {
         }
 
         for (i, frame) in self.stack.iter().enumerate() {
-            debug!("| {} | {}: {}", self.title, i, frame);
+            debug!("| {} | {}: {}", self.function_name(), i, frame);
         }
     }
 
@@ -1272,7 +1339,7 @@ impl<'a> VM<'a> {
     }
 
     fn print_current_instruction(&self) {
-        let instruction = self.is.get(self.ip);
+        let instruction = self.current_frame().instructions.get(self.ip);
         debug!(
             "Executing {} -> {}",
             instruction.opcode(),

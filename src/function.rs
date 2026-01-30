@@ -5,6 +5,7 @@ use crate::span::Span;
 use crate::value::Value;
 use crate::vm::instruction_set::InstructionSet;
 use std::fmt::Display;
+use std::rc::Rc;
 
 #[derive(Debug, Clone)]
 pub struct RustFunction {
@@ -48,12 +49,12 @@ impl NodeFunction {
 pub struct VmFunction {
     pub name: String,
     pub arity: usize,
-    pub code: InstructionSet,
+    pub code: Rc<InstructionSet>,
 }
 
 impl VmFunction {
     pub fn new(name: String, arity: usize, code: InstructionSet) -> Self {
-        Self { name, arity, code }
+        Self { name, arity, code: Rc::new(code) }
     }
 }
 
