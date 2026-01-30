@@ -71,9 +71,9 @@ pub struct BytecodeEmitter<'a> {
 }
 
 struct LoopContext {
-    start: usize,          // Address of loop start (for continue)
-    breaks: Vec<usize>,    // Addresses of break jumps to patch
-    is_for_loop: bool,     // True if this is a for loop (needs to pop iterator on break)
+    start: usize,           // Address of loop start (for continue)
+    breaks: Vec<usize>,     // Addresses of break jumps to patch
+    is_for_loop: bool,      // True if this is a for loop (needs to pop iterator on break)
     locals_at_start: usize, // Number of locals at loop body start (for continue cleanup)
 }
 
