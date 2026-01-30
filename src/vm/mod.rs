@@ -1571,7 +1571,7 @@ impl<'a> VM<'a> {
                         )?,
                         Value::StructDef(key) => {
                             // For struct definitions, look up the method and call it
-                            let method_clone = {
+                            let method = {
                                 let struct_def = self.get_heap().get_struct_def(key)?;
                                 if let Some(method) = struct_def.get_method(&method_name) {
                                     method.clone()
@@ -1589,57 +1589,42 @@ impl<'a> VM<'a> {
                                 }
                             };
 
-                            // Push the method as a function value and call it
-                            let func_value =
-                                self.get_heap_mut().push(HeapValue::Function(method_clone));
-
-                            // Push args back, then function, to set up for Call
-                            for arg in args.iter() {
-                                self.push(*arg);
-                            }
-                            self.push(func_value);
-
-                            // Re-execute as a regular Call
-                            let func = self.pop(opcode, span)?;
-                            if let Value::Function(fkey) = func {
-                                let func = self.get_heap().get_function(fkey)?;
-                                if let WalrusFunction::Vm(func) = func {
-                                    if args.len() != func.arity {
-                                        return Err(WalrusError::InvalidArgCount {
-                                            name: func.name.clone(),
-                                            expected: func.arity,
-                                            got: args.len(),
-                                            span,
-                                            src: self.source_ref.source().into(),
-                                            filename: self.source_ref.filename().into(),
-                                        });
-                                    }
-
-                                    let new_frame = CallFrame {
-                                        return_ip: self.ip,
-                                        frame_pointer: self.locals.len(),
-                                        instructions: Rc::clone(&func.code),
-                                        function_name: format!("fn<{}>", func.name),
-                                    };
-
-                                    self.call_stack.push(new_frame);
-
-                                    for arg in args {
-                                        self.locals.push(arg);
-                                    }
-
-                                    self.ip = 0;
-                                    continue; // Skip pushing result, function handles its own return
-                                } else {
-                                    return Err(WalrusError::Exception {
-                                        message: "Struct methods must be VM functions".to_string(),
+                            // Call the struct method
+                            if let WalrusFunction::Vm(func) = method {
+                                if args.len() != func.arity {
+                                    return Err(WalrusError::InvalidArgCount {
+                                        name: func.name.clone(),
+                                        expected: func.arity,
+                                        got: args.len(),
                                         span,
                                         src: self.source_ref.source().into(),
                                         filename: self.source_ref.filename().into(),
                                     });
                                 }
+
+                                let new_frame = CallFrame {
+                                    return_ip: self.ip,
+                                    frame_pointer: self.locals.len(),
+                                    instructions: Rc::clone(&func.code),
+                                    function_name: format!("fn<{}>", func.name),
+                                };
+
+                                self.call_stack.push(new_frame);
+
+                                for arg in args {
+                                    self.locals.push(arg);
+                                }
+
+                                self.ip = 0;
+                                continue; // Skip pushing result, function handles its own return
+                            } else {
+                                return Err(WalrusError::Exception {
+                                    message: "Struct methods must be VM functions".to_string(),
+                                    span,
+                                    src: self.source_ref.source().into(),
+                                    filename: self.source_ref.filename().into(),
+                                });
                             }
-                            continue; // Already handled
                         }
                         _ => {
                             return Err(WalrusError::Exception {
