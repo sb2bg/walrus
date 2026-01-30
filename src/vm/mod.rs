@@ -23,6 +23,7 @@ use crate::vm::opcode::Opcode;
 
 pub mod compiler;
 pub mod instruction_set;
+pub mod methods;
 pub mod opcode;
 pub mod optimize;
 mod symbol_table;
@@ -1513,12 +1514,153 @@ impl<'a> VM<'a> {
                         });
                     }
                 }
-                Opcode::CallMethod => {
-                    // For now, methods are called like regular functions
-                    // In the future, we might want to pass 'this' as an implicit first argument
-                    return Err(WalrusError::TodoError {
-                        message: "CallMethod opcode not yet implemented".to_string(),
-                    });
+                Opcode::CallMethod(arg_count) => {
+                    // Stack layout: [object, arg1, arg2, ..., argN, method_name]
+                    // Pop method name first
+                    let method_name_val = self.pop(opcode, span)?;
+                    let method_name = match method_name_val {
+                        Value::String(sym) => self.get_heap().get_string(sym)?.to_string(),
+                        _ => {
+                            return Err(WalrusError::Exception {
+                                message: "Method name must be a string".to_string(),
+                                span,
+                                src: self.source_ref.source().into(),
+                                filename: self.source_ref.filename().into(),
+                            });
+                        }
+                    };
+
+                    // Pop arguments
+                    let args = self.pop_n(arg_count as usize, opcode, span)?;
+
+                    // Pop the object
+                    let object = self.pop(opcode, span)?;
+
+                    // Get source info for error messages
+                    let src = self.source_ref.source().to_string();
+                    let filename = self.source_ref.filename().to_string();
+
+                    // Dispatch based on object type
+                    let result = match object {
+                        Value::List(key) => {
+                            methods::dispatch_list_method(
+                                self.get_heap_mut(),
+                                key,
+                                &method_name,
+                                args,
+                                span,
+                                &src,
+                                &filename,
+                            )?
+                        }
+                        Value::String(key) => {
+                            methods::dispatch_string_method(
+                                self.get_heap_mut(),
+                                key,
+                                &method_name,
+                                args,
+                                span,
+                                &src,
+                                &filename,
+                            )?
+                        }
+                        Value::Dict(key) => {
+                            methods::dispatch_dict_method(
+                                self.get_heap_mut(),
+                                key,
+                                &method_name,
+                                args,
+                                span,
+                                &src,
+                                &filename,
+                            )?
+                        }
+                        Value::StructDef(key) => {
+                            // For struct definitions, look up the method and call it
+                            let method_clone = {
+                                let struct_def = self.get_heap().get_struct_def(key)?;
+                                if let Some(method) = struct_def.get_method(&method_name) {
+                                    method.clone()
+                                } else {
+                                    return Err(WalrusError::Exception {
+                                        message: format!(
+                                            "Struct '{}' has no method '{}'",
+                                            struct_def.name(),
+                                            method_name
+                                        ),
+                                        span,
+                                        src: self.source_ref.source().into(),
+                                        filename: self.source_ref.filename().into(),
+                                    });
+                                }
+                            };
+
+                            // Push the method as a function value and call it
+                            let func_value =
+                                self.get_heap_mut().push(HeapValue::Function(method_clone));
+                            
+                            // Push args back, then function, to set up for Call
+                            for arg in args.iter() {
+                                self.push(*arg);
+                            }
+                            self.push(func_value);
+                            
+                            // Re-execute as a regular Call
+                            let func = self.pop(opcode, span)?;
+                            if let Value::Function(fkey) = func {
+                                let func = self.get_heap().get_function(fkey)?;
+                                if let WalrusFunction::Vm(func) = func {
+                                    if args.len() != func.arity {
+                                        return Err(WalrusError::InvalidArgCount {
+                                            name: func.name.clone(),
+                                            expected: func.arity,
+                                            got: args.len(),
+                                            span,
+                                            src: self.source_ref.source().into(),
+                                            filename: self.source_ref.filename().into(),
+                                        });
+                                    }
+
+                                    let new_frame = CallFrame {
+                                        return_ip: self.ip,
+                                        frame_pointer: self.locals.len(),
+                                        instructions: Rc::clone(&func.code),
+                                        function_name: format!("fn<{}>", func.name),
+                                    };
+
+                                    self.call_stack.push(new_frame);
+
+                                    for arg in args {
+                                        self.locals.push(arg);
+                                    }
+
+                                    self.ip = 0;
+                                    continue; // Skip pushing result, function handles its own return
+                                } else {
+                                    return Err(WalrusError::Exception {
+                                        message: "Struct methods must be VM functions".to_string(),
+                                        span,
+                                        src: self.source_ref.source().into(),
+                                        filename: self.source_ref.filename().into(),
+                                    });
+                                }
+                            }
+                            continue; // Already handled
+                        }
+                        _ => {
+                            return Err(WalrusError::Exception {
+                                message: format!(
+                                    "Cannot call method '{}' on type '{}'",
+                                    method_name,
+                                    object.get_type()
+                                ),
+                                span,
+                                src: self.source_ref.source().into(),
+                                filename: self.source_ref.filename().into(),
+                            });
+                        }
+                    };
+                    self.push(result);
                 }
             }
 

@@ -9,8 +9,8 @@ use crate::WalrusResult;
 use crate::error::WalrusError;
 use crate::function::WalrusFunction;
 use crate::gc::{
-    estimate_dict_size, estimate_function_size, estimate_list_size, estimate_struct_instance_size,
-    estimate_tuple_size, get_allocation_threshold, GcState,
+    GcState, estimate_dict_size, estimate_function_size, estimate_list_size,
+    estimate_struct_instance_size, estimate_tuple_size, get_allocation_threshold,
 };
 use crate::iter::{CollectionIter, DictIter, RangeIter, StrIter};
 use crate::structs::{StructDefinition, StructInstance};
@@ -141,8 +141,7 @@ impl ValueHolder {
             }
             Value::Dict(key) => {
                 if let Some(dict) = self.dicts.get(key) {
-                    let entries: Vec<(Value, Value)> =
-                        dict.iter().map(|(&k, &v)| (k, v)).collect();
+                    let entries: Vec<(Value, Value)> = dict.iter().map(|(&k, &v)| (k, v)).collect();
                     for (k, v) in entries {
                         self.mark(k);
                         self.mark(v);

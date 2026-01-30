@@ -69,9 +69,9 @@ pub enum Opcode {
     Index,
     StoreIndex, // Store value at index (for list[i] = x and dict[k] = v)
     Nop,
-    MakeStruct, // Create a struct instance from a struct definition
-    GetMethod,  // Get a method from a struct definition
-    CallMethod, // Call a method on a struct instance
+    MakeStruct,      // Create a struct instance from a struct definition
+    GetMethod,       // Get a method from a struct definition
+    CallMethod(u32), // Call a method on any value (arg count as operand, method name + object + args on stack)
 
     // Builtins
     Len,       // Get length of a string, list, or dict

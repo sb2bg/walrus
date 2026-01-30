@@ -5,7 +5,7 @@ fn list_benchmark : n {
     // Build a list
     let arr = [];
     for i in 0..n {
-        arr = arr + [i];
+        arr.push(i);
     }
     
     // Sum all elements
