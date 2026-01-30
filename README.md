@@ -286,7 +286,7 @@ fn quicksort : arr {
 let sorted = quicksort([64, 34, 25, 12, 22, 11, 90, 88]);
 ```
 
-## 🏗️ Architecture
+## Architecture
 
 ### Virtual Machine
 
@@ -325,7 +325,7 @@ The mark-and-sweep GC traces from roots and frees unreachable objects:
 - **Generation-Indexed Keys**: Type-safe references prevent use-after-free
 - **Copy-on-Write Semantics**: Values are small (key-based), heap data shared until modified
 
-## 🔧 Development
+## Development
 
 ### Running Tests
 
@@ -358,7 +358,7 @@ cd benchmarks && ./run_benchmarks.sh
 ./scripts/instruments.sh
 ```
 
-## 📄 Examples
+## Examples
 
 Check out the `showcase.walrus` file for a comprehensive demonstration of all language features, including:
 
