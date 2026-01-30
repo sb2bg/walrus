@@ -19,6 +19,7 @@ pub enum Opcode {
     StoreAt(u32),
     StoreGlobal(u32),
     Call(u32),
+    TailCall(u32), // Tail call optimization: reuses current frame instead of pushing new one
 
     // Specialized constant loading (zero-operand for efficiency)
     LoadConst0,  // Load constant at index 0

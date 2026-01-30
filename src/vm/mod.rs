@@ -536,6 +536,105 @@ impl<'a> VM<'a> {
                         }
                     }
                 }
+                Opcode::TailCall(args) => {
+                    // Tail Call Optimization: reuse the current frame instead of pushing a new one.
+                    // This prevents stack overflow for tail-recursive functions.
+                    let arg_count = args as usize;
+                    let func = self.pop(opcode, span)?;
+                    let args = self.pop_n(arg_count, opcode, span)?;
+
+                    match func {
+                        Value::Function(key) => {
+                            let func = self.get_heap().get_function(key)?;
+
+                            match func {
+                                WalrusFunction::Rust(func) => {
+                                    // Rust functions don't use call frames, so just call and return
+                                    if args.len() != func.args {
+                                        return Err(WalrusError::InvalidArgCount {
+                                            name: func.name.clone(),
+                                            expected: func.args,
+                                            got: args.len(),
+                                            span,
+                                            src: self.source_ref.source().into(),
+                                            filename: self.source_ref.filename().into(),
+                                        });
+                                    }
+                                    let result = func.call(args, self.source_ref, span)?;
+
+                                    // For a tail call, we need to return this result
+                                    // Pop the current frame and push the result
+                                    let frame = self
+                                        .call_stack
+                                        .pop()
+                                        .expect("Call stack should never be empty on tail call");
+
+                                    if self.call_stack.is_empty() {
+                                        return Ok(result);
+                                    }
+
+                                    self.locals.truncate(frame.frame_pointer);
+                                    self.ip = frame.return_ip;
+                                    self.push(result);
+                                }
+                                WalrusFunction::Vm(func) => {
+                                    if args.len() != func.arity {
+                                        return Err(WalrusError::InvalidArgCount {
+                                            name: func.name.clone(),
+                                            expected: func.arity,
+                                            got: args.len(),
+                                            span,
+                                            src: self.source_ref.source().into(),
+                                            filename: self.source_ref.filename().into(),
+                                        });
+                                    }
+
+                                    // Clone what we need before mutating self
+                                    let new_instructions = Rc::clone(&func.code);
+                                    let new_name = format!("fn<{}>", func.name);
+
+                                    // Get the current frame pointer before modifying
+                                    let frame_pointer = self.frame_pointer();
+
+                                    // Truncate locals to our frame pointer (clear current frame's locals)
+                                    self.locals.truncate(frame_pointer);
+
+                                    // Push the new arguments
+                                    for arg in args {
+                                        self.locals.push(arg);
+                                    }
+
+                                    // Update the current frame in place (reuse it)
+                                    // Keep the same return_ip and frame_pointer, just update instructions and name
+                                    if let Some(current_frame) = self.call_stack.last_mut() {
+                                        current_frame.instructions = new_instructions;
+                                        current_frame.function_name = new_name;
+                                    }
+
+                                    // Reset IP to start of the new function
+                                    self.ip = 0;
+                                }
+                                _ => {
+                                    return Err(WalrusError::Exception {
+                                        message: "Cannot call a node function from the VM"
+                                            .to_string(),
+                                        span,
+                                        src: self.source_ref.source().into(),
+                                        filename: self.source_ref.filename().into(),
+                                    });
+                                }
+                            }
+                        }
+                        _ => {
+                            return Err(WalrusError::NotCallable {
+                                value: func.get_type().to_string(),
+                                span,
+                                src: self.source_ref.source().into(),
+                                filename: self.source_ref.filename().into(),
+                            });
+                        }
+                    }
+                }
                 Opcode::Add => {
                     let b = self.pop(opcode, span)?;
                     let a = self.pop(opcode, span)?;
