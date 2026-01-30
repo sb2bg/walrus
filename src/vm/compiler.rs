@@ -1059,40 +1059,45 @@ impl<'a> BytecodeEmitter<'a> {
         }
 
         // Check if this is a method call (e.g., arr.push(x))
+        // But NOT if the object is a plain identifier - that could be a struct static call like Calculator.add()
         if let NodeKind::MemberAccess(object, method_name) = func.kind() {
-            let arg_len = args.len();
+            // Skip method call dispatch for plain identifiers (likely struct static calls)
+            // Struct calls like Calculator.add() should go through normal member access + call
+            if !matches!(object.kind(), NodeKind::Ident(_)) {
+                let arg_len = args.len();
 
-            // Emit the object first
-            self.emit(*object.clone())?;
+                // Emit the object first
+                self.emit(*object.clone())?;
 
-            // Emit all arguments
-            for arg in args {
-                self.emit(arg)?;
-            }
+                // Emit all arguments
+                for arg in args {
+                    self.emit(arg)?;
+                }
 
-            // Push the method name as a string constant
-            let method_str = self
-                .instructions
-                .get_heap_mut()
-                .push(HeapValue::String(method_name));
-            let index = self.instructions.push_constant(method_str);
-            let opcode = match index {
-                0 => Opcode::LoadConst0,
-                1 => Opcode::LoadConst1,
-                _ => Opcode::LoadConst(index),
-            };
-            self.instructions.push(Instruction::new(opcode, span));
+                // Push the method name as a string constant
+                let method_str = self
+                    .instructions
+                    .get_heap_mut()
+                    .push(HeapValue::String(method_name));
+                let index = self.instructions.push_constant(method_str);
+                let opcode = match index {
+                    0 => Opcode::LoadConst0,
+                    1 => Opcode::LoadConst1,
+                    _ => Opcode::LoadConst(index),
+                };
+                self.instructions.push(Instruction::new(opcode, span));
 
-            // Emit CallMethod with argument count
-            self.instructions
-                .push(Instruction::new(Opcode::CallMethod(arg_len as u32), span));
-
-            // Method calls can't be tail-optimized (for now)
-            if is_tail_call {
+                // Emit CallMethod with argument count
                 self.instructions
-                    .push(Instruction::new(Opcode::Return, span));
+                    .push(Instruction::new(Opcode::CallMethod(arg_len as u32), span));
+
+                // Method calls can't be tail-optimized (for now)
+                if is_tail_call {
+                    self.instructions
+                        .push(Instruction::new(Opcode::Return, span));
+                }
+                return Ok(());
             }
-            return Ok(());
         }
 
         // Regular or tail function call
