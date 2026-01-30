@@ -143,6 +143,38 @@ impl<'a> VM<'a> {
         unsafe { &mut *std::ptr::addr_of_mut!(crate::arenas::ARENA) }
     }
 
+    /// Collect all root values that the GC needs to trace from
+    fn collect_roots(&self) -> Vec<Value> {
+        let mut roots = Vec::with_capacity(self.stack.len() + self.locals.len() + 64);
+
+        // Stack values are roots
+        roots.extend(self.stack.iter().copied());
+
+        // Local variables are roots
+        roots.extend(self.locals.iter().copied());
+
+        // Global variables are roots
+        roots.extend(self.globals.borrow().iter().copied());
+
+        // Constants in all call frames are roots (they might reference heap objects)
+        for frame in &self.call_stack {
+            roots.extend(frame.instructions.constants.iter().copied());
+        }
+
+        roots
+    }
+
+    /// Run garbage collection if needed
+    fn maybe_collect_garbage(&mut self) {
+        if self.get_heap().should_collect() {
+            let roots = self.collect_roots();
+            let freed = self.get_heap_mut().collect_garbage(&roots);
+            if freed > 0 {
+                debug!("GC: Freed {} objects", freed);
+            }
+        }
+    }
+
     /// Stringify a value using the global heap
     fn stringify_value(&self, value: Value) -> WalrusResult<String> {
         self.get_heap().stringify(value)
@@ -211,6 +243,9 @@ impl<'a> VM<'a> {
 
     fn run_inner(&mut self) -> WalrusResult<Value> {
         loop {
+            // Check if garbage collection is needed
+            self.maybe_collect_garbage();
+
             // Get current frame's instruction set
             let instructions = Rc::clone(&self.current_frame().instructions);
 
@@ -1271,6 +1306,100 @@ impl<'a> VM<'a> {
                     let type_name = a.get_type();
                     let value = self.get_heap_mut().push(HeapValue::String(type_name));
                     self.push(value);
+                }
+                Opcode::Gc => {
+                    // Trigger garbage collection and return stats as a dict
+                    let roots = self.collect_roots();
+                    let result = self.get_heap_mut().force_collect(&roots);
+
+                    // Build result dict
+                    let mut dict = FxHashMap::default();
+                    let heap = self.get_heap_mut();
+
+                    let key_freed = heap.push(HeapValue::String("objects_freed"));
+                    let key_before = heap.push(HeapValue::String("objects_before"));
+                    let key_after = heap.push(HeapValue::String("objects_after"));
+                    let key_collections = heap.push(HeapValue::String("total_collections"));
+
+                    dict.insert(key_freed, Value::Int(result.objects_freed as i64));
+                    dict.insert(key_before, Value::Int(result.objects_before as i64));
+                    dict.insert(key_after, Value::Int(result.objects_after as i64));
+                    dict.insert(key_collections, Value::Int(result.collections_total as i64));
+
+                    let result_dict = self.get_heap_mut().push(HeapValue::Dict(dict));
+                    self.push(result_dict);
+                }
+                Opcode::HeapStats => {
+                    // Get heap statistics as a dict
+                    let stats = self.get_heap().heap_stats();
+                    let gc_info = self.get_heap().gc_stats();
+
+                    let mut dict = FxHashMap::default();
+                    let heap = self.get_heap_mut();
+
+                    // Object counts
+                    let key_lists = heap.push(HeapValue::String("lists"));
+                    let key_tuples = heap.push(HeapValue::String("tuples"));
+                    let key_dicts = heap.push(HeapValue::String("dicts"));
+                    let key_functions = heap.push(HeapValue::String("functions"));
+                    let key_iterators = heap.push(HeapValue::String("iterators"));
+                    let key_struct_defs = heap.push(HeapValue::String("struct_defs"));
+                    let key_struct_insts = heap.push(HeapValue::String("struct_instances"));
+                    let key_total = heap.push(HeapValue::String("total_objects"));
+
+                    // GC info
+                    let key_alloc_count = heap.push(HeapValue::String("allocation_count"));
+                    let key_bytes = heap.push(HeapValue::String("bytes_allocated"));
+                    let key_bytes_freed = heap.push(HeapValue::String("total_bytes_freed"));
+                    let key_collections = heap.push(HeapValue::String("total_collections"));
+                    let key_threshold = heap.push(HeapValue::String("allocation_threshold"));
+                    let key_mem_threshold = heap.push(HeapValue::String("memory_threshold"));
+
+                    dict.insert(key_lists, Value::Int(stats.lists as i64));
+                    dict.insert(key_tuples, Value::Int(stats.tuples as i64));
+                    dict.insert(key_dicts, Value::Int(stats.dicts as i64));
+                    dict.insert(key_functions, Value::Int(stats.functions as i64));
+                    dict.insert(key_iterators, Value::Int(stats.iterators as i64));
+                    dict.insert(key_struct_defs, Value::Int(stats.struct_defs as i64));
+                    dict.insert(key_struct_insts, Value::Int(stats.struct_instances as i64));
+                    dict.insert(key_total, Value::Int(stats.total_objects() as i64));
+
+                    dict.insert(key_alloc_count, Value::Int(gc_info.allocation_count as i64));
+                    dict.insert(key_bytes, Value::Int(gc_info.bytes_allocated as i64));
+                    dict.insert(
+                        key_bytes_freed,
+                        Value::Int(gc_info.total_bytes_freed as i64),
+                    );
+                    dict.insert(
+                        key_collections,
+                        Value::Int(gc_info.total_collections as i64),
+                    );
+                    dict.insert(
+                        key_threshold,
+                        Value::Int(gc_info.allocation_threshold as i64),
+                    );
+                    dict.insert(
+                        key_mem_threshold,
+                        Value::Int(gc_info.memory_threshold as i64),
+                    );
+
+                    let result_dict = self.get_heap_mut().push(HeapValue::Dict(dict));
+                    self.push(result_dict);
+                }
+                Opcode::GcConfig => {
+                    // Set GC allocation threshold
+                    let threshold = self.pop(opcode, span)?;
+                    match threshold {
+                        Value::Int(n) if n > 0 => {
+                            let old = crate::gc::set_allocation_threshold(n as usize);
+                            self.push(Value::Int(old as i64));
+                        }
+                        _ => {
+                            return Err(WalrusError::GenericError {
+                                message: "__gc_threshold__ requires a positive integer".to_string(),
+                            });
+                        }
+                    }
                 }
                 Opcode::Return => {
                     let return_value = self.pop(opcode, span)?;

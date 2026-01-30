@@ -32,6 +32,18 @@ fn get_builtin(name: &str) -> Option<BuiltinInfo> {
             opcode: Opcode::Type,
             arity: 1,
         }),
+        "__gc__" => Some(BuiltinInfo {
+            opcode: Opcode::Gc,
+            arity: 0,
+        }),
+        "__heap_stats__" => Some(BuiltinInfo {
+            opcode: Opcode::HeapStats,
+            arity: 0,
+        }),
+        "__gc_threshold__" => Some(BuiltinInfo {
+            opcode: Opcode::GcConfig,
+            arity: 1,
+        }),
         _ => None,
     }
 }

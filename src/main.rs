@@ -14,6 +14,7 @@ mod arenas;
 mod ast;
 mod error;
 mod function;
+mod gc;
 mod interpreter;
 mod iter;
 mod program;

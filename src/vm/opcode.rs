@@ -74,9 +74,12 @@ pub enum Opcode {
     CallMethod, // Call a method on a struct instance
 
     // Builtins
-    Len,  // Get length of a string, list, or dict
-    Str,  // Convert value to string
-    Type, // Get type name of a value
+    Len,       // Get length of a string, list, or dict
+    Str,       // Convert value to string
+    Type,      // Get type name of a value
+    Gc,        // Trigger garbage collection, returns dict with stats
+    HeapStats, // Get heap statistics as a dict
+    GcConfig,  // Configure GC threshold (takes 1 int arg)
 }
 
 impl Display for Opcode {
