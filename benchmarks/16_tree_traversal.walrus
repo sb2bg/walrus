@@ -1,0 +1,36 @@
+// Binary Tree Benchmark - Tests recursive data structures
+// Build and traverse a binary tree
+
+fn make_tree : depth {
+    if depth <= 0 {
+        return void;
+    }
+    return {
+        "value": depth,
+        "left": make_tree(depth - 1),
+        "right": make_tree(depth - 1)
+    };
+}
+
+fn count_nodes : tree {
+    if tree == void {
+        return 0;
+    }
+    return 1 + count_nodes(tree["left"]) + count_nodes(tree["right"]);
+}
+
+fn sum_tree : tree {
+    if tree == void {
+        return 0;
+    }
+    return tree["value"] + sum_tree(tree["left"]) + sum_tree(tree["right"]);
+}
+
+let depth = 15;
+let tree = make_tree(depth);
+let nodes = count_nodes(tree);
+let total = sum_tree(tree);
+
+println(f"Binary tree of depth {depth}");
+println(f"Node count: {nodes}");
+println(f"Sum of values: {total}");

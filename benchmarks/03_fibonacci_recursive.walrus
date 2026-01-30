@@ -1,0 +1,13 @@
+// Fibonacci Recursive Benchmark - Tests function call overhead and recursion
+// This is deliberately naive (exponential) to stress test call stack
+
+fn fib : n {
+    if n <= 1 {
+        return n;
+    }
+    return fib(n - 1) + fib(n - 2);
+}
+
+let result = fib(30);
+
+println(f"Fibonacci(30) = {result}");

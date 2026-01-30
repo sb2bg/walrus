@@ -1,0 +1,29 @@
+// List Operations Benchmark - Tests list manipulation
+// Append, access, and modify operations
+
+fn list_benchmark : n {
+    // Build a list
+    let arr = [];
+    for i in 0..n {
+        arr = arr + [i];
+    }
+    
+    // Sum all elements
+    let total = 0;
+    for x in arr {
+        total = total + x;
+    }
+    
+    // Access elements randomly-ish
+    let access_sum = 0;
+    for i in 0..n {
+        let idx = (i * 7 + 13) % n;
+        access_sum = access_sum + arr[idx];
+    }
+    
+    return total + access_sum;
+}
+
+let result = list_benchmark(10000);
+
+println(f"List operations on 10000 elements: {result}");

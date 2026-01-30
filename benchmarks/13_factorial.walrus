@@ -1,0 +1,18 @@
+// Factorial Benchmark - Tests recursion and big numbers
+// Many recursive calls
+
+fn factorial : n {
+    if n <= 1 {
+        return 1;
+    }
+    return n * factorial(n - 1);
+}
+
+let total = 0;
+for i in 0..100000 {
+    total = total + factorial(12);
+}
+
+println(f"Computed factorial(12) 100000 times");
+println(f"factorial(12) = {factorial(12)}");
+println(f"Total sum: {total}");

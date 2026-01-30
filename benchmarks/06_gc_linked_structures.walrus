@@ -1,0 +1,27 @@
+// GC Linked Structures - Creates linked list-like structures
+// Tests GC handling of nested references
+
+fn create_chain : depth {
+    if depth <= 0 {
+        return {"value": 0, "next": void};
+    }
+    return {"value": depth, "next": create_chain(depth - 1)};
+}
+
+fn sum_chain : node {
+    let total = 0;
+    while node != void {
+        total = total + node["value"];
+        node = node["next"];
+    }
+    return total;
+}
+
+let total = 0;
+for i in 0..1000 {
+    let chain = create_chain(100);
+    total = total + sum_chain(chain);
+}
+
+println(f"Created and traversed 1000 chains of depth 100");
+println(f"Total sum: {total}");

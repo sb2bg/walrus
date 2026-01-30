@@ -1,0 +1,60 @@
+// Matrix Multiplication Benchmark - Tests nested loops and array access
+// Classic O(n³) algorithm
+
+fn create_matrix : size, seed {
+    let matrix = [];
+    let current = seed;
+    let i = 0;
+    while i < size {
+        let row = [];
+        let j = 0;
+        while j < size {
+            current = (current * 1103515245 + 12345) % 2147483648;
+            row = row + [current % 100];
+            j = j + 1;
+        }
+        matrix = matrix + [row];
+        i = i + 1;
+    }
+    return matrix;
+}
+
+fn matrix_multiply : a, b, size {
+    let result = [];
+    let i = 0;
+    while i < size {
+        let row = [];
+        let j = 0;
+        while j < size {
+            row = row + [0];
+            j = j + 1;
+        }
+        result = result + [row];
+        i = i + 1;
+    }
+    
+    let ii = 0;
+    while ii < size {
+        let jj = 0;
+        while jj < size {
+            let sum = 0;
+            let kk = 0;
+            while kk < size {
+                sum = sum + a[ii][kk] * b[kk][jj];
+                kk = kk + 1;
+            }
+            result[ii][jj] = sum;
+            jj = jj + 1;
+        }
+        ii = ii + 1;
+    }
+    return result;
+}
+
+let size = 50;
+let a = create_matrix(size, 42);
+let b = create_matrix(size, 123);
+let c = matrix_multiply(a, b, size);
+
+println(f"Matrix multiply {size}x{size}");
+println(f"Result[0][0] = {c[0][0]}");

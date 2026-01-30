@@ -1,0 +1,16 @@
+// While Loop Benchmark - Tests while loop performance vs for
+// Pure counting with while
+
+fn while_count : n {
+    let i = 0;
+    let sum = 0;
+    while i < n {
+        sum = sum + i;
+        i = i + 1;
+    }
+    return sum;
+}
+
+let result = while_count(1000000);
+
+println(f"While loop sum to 1000000: {result}");

@@ -1,0 +1,29 @@
+// Dictionary Operations Benchmark - Tests hash map performance
+// Insert, lookup, and iteration
+
+fn dict_benchmark : n {
+    let dict = {};
+    
+    // Insert n items using while loop
+    let i = 0;
+    while i < n {
+        let key = f"key_{i}";
+        dict[key] = i * 2;
+        i = i + 1;
+    }
+    
+    // Look up all items
+    let total = 0;
+    let j = 0;
+    while j < n {
+        let key = f"key_{j}";
+        total = total + dict[key];
+        j = j + 1;
+    }
+    
+    return total;
+}
+
+let result = dict_benchmark(10000);
+
+println(f"Dict operations with 10000 entries: {result}");

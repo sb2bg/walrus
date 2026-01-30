@@ -1,0 +1,24 @@
+// Fibonacci Iterative Benchmark - Tests loop performance
+// Calculates many fibonacci numbers iteratively
+
+fn fib_iter : n {
+    if n <= 1 {
+        return n;
+    }
+    let a = 0;
+    let b = 1;
+    for i in 2..(n + 1) {
+        let temp = a + b;
+        a = b;
+        b = temp;
+    }
+    return b;
+}
+
+let total = 0;
+for i in 0..100000 {
+    total = total + fib_iter(50);
+}
+
+println(f"100000 iterations of fib_iter(50)");
+println(f"Total sum: {total}");

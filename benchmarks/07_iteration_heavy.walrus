@@ -1,0 +1,14 @@
+// Iteration Heavy Benchmark - Pure loop performance
+// Tests how fast loops can execute
+
+fn count_iterations : {
+    let count = 0;
+    for i in 0..1000000 {
+        count = count + 1;
+    }
+    return count;
+}
+
+let result = count_iterations();
+
+println(f"Counted to {result}");

@@ -1,0 +1,32 @@
+// Method Dispatch Benchmark - Tests struct method calls
+// Stresses method lookup and function calls
+
+struct Calculator {
+    fn add : a, b {
+        return a + b;
+    }
+    
+    fn sub : a, b {
+        return a - b;
+    }
+    
+    fn mul : a, b {
+        return a * b;
+    }
+    
+    fn compute : x {
+        return Calculator.add(Calculator.mul(x, 2), Calculator.sub(x, 1));
+    }
+}
+
+fn method_benchmark : n {
+    let total = 0;
+    for i in 0..n {
+        total = total + Calculator.compute(i);
+    }
+    return total;
+}
+
+let result = method_benchmark(100000);
+
+println(f"Method dispatch (100000 iterations): {result}");

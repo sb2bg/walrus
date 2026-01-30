@@ -1,0 +1,38 @@
+// Sieve of Eratosthenes - Classic algorithm benchmark
+// Tests list operations and conditionals
+
+fn sieve : n {
+    let is_prime = [];
+    for i in 0..(n + 1) {
+        is_prime = is_prime + [true];
+    }
+    
+    is_prime[0] = false;
+    is_prime[1] = false;
+    
+    let p = 2;
+    while p * p <= n {
+        if is_prime[p] {
+            let multiple = p * p;
+            while multiple <= n {
+                is_prime[multiple] = false;
+                multiple = multiple + p;
+            }
+        }
+        p = p + 1;
+    }
+    
+    let primes = [];
+    for i in 0..(n + 1) {
+        if is_prime[i] {
+            primes = primes + [i];
+        }
+    }
+    
+    return primes;
+}
+
+let primes = sieve(50000);
+
+println(f"Found {len(primes)} primes up to 50000");
+println(f"Last 5 primes: {primes[len(primes)-5]}, {primes[len(primes)-4]}, {primes[len(primes)-3]}, {primes[len(primes)-2]}, {primes[len(primes)-1]}");

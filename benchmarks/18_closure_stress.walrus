@@ -1,0 +1,21 @@
+// Function Call Stress Test - Tests function call overhead
+// Creates many functions and calls them (closures not fully supported)
+
+fn make_adder : x {
+    // Since Walrus doesn't support closures, we'll test function call overhead
+    return x;
+}
+
+fn closure_benchmark : n {
+    let total = 0;
+    for i in 0..n {
+        let val = make_adder(i);
+        total = total + val + i * 2;
+    }
+    return total;
+}
+
+let result = closure_benchmark(50000);
+
+println(f"Function call stress test (50000 calls)");
+println(f"Result: {result}");

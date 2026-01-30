@@ -1,0 +1,16 @@
+// Ackermann Function Benchmark - Extreme recursion stress test
+// Warning: This grows VERY fast, keep parameters small!
+
+fn ackermann : m, n {
+    if m == 0 {
+        return n + 1;
+    }
+    if n == 0 {
+        return ackermann(m - 1, 1);
+    }
+    return ackermann(m - 1, ackermann(m, n - 1));
+}
+
+let result = ackermann(3, 7);
+
+println(f"Ackermann(3, 7) = {result}");

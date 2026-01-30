@@ -1,0 +1,42 @@
+// Quicksort Benchmark - Tests sorting performance
+// Sorts a list of 5000 random-ish numbers
+
+fn quicksort : arr {
+    if len(arr) <= 1 {
+        return arr;
+    }
+    
+    let pivot = arr[len(arr) / 2];
+    let left = [];
+    let middle = [];
+    let right = [];
+    
+    for x in arr {
+        if x < pivot {
+            left = left + [x];
+        } else if x > pivot {
+            right = right + [x];
+        } else {
+            middle = middle + [x];
+        }
+    }
+    
+    return quicksort(left) + middle + quicksort(right);
+}
+
+// Generate pseudo-random numbers using LCG
+fn generate_random_list : n, seed {
+    let result = [];
+    let current = seed;
+    for i in 0..n {
+        current = (current * 1103515245 + 12345) % 2147483648;
+        result = result + [current % 10000];
+    }
+    return result;
+}
+
+let data = generate_random_list(5000, 42);
+let sorted = quicksort(data);
+
+println(f"Quicksort 5000 elements completed");
+println(f"First 5 sorted: {sorted[0]}, {sorted[1]}, {sorted[2]}, {sorted[3]}, {sorted[4]}");

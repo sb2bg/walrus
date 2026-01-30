@@ -1,0 +1,14 @@
+// String Concatenation Benchmark - Tests string operations
+// Building strings through concatenation
+
+fn string_benchmark : n {
+    let result = "";
+    for i in 0..n {
+        result = result + "a";
+    }
+    return len(result);
+}
+
+let length = string_benchmark(10000);
+
+println(f"Built string of length {length}");

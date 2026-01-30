@@ -1,0 +1,18 @@
+// Nested Loops Benchmark - Tests deeply nested iteration
+// Common pattern in matrix operations
+
+fn nested_loop_sum : n {
+    let total = 0;
+    for i in 0..n {
+        for j in 0..n {
+            for k in 0..n {
+                total = total + i + j + k;
+            }
+        }
+    }
+    return total;
+}
+
+let result = nested_loop_sum(100);
+
+println(f"Triple nested loop (100x100x100) sum: {result}");

@@ -1,0 +1,18 @@
+// GC Stress Test - Creates and discards many objects
+// Tests garbage collection performance
+
+fn create_and_discard : iterations {
+    for i in 0..iterations {
+        // Create lots of temporary lists that get discarded
+        let temp1 = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+        let temp2 = [10, 20, 30, 40, 50];
+        let temp3 = temp1 + temp2;
+        let temp4 = {"a": 1, "b": 2, "c": 3};
+        let temp5 = [temp1, temp2, temp3];
+        // All these become garbage at end of iteration
+    }
+}
+
+create_and_discard(50000);
+
+println("GC stress test (50000 iterations) completed");

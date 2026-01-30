@@ -1,0 +1,22 @@
+// Arithmetic Heavy Benchmark - Tests raw computation speed
+// Lots of math operations
+
+fn compute : n {
+    let a = 1;
+    let b = 2;
+    let c = 3;
+    let result = 0;
+    
+    for i in 0..n {
+        result = result + (a * b + c) / 2;
+        a = (a + 1) % 100;
+        b = (b * 2) % 100;
+        c = (c + 3) % 100;
+    }
+    
+    return result;
+}
+
+let result = compute(1000000);
+
+println(f"Arithmetic operations (1000000 iterations): {result}");

@@ -1,0 +1,36 @@
+// Bubble Sort Benchmark - Tests O(n²) sorting with lots of swaps
+// Intentionally inefficient to stress test loops
+
+fn bubble_sort : arr {
+    let n = len(arr);
+    let i = 0;
+    while i < n {
+        let j = 0;
+        while j < n - i - 1 {
+            if arr[j] > arr[j + 1] {
+                let temp = arr[j];
+                arr[j] = arr[j + 1];
+                arr[j + 1] = temp;
+            }
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    return arr;
+}
+
+fn generate_random_list : n, seed {
+    let result = [];
+    let current = seed;
+    for i in 0..n {
+        current = (current * 1103515245 + 12345) % 2147483648;
+        result = result + [current % 10000];
+    }
+    return result;
+}
+
+let data = generate_random_list(1000, 42);
+let sorted = bubble_sort(data);
+
+println(f"Bubble sort 1000 elements completed");
+println(f"First 5 sorted: {sorted[0]}, {sorted[1]}, {sorted[2]}, {sorted[3]}, {sorted[4]}");
