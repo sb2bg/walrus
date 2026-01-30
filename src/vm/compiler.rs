@@ -384,57 +384,144 @@ impl<'a> BytecodeEmitter<'a> {
                 }
             }
             NodeKind::For(name, iter, body) => {
-                self.emit(*iter)?;
+                // Check if this is a range-based for loop that we can optimize
+                if let NodeKind::Range(start_opt, end_node) = iter.kind() {
+                    // Optimized range loop - no heap allocation!
+                    // Emit start (default to 0) and end
+                    if let Some(start_node) = start_opt {
+                        self.emit(*start_node.clone())?;
+                    } else {
+                        // Push the integer 0
+                        let index = self.instructions.push_constant(Value::Int(0));
+                        let opcode = match index {
+                            0 => Opcode::LoadConst0,
+                            1 => Opcode::LoadConst1,
+                            _ => Opcode::LoadConst(index),
+                        };
+                        self.instructions.push(Instruction::new(opcode, span));
+                    }
+                    self.emit(*end_node.clone())?;
 
-                self.instructions
-                    .push(Instruction::new(Opcode::GetIter, span));
+                    // Reserve two locals for range tracking (OUTSIDE of depth scope so they persist)
+                    let range_idx = self.instructions.push_local(format!("__range_{}", name));
+                    let _ = self
+                        .instructions
+                        .push_local(format!("__range_end_{}", name));
 
-                let jump = self.instructions.len();
+                    // Initialize the range locals
+                    self.instructions
+                        .push(Instruction::new(Opcode::ForRangeInit(range_idx), span));
 
-                self.instructions
-                    .push(Instruction::new(Opcode::IterNext(0), span));
+                    // The loop variable slot (also outside depth scope for simplicity)
+                    let var_idx = self.instructions.push_local(name.clone());
 
-                self.inc_depth();
+                    let jump = self.instructions.len();
 
-                let index = self.instructions.push_local(name);
+                    // Placeholder for ForRangeNext - will be patched
+                    self.instructions
+                        .push(Instruction::new(Opcode::ForRangeNext(0, range_idx), span));
 
-                self.instructions
-                    .push(Instruction::new(Opcode::StoreAt(index), span));
+                    // Store the value into the loop variable
+                    self.instructions
+                        .push(Instruction::new(Opcode::StoreAt(var_idx), span));
 
-                // Push loop context AFTER defining loop variable
-                // locals_at_start is the count including the loop variable,
-                // so continue will pop body-declared vars but keep the loop var
-                self.loop_stack.push(LoopContext {
-                    start: jump,
-                    breaks: Vec::new(),
-                    is_for_loop: true,
-                    locals_at_start: self.instructions.local_len(),
-                });
+                    // Now increase depth for the loop body
+                    self.inc_depth();
 
-                self.emit(*body)?;
+                    // Push loop context
+                    self.loop_stack.push(LoopContext {
+                        start: jump,
+                        breaks: Vec::new(),
+                        is_for_loop: true,
+                        locals_at_start: self.instructions.local_len(),
+                    });
 
-                // Pop loop context before dec_depth so continue can reference it
-                let loop_ctx = self.loop_stack.pop();
+                    self.emit(*body)?;
 
-                // Pop locals declared in the loop body (but not the loop variable itself)
-                // This is crucial: without this, variables declared inside the loop body
-                // would reuse their slots on subsequent iterations, seeing stale values
-                self.dec_depth(span);
+                    let loop_ctx = self.loop_stack.pop();
 
-                self.instructions
-                    .push(Instruction::new(Opcode::Jump(jump as u32), span));
+                    // Only pop body locals, not range locals
+                    self.dec_depth(span);
 
-                self.instructions.set(
-                    jump,
-                    Instruction::new(Opcode::IterNext(self.instructions.len() as u32), span),
-                );
+                    self.instructions
+                        .push(Instruction::new(Opcode::Jump(jump as u32), span));
 
-                // Patch break jumps
-                if let Some(loop_ctx) = loop_ctx {
-                    let end = self.instructions.len();
-                    for break_addr in loop_ctx.breaks {
-                        self.instructions
-                            .set(break_addr, Instruction::new(Opcode::Jump(end as u32), span));
+                    // Patch the ForRangeNext to jump past the loop AND pop 3 locals (range_start, range_end, var)
+                    let end_pos = self.instructions.len();
+                    self.instructions.set(
+                        jump,
+                        Instruction::new(Opcode::ForRangeNext(end_pos as u32, range_idx), span),
+                    );
+
+                    // Pop the 3 range locals at the end
+                    self.instructions
+                        .push(Instruction::new(Opcode::PopLocal(3), span));
+
+                    // Patch break jumps (they need to jump past the PopLocal too)
+                    if let Some(loop_ctx) = loop_ctx {
+                        let end = self.instructions.len();
+                        for break_addr in loop_ctx.breaks {
+                            self.instructions
+                                .set(break_addr, Instruction::new(Opcode::Jump(end as u32), span));
+                        }
+                    }
+
+                    // Remove the 3 locals from symbol table
+                    self.instructions.pop_locals(3);
+                } else {
+                    // Generic iterator path (lists, strings, dicts, etc.)
+                    self.emit(*iter)?;
+
+                    self.instructions
+                        .push(Instruction::new(Opcode::GetIter, span));
+
+                    let jump = self.instructions.len();
+
+                    self.instructions
+                        .push(Instruction::new(Opcode::IterNext(0), span));
+
+                    self.inc_depth();
+
+                    let index = self.instructions.push_local(name);
+
+                    self.instructions
+                        .push(Instruction::new(Opcode::StoreAt(index), span));
+
+                    // Push loop context AFTER defining loop variable
+                    // locals_at_start is the count including the loop variable,
+                    // so continue will pop body-declared vars but keep the loop var
+                    self.loop_stack.push(LoopContext {
+                        start: jump,
+                        breaks: Vec::new(),
+                        is_for_loop: true,
+                        locals_at_start: self.instructions.local_len(),
+                    });
+
+                    self.emit(*body)?;
+
+                    // Pop loop context before dec_depth so continue can reference it
+                    let loop_ctx = self.loop_stack.pop();
+
+                    // Pop locals declared in the loop body (but not the loop variable itself)
+                    // This is crucial: without this, variables declared inside the loop body
+                    // would reuse their slots on subsequent iterations, seeing stale values
+                    self.dec_depth(span);
+
+                    self.instructions
+                        .push(Instruction::new(Opcode::Jump(jump as u32), span));
+
+                    self.instructions.set(
+                        jump,
+                        Instruction::new(Opcode::IterNext(self.instructions.len() as u32), span),
+                    );
+
+                    // Patch break jumps
+                    if let Some(loop_ctx) = loop_ctx {
+                        let end = self.instructions.len();
+                        for break_addr in loop_ctx.breaks {
+                            self.instructions
+                                .set(break_addr, Instruction::new(Opcode::Jump(end as u32), span));
+                        }
                     }
                 }
             }
@@ -677,6 +764,23 @@ impl<'a> BytecodeEmitter<'a> {
                         filename: self.source_ref.filename().to_string(),
                     });
                 };
+
+                // Optimization: use specialized increment/decrement opcodes for local variables
+                if !is_global {
+                    match optimize::analyze_reassign_for_increment(name.value(), &node, op) {
+                        optimize::ReassignOptimization::Increment => {
+                            self.instructions
+                                .push(Instruction::new(Opcode::IncrementLocal(index), span));
+                            return Ok(());
+                        }
+                        optimize::ReassignOptimization::Decrement => {
+                            self.instructions
+                                .push(Instruction::new(Opcode::DecrementLocal(index), span));
+                            return Ok(());
+                        }
+                        optimize::ReassignOptimization::None => {}
+                    }
+                }
 
                 // For compound assignments (+=, -=, etc.), we need to load the current value first
                 match op {

@@ -2,6 +2,7 @@
 //!
 //! This module contains optimization passes that can be applied during compilation:
 //! - Constant folding: Evaluate constant expressions at compile time
+//! - Increment/decrement detection: Recognize `x = x + 1` patterns
 //! - (Future) Dead code elimination
 //! - (Future) Strength reduction
 
@@ -10,6 +11,66 @@ use float_ord::FloatOrd;
 use crate::ast::{Node, NodeKind};
 use crate::value::Value;
 use crate::vm::opcode::Opcode;
+
+/// Result of analyzing a reassignment for optimization opportunities
+#[derive(Debug)]
+pub enum ReassignOptimization {
+    /// Can use IncrementLocal opcode
+    Increment,
+    /// Can use DecrementLocal opcode
+    Decrement,
+    /// No optimization available
+    None,
+}
+
+/// Analyze a reassignment to see if it can be optimized to increment/decrement.
+/// Detects patterns like:
+/// - `x += 1` (op is Add, node is Int(1))
+/// - `x -= 1` (op is Subtract, node is Int(1))
+/// - `x = x + 1` (op is Equal, node is BinOp(Ident(x), Add, Int(1)))
+/// - `x = 1 + x` (op is Equal, node is BinOp(Int(1), Add, Ident(x)))
+/// - `x = x - 1` (op is Equal, node is BinOp(Ident(x), Subtract, Int(1)))
+pub fn analyze_reassign_for_increment(
+    var_name: &str,
+    node: &Node,
+    op: Opcode,
+) -> ReassignOptimization {
+    // Check for x += 1 or x -= 1
+    if let NodeKind::Int(1) = node.kind() {
+        match op {
+            Opcode::Add => return ReassignOptimization::Increment,
+            Opcode::Subtract => return ReassignOptimization::Decrement,
+            _ => {}
+        }
+    }
+
+    // Check for x = x + 1, x = 1 + x, x = x - 1 patterns
+    if op == Opcode::Equal {
+        if let NodeKind::BinOp(lhs, bin_op, rhs) = node.kind() {
+            // Check for x = x + 1 or x = 1 + x
+            if *bin_op == Opcode::Add {
+                let is_increment = match (lhs.kind(), rhs.kind()) {
+                    (NodeKind::Ident(var), NodeKind::Int(1)) if var == var_name => true,
+                    (NodeKind::Int(1), NodeKind::Ident(var)) if var == var_name => true,
+                    _ => false,
+                };
+                if is_increment {
+                    return ReassignOptimization::Increment;
+                }
+            }
+            // Check for x = x - 1
+            if *bin_op == Opcode::Subtract {
+                if let (NodeKind::Ident(var), NodeKind::Int(1)) = (lhs.kind(), rhs.kind()) {
+                    if var == var_name {
+                        return ReassignOptimization::Decrement;
+                    }
+                }
+            }
+        }
+    }
+
+    ReassignOptimization::None
+}
 
 /// Try to evaluate a binary operation at compile time (constant folding).
 /// Returns Some(Value) if both operands are constants and the operation can be folded,

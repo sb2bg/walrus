@@ -111,6 +111,11 @@ impl InstructionSet {
         self.locals.dec_depth()
     }
 
+    /// Remove the last n locals from the symbol table (for optimized for-range loops)
+    pub fn pop_locals(&mut self, n: usize) {
+        self.locals.pop_n(n);
+    }
+
     pub fn len(&self) -> usize {
         self.instructions.len()
     }

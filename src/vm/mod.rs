@@ -113,21 +113,20 @@ impl<'a> VM<'a> {
     }
 
     /// Get the current call frame (the one at the top of the call stack)
-    #[inline]
+    #[inline(always)]
     fn current_frame(&self) -> &CallFrame {
-        self.call_stack
-            .last()
-            .expect("Call stack should never be empty")
+        // SAFETY: call_stack is never empty during VM execution (always has at least main frame)
+        unsafe { self.call_stack.last().unwrap_unchecked() }
     }
 
     /// Get the current frame pointer (start of current frame's locals)
-    #[inline]
+    #[inline(always)]
     fn frame_pointer(&self) -> usize {
         self.current_frame().frame_pointer
     }
 
     /// Get the current function name
-    #[inline]
+    #[inline(always)]
     fn function_name(&self) -> &str {
         &self.current_frame().function_name
     }
@@ -305,6 +304,71 @@ impl<'a> VM<'a> {
                 Opcode::LoadLocal3 => {
                     let fp = self.frame_pointer();
                     self.push(self.locals[fp + 3]);
+                }
+                // Specialized increment/decrement for loop counters (hot path)
+                Opcode::IncrementLocal(index) => {
+                    let fp = self.frame_pointer();
+                    let idx = fp + index as usize;
+                    if let Value::Int(v) = self.locals[idx] {
+                        self.locals[idx] = Value::Int(v + 1);
+                    } else {
+                        return Err(WalrusError::Exception {
+                            message: "IncrementLocal requires integer".to_string(),
+                            span,
+                            src: self.source_ref.source().into(),
+                            filename: self.source_ref.filename().into(),
+                        });
+                    }
+                }
+                Opcode::DecrementLocal(index) => {
+                    let fp = self.frame_pointer();
+                    let idx = fp + index as usize;
+                    if let Value::Int(v) = self.locals[idx] {
+                        self.locals[idx] = Value::Int(v - 1);
+                    } else {
+                        return Err(WalrusError::Exception {
+                            message: "DecrementLocal requires integer".to_string(),
+                            span,
+                            src: self.source_ref.source().into(),
+                            filename: self.source_ref.filename().into(),
+                        });
+                    }
+                }
+                // Optimized range loop - no heap allocation!
+                Opcode::ForRangeInit(local_idx) => {
+                    // Stack: [start, end] -> locals[idx] = start, locals[idx+1] = end
+                    let end = self.pop_unchecked();
+                    let start = self.pop_unchecked();
+                    let fp = self.frame_pointer();
+                    let idx = fp + local_idx as usize;
+                    // Ensure we have space for both values
+                    while self.locals.len() <= idx + 1 {
+                        self.locals.push(Value::Void);
+                    }
+                    self.locals[idx] = start;
+                    self.locals[idx + 1] = end;
+                }
+                Opcode::ForRangeNext(jump_target, local_idx) => {
+                    // Check if current < end, if so push current and increment, else jump
+                    let fp = self.frame_pointer();
+                    let idx = fp + local_idx as usize;
+                    if let (Value::Int(current), Value::Int(end)) =
+                        (self.locals[idx], self.locals[idx + 1])
+                    {
+                        if current < end {
+                            self.push(Value::Int(current));
+                            self.locals[idx] = Value::Int(current + 1);
+                        } else {
+                            self.ip = jump_target as usize;
+                        }
+                    } else {
+                        return Err(WalrusError::Exception {
+                            message: "ForRangeNext requires integer range bounds".to_string(),
+                            span,
+                            src: self.source_ref.source().into(),
+                            filename: self.source_ref.filename().into(),
+                        });
+                    }
                 }
                 Opcode::LoadGlobal(index) => {
                     let value = {
@@ -672,9 +736,54 @@ impl<'a> VM<'a> {
                         }
                     }
                 }
+                // Specialized integer arithmetic (hot path - skips type checking)
+                Opcode::AddInt => {
+                    // SAFETY: Compiler guarantees both operands are integers
+                    let b = self.stack.pop().unwrap();
+                    let a = self.stack.pop().unwrap();
+                    if let (Value::Int(a), Value::Int(b)) = (a, b) {
+                        self.push(Value::Int(a + b));
+                    } else {
+                        // Fallback for safety (shouldn't happen with correct compilation)
+                        return Err(WalrusError::Exception {
+                            message: "AddInt requires integers".to_string(),
+                            span,
+                            src: self.source_ref.source().into(),
+                            filename: self.source_ref.filename().into(),
+                        });
+                    }
+                }
+                Opcode::SubtractInt => {
+                    let b = self.stack.pop().unwrap();
+                    let a = self.stack.pop().unwrap();
+                    if let (Value::Int(a), Value::Int(b)) = (a, b) {
+                        self.push(Value::Int(a - b));
+                    } else {
+                        return Err(WalrusError::Exception {
+                            message: "SubtractInt requires integers".to_string(),
+                            span,
+                            src: self.source_ref.source().into(),
+                            filename: self.source_ref.filename().into(),
+                        });
+                    }
+                }
+                Opcode::LessInt => {
+                    let b = self.stack.pop().unwrap();
+                    let a = self.stack.pop().unwrap();
+                    if let (Value::Int(a), Value::Int(b)) = (a, b) {
+                        self.push(Value::Bool(a < b));
+                    } else {
+                        return Err(WalrusError::Exception {
+                            message: "LessInt requires integers".to_string(),
+                            span,
+                            src: self.source_ref.source().into(),
+                            filename: self.source_ref.filename().into(),
+                        });
+                    }
+                }
                 Opcode::Add => {
-                    let b = self.pop(opcode, span)?;
-                    let a = self.pop(opcode, span)?;
+                    let b = self.pop_unchecked();
+                    let a = self.pop_unchecked();
 
                     match (a, b) {
                         (Value::Int(a), Value::Int(b)) => {
@@ -720,8 +829,8 @@ impl<'a> VM<'a> {
                     }
                 }
                 Opcode::Subtract => {
-                    let b = self.pop(opcode, span)?;
-                    let a = self.pop(opcode, span)?;
+                    let b = self.pop_unchecked();
+                    let a = self.pop_unchecked();
 
                     match (a, b) {
                         (Value::Int(a), Value::Int(b)) => {
@@ -740,8 +849,8 @@ impl<'a> VM<'a> {
                     }
                 }
                 Opcode::Multiply => {
-                    let b = self.pop(opcode, span)?;
-                    let a = self.pop(opcode, span)?;
+                    let b = self.pop_unchecked();
+                    let a = self.pop_unchecked();
 
                     match (a, b) {
                         (Value::Int(a), Value::Int(b)) => {
@@ -1011,8 +1120,8 @@ impl<'a> VM<'a> {
                     }
                 }
                 Opcode::Less => {
-                    let b = self.pop(opcode, span)?;
-                    let a = self.pop(opcode, span)?;
+                    let b = self.pop_unchecked();
+                    let a = self.pop_unchecked();
 
                     match (a, b) {
                         (Value::Int(a), Value::Int(b)) => {
@@ -1670,10 +1779,12 @@ impl<'a> VM<'a> {
         }
     }
 
+    #[inline(always)]
     fn push(&mut self, value: Value) {
         self.stack.push(value);
     }
 
+    #[inline]
     fn pop(&mut self, op: Opcode, span: Span) -> WalrusResult<Value> {
         self.stack.pop().ok_or_else(|| WalrusError::StackUnderflow {
             op,
@@ -1681,6 +1792,13 @@ impl<'a> VM<'a> {
             src: self.source_ref.source().to_string(),
             filename: self.source_ref.filename().to_string(),
         })
+    }
+
+    /// Fast path pop - only use when stack is guaranteed to have values
+    #[inline(always)]
+    fn pop_unchecked(&mut self) -> Value {
+        // SAFETY: caller guarantees stack is not empty
+        unsafe { self.stack.pop().unwrap_unchecked() }
     }
 
     fn pop_n(&mut self, n: usize, op: Opcode, span: Span) -> WalrusResult<Vec<Value>> {

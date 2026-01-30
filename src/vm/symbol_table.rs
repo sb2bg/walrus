@@ -51,6 +51,12 @@ impl SymbolTable {
     pub fn len(&self) -> usize {
         self.locals.len()
     }
+
+    /// Remove the last n locals from the symbol table
+    pub fn pop_n(&mut self, n: usize) {
+        let new_len = self.locals.len().saturating_sub(n);
+        self.locals.truncate(new_len);
+    }
 }
 
 #[derive(Debug, Clone)]

@@ -33,6 +33,19 @@ pub enum Opcode {
     LoadGlobal2, // Load global at index 2
     LoadGlobal3, // Load global at index 3
 
+    // Specialized arithmetic (hot-path optimizations)
+    IncrementLocal(u32), // local[idx] += 1 (extremely common in loops)
+    DecrementLocal(u32), // local[idx] -= 1
+    AddInt,              // Integer addition (no type checking)
+    SubtractInt,         // Integer subtraction (no type checking)
+    LessInt,             // Integer less-than comparison
+
+    // Optimized range loops (avoids heap allocation for iterators)
+    // ForRangeInit: pops end, start from stack, stores in locals[idx] and locals[idx+1]
+    // ForRangeNext(jump_target, idx): if locals[idx] < locals[idx+1], push locals[idx]++, else jump
+    ForRangeInit(u32), // Initialize range loop: (local_idx for current, end stored at idx+1)
+    ForRangeNext(u32, u32), // (jump_if_done, local_idx) - increment and check
+
     // Stack manipulation
     Dup,  // Duplicate top of stack
     Swap, // Swap top two stack values
