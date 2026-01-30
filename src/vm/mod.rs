@@ -26,6 +26,36 @@ pub mod instruction_set;
 pub mod opcode;
 mod symbol_table;
 
+/// The Walrus Virtual Machine executes compiled bytecode.
+///
+/// # Architecture
+///
+/// ## Stack-Based Execution
+/// The VM uses a value stack for expression evaluation. Operations pop operands
+/// from the stack and push results back.
+///
+/// ## Local Variables
+/// Local variables are stored in a separate `locals` vector, indexed by compile-time
+/// assigned indices. This is more efficient than stack-relative access for frequently
+/// accessed locals.
+///
+/// ## Global Variables
+/// Globals are stored in a shared `Rc<RefCell<Vec<Value>>>` so all VMs (including
+/// child VMs for function calls) can access and modify them.
+///
+/// ## Function Calls
+/// Currently, each function call creates a child VM with:
+/// - Its own empty locals vector
+/// - Shared globals reference
+/// - Cloned instruction set from the function definition
+///
+/// This provides clean isolation but is less efficient than a call frame stack.
+/// A future optimization could use a single locals vector with frame pointers.
+///
+/// ## Memory Model
+/// Heap-allocated values (strings, lists, dicts, functions) are stored in a global
+/// arena (`ARENA`) and referenced by keys. The VM never directly holds heap data,
+/// only keys that index into the arena.
 #[derive(Debug)]
 pub struct VM<'a> {
     title: String,

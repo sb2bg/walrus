@@ -35,6 +35,33 @@ fn get_builtin(name: &str) -> Option<BuiltinInfo> {
     }
 }
 
+/// BytecodeEmitter compiles AST nodes into VM bytecode.
+///
+/// # Architecture Notes
+///
+/// ## Scope and Locals
+/// The compiler tracks variable scopes using a depth counter and a symbol table.
+/// Local variables are indexed by their position in the `locals` vector, which
+/// is used by the VM at runtime. When a scope ends, `PopLocal` is emitted to
+/// clean up the locals vector.
+///
+/// ## Function Compilation
+/// Functions are compiled into separate `InstructionSet`s with their own symbol
+/// tables. The VM creates a child VM for each function call, which provides
+/// isolation but is less efficient than a proper call frame stack.
+///
+/// ## Closures (LIMITATION)
+/// Currently, nested functions cannot capture variables from enclosing function
+/// scopes. Only global variables are accessible within nested functions.
+/// Implementing closures would require:
+/// 1. Tracking "upvalues" - variables captured from enclosing scopes
+/// 2. Adding LoadUpvalue/StoreUpvalue opcodes  
+/// 3. Storing captured variables with the function object
+///
+/// ## Future Improvements
+/// - Implement proper call frames with a frame pointer instead of child VMs
+/// - Add closure/upvalue support for nested function variable capture
+/// - Consider using Rc<InstructionSet> to avoid cloning on function calls
 pub struct BytecodeEmitter<'a> {
     instructions: InstructionSet,
     source_ref: SourceRef<'a>,
