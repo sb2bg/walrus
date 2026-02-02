@@ -222,6 +222,138 @@ impl<'a> VM<'a> {
         trace
     }
 
+    /// Call a native stdlib function
+    fn call_native(
+        &mut self,
+        native_fn: crate::function::NativeFunction,
+        args: Vec<Value>,
+        span: Span,
+    ) -> WalrusResult<Value> {
+        use crate::function::NativeFunction;
+
+        // Check arity
+        if args.len() != native_fn.arity() {
+            return Err(WalrusError::InvalidArgCount {
+                name: native_fn.name().to_string(),
+                expected: native_fn.arity(),
+                got: args.len(),
+                span,
+                src: self.source_ref.source().into(),
+                filename: self.source_ref.filename().into(),
+            });
+        }
+
+        match native_fn {
+            NativeFunction::FileOpen => {
+                let path = self.value_to_string(args[0], span)?;
+                let mode = self.value_to_string(args[1], span)?;
+                crate::stdlib::file_open(&path, &mode, span)
+            }
+            NativeFunction::FileRead => {
+                let handle = self.value_to_int(args[0], span)?;
+                let content = crate::stdlib::file_read(handle, span)?;
+                let value = self.get_heap_mut().push(HeapValue::String(&content));
+                Ok(value)
+            }
+            NativeFunction::FileReadLine => {
+                let handle = self.value_to_int(args[0], span)?;
+                match crate::stdlib::file_read_line(handle, span)? {
+                    Some(line) => {
+                        let value = self.get_heap_mut().push(HeapValue::String(&line));
+                        Ok(value)
+                    }
+                    None => Ok(Value::Void),
+                }
+            }
+            NativeFunction::FileWrite => {
+                let handle = self.value_to_int(args[0], span)?;
+                let content = self.value_to_string(args[1], span)?;
+                let bytes = crate::stdlib::file_write(handle, &content, span)?;
+                Ok(Value::Int(bytes))
+            }
+            NativeFunction::FileClose => {
+                let handle = self.value_to_int(args[0], span)?;
+                crate::stdlib::file_close(handle, span)?;
+                Ok(Value::Void)
+            }
+            NativeFunction::FileExists => {
+                let path = self.value_to_string(args[0], span)?;
+                Ok(Value::Bool(crate::stdlib::file_exists(&path)))
+            }
+            NativeFunction::ReadFile => {
+                let path = self.value_to_string(args[0], span)?;
+                let content = crate::stdlib::read_file(&path, span)?;
+                let value = self.get_heap_mut().push(HeapValue::String(&content));
+                Ok(value)
+            }
+            NativeFunction::WriteFile => {
+                let path = self.value_to_string(args[0], span)?;
+                let content = self.value_to_string(args[1], span)?;
+                crate::stdlib::write_file(&path, &content, span)?;
+                Ok(Value::Void)
+            }
+            NativeFunction::EnvGet => {
+                let name = self.value_to_string(args[0], span)?;
+                match crate::stdlib::env_get(&name) {
+                    Some(value) => {
+                        let v = self.get_heap_mut().push(HeapValue::String(&value));
+                        Ok(v)
+                    }
+                    None => Ok(Value::Void),
+                }
+            }
+            NativeFunction::Args => {
+                let args = crate::stdlib::args();
+                let mut list = Vec::with_capacity(args.len());
+                for arg in args {
+                    let s = self.get_heap_mut().push(HeapValue::String(&arg));
+                    list.push(s);
+                }
+                let list_val = self.get_heap_mut().push(HeapValue::List(list));
+                Ok(list_val)
+            }
+            NativeFunction::Cwd => {
+                match crate::stdlib::cwd() {
+                    Some(path) => {
+                        let v = self.get_heap_mut().push(HeapValue::String(&path));
+                        Ok(v)
+                    }
+                    None => Ok(Value::Void),
+                }
+            }
+            NativeFunction::Exit => {
+                let code = self.value_to_int(args[0], span)?;
+                std::process::exit(code as i32);
+            }
+        }
+    }
+
+    /// Helper to extract string from Value
+    fn value_to_string(&self, value: Value, span: Span) -> WalrusResult<String> {
+        match value {
+            Value::String(key) => Ok(self.get_heap().get_string(key)?.to_string()),
+            _ => Err(WalrusError::Exception {
+                message: format!("Expected string, got {}", value.get_type()),
+                span,
+                src: self.source_ref.source().into(),
+                filename: self.source_ref.filename().into(),
+            }),
+        }
+    }
+
+    /// Helper to extract int from Value
+    fn value_to_int(&self, value: Value, span: Span) -> WalrusResult<i64> {
+        match value {
+            Value::Int(n) => Ok(n),
+            _ => Err(WalrusError::Exception {
+                message: format!("Expected int, got {}", value.get_type()),
+                span,
+                src: self.source_ref.source().into(),
+                filename: self.source_ref.filename().into(),
+            }),
+        }
+    }
+
     /// Run the VM and add stack trace information to any errors
     pub fn run(&mut self) -> WalrusResult<Value> {
         match self.run_inner() {
@@ -582,6 +714,10 @@ impl<'a> VM<'a> {
                                     let result = func.call(args, self.source_ref, span)?;
                                     self.push(result);
                                 }
+                                WalrusFunction::Native(native_fn) => {
+                                    let result = self.call_native(*native_fn, args, span)?;
+                                    self.push(result);
+                                }
                                 WalrusFunction::Vm(func) => {
                                     if args.len() != func.arity {
                                         return Err(WalrusError::InvalidArgCount {
@@ -665,6 +801,23 @@ impl<'a> VM<'a> {
 
                                     // For a tail call, we need to return this result
                                     // Pop the current frame and push the result
+                                    let frame = self
+                                        .call_stack
+                                        .pop()
+                                        .expect("Call stack should never be empty on tail call");
+
+                                    if self.call_stack.is_empty() {
+                                        return Ok(result);
+                                    }
+
+                                    self.locals.truncate(frame.frame_pointer);
+                                    self.ip = frame.return_ip;
+                                    self.push(result);
+                                }
+                                WalrusFunction::Native(native_fn) => {
+                                    let result = self.call_native(*native_fn, args, span)?;
+                                    
+                                    // For a tail call, we need to return this result
                                     let frame = self
                                         .call_stack
                                         .pop()
@@ -1511,6 +1664,43 @@ impl<'a> VM<'a> {
                         }
                     }
                 }
+                // Import system - returns a module dict with native functions
+                Opcode::Import => {
+                    let module_name = self.pop(opcode, span)?;
+                    match module_name {
+                        Value::String(name_key) => {
+                            let name_str = self.get_heap().get_string(name_key)?;
+                            if let Some(functions) = crate::stdlib::get_module_functions(name_str) {
+                                // Build a dict where keys are function names and values are the functions
+                                let mut dict = FxHashMap::default();
+                                for native_fn in functions {
+                                    let key = self.get_heap_mut().push(HeapValue::String(native_fn.name()));
+                                    let func = self.get_heap_mut().push(HeapValue::Function(
+                                        WalrusFunction::Native(native_fn)
+                                    ));
+                                    dict.insert(key, func);
+                                }
+                                let module = self.get_heap_mut().push(HeapValue::Dict(dict));
+                                self.push(module);
+                            } else {
+                                return Err(WalrusError::Exception {
+                                    message: format!("Unknown module: '{}'. Available: std/io, std/sys", name_str),
+                                    span,
+                                    src: self.source_ref.source().into(),
+                                    filename: self.source_ref.filename().into(),
+                                });
+                            }
+                        }
+                        _ => {
+                            return Err(WalrusError::Exception {
+                                message: "import requires a string module name".to_string(),
+                                span,
+                                src: self.source_ref.source().into(),
+                                filename: self.source_ref.filename().into(),
+                            });
+                        }
+                    }
+                }
                 Opcode::Return => {
                     let return_value = self.pop(opcode, span)?;
 
@@ -1669,15 +1859,37 @@ impl<'a> VM<'a> {
                             &src,
                             &filename,
                         )?,
-                        Value::Dict(key) => methods::dispatch_dict_method(
-                            self.get_heap_mut(),
-                            key,
-                            &method_name,
-                            args,
-                            span,
-                            &src,
-                            &filename,
-                        )?,
+                        Value::Dict(key) => {
+                            // First, check if this dict contains a native function with this name
+                            let method_key = self
+                                .get_heap_mut()
+                                .push(HeapValue::String(&method_name));
+                            
+                            let dict = self.get_heap().get_dict(key)?;
+                            
+                            if let Some(func_val) = dict.get(&method_key).copied() {
+                                if let Value::Function(func_key) = func_val {
+                                    let func = self.get_heap().get_function(func_key)?.clone();
+                                    if let WalrusFunction::Native(native) = func {
+                                        // Call the native function and push result
+                                        let result = self.call_native(native, args, span)?;
+                                        self.push(result);
+                                        continue; // Skip the push at the end
+                                    }
+                                }
+                            }
+
+                            // Otherwise, use regular dict method dispatch
+                            methods::dispatch_dict_method(
+                                self.get_heap_mut(),
+                                key,
+                                &method_name,
+                                args,
+                                span,
+                                &src,
+                                &filename,
+                            )?
+                        },
                         Value::StructDef(key) => {
                             // For struct definitions, look up the method and call it
                             let method = {

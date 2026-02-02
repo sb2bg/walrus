@@ -1058,6 +1058,47 @@ impl<'a> BytecodeEmitter<'a> {
                 self.instructions
                     .push(Instruction::new(Opcode::StoreIndex, span));
             }
+            NodeKind::ModuleImport(module_name, alias) => {
+                // Push the module name as a string constant
+                let name_val = self
+                    .instructions
+                    .get_heap_mut()
+                    .push(HeapValue::String(&module_name));
+                let index = self.instructions.push_constant(name_val);
+                let opcode = match index {
+                    0 => Opcode::LoadConst0,
+                    1 => Opcode::LoadConst1,
+                    _ => Opcode::LoadConst(index),
+                };
+                self.instructions.push(Instruction::new(opcode, span));
+
+                // Emit the Import opcode
+                self.instructions
+                    .push(Instruction::new(Opcode::Import, span));
+
+                // Store the module dict in a variable
+                let var_name = alias.unwrap_or_else(|| {
+                    // Extract last component of module path as default name
+                    // e.g., "std/io" -> "io"
+                    module_name
+                        .rsplit('/')
+                        .next()
+                        .unwrap_or(&module_name)
+                        .to_string()
+                });
+
+                if self.depth == 0 {
+                    self.define_global_variable(var_name, span);
+                } else {
+                    self.define_variable(var_name, span);
+                }
+            }
+            NodeKind::PackageImport(_, _) => {
+                // Package imports not yet implemented
+                return Err(WalrusError::GenericError {
+                    message: "Package imports (@package) are not yet implemented".to_string(),
+                });
+            }
             _ => unimplemented!("{}", kind),
         }
 

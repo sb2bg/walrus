@@ -441,7 +441,8 @@ impl<'a> Interpreter<'a> {
                         // todo: I'm pretty sure this clone is required but see if we can avoid it
                         sub_interpreter.interpret(node_fn.body.clone())
                     }
-                    WalrusFunction::Vm(_) => unsafe {
+                    WalrusFunction::Vm(_) | WalrusFunction::Native(_) => unsafe {
+                        // Native functions are only available in the VM
                         unreachable_unchecked();
                     },
                 }

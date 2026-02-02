@@ -1,0 +1,16 @@
+import "std/io";
+println(io);
+
+// Test write and read
+io.write_file("/tmp/test_walrus.txt", "Hello from Walrus!");
+let content = io.read_file("/tmp/test_walrus.txt");
+println(content);
+
+// Test file exists
+println(io.file_exists("/tmp/test_walrus.txt"));
+println(io.file_exists("/tmp/nonexistent_file.txt"));
+
+import "std/sys";
+
+// sys.exit(1);
+println(sys.env_get("DEBUG"));

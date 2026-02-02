@@ -22,6 +22,7 @@ mod range;
 mod scope;
 mod source_ref;
 mod span;
+mod stdlib;
 mod structs;
 mod value;
 pub mod vm;

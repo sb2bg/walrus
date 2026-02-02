@@ -67,6 +67,62 @@ pub enum WalrusFunction {
     Rust(RustFunction),
     TreeWalk(NodeFunction),
     Vm(VmFunction),
+    Native(NativeFunction),
+}
+
+/// Native function ID for stdlib functions callable from VM
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum NativeFunction {
+    // File I/O
+    FileOpen,
+    FileRead,
+    FileReadLine,
+    FileWrite,
+    FileClose,
+    FileExists,
+    ReadFile,
+    WriteFile,
+    // System
+    EnvGet,
+    Args,
+    Cwd,
+    Exit,
+}
+
+impl NativeFunction {
+    pub fn name(&self) -> &'static str {
+        match self {
+            NativeFunction::FileOpen => "file_open",
+            NativeFunction::FileRead => "file_read",
+            NativeFunction::FileReadLine => "file_read_line",
+            NativeFunction::FileWrite => "file_write",
+            NativeFunction::FileClose => "file_close",
+            NativeFunction::FileExists => "file_exists",
+            NativeFunction::ReadFile => "read_file",
+            NativeFunction::WriteFile => "write_file",
+            NativeFunction::EnvGet => "env_get",
+            NativeFunction::Args => "args",
+            NativeFunction::Cwd => "cwd",
+            NativeFunction::Exit => "exit",
+        }
+    }
+
+    pub fn arity(&self) -> usize {
+        match self {
+            NativeFunction::FileOpen => 2,
+            NativeFunction::FileRead => 1,
+            NativeFunction::FileReadLine => 1,
+            NativeFunction::FileWrite => 2,
+            NativeFunction::FileClose => 1,
+            NativeFunction::FileExists => 1,
+            NativeFunction::ReadFile => 1,
+            NativeFunction::WriteFile => 2,
+            NativeFunction::EnvGet => 1,
+            NativeFunction::Args => 0,
+            NativeFunction::Cwd => 0,
+            NativeFunction::Exit => 1,
+        }
+    }
 }
 
 impl Display for WalrusFunction {
@@ -78,6 +134,7 @@ impl Display for WalrusFunction {
                 WalrusFunction::Rust(func) => format!("<builtin_function({})>", func.name),
                 WalrusFunction::TreeWalk(func) => format!("<function({})>", func.name),
                 WalrusFunction::Vm(func) => format!("<function({})>", func.name),
+                WalrusFunction::Native(func) => format!("<native_function({})>", func.name()),
             }
         )
     }
@@ -89,6 +146,7 @@ impl PartialEq for WalrusFunction {
             (WalrusFunction::Rust(f1), WalrusFunction::Rust(f2)) => cmp(f1, f2),
             (WalrusFunction::TreeWalk(f1), WalrusFunction::TreeWalk(f2)) => cmp(f1, f2),
             (WalrusFunction::Vm(f1), WalrusFunction::Vm(f2)) => cmp(f1, f2),
+            (WalrusFunction::Native(f1), WalrusFunction::Native(f2)) => f1 == f2,
             _ => false,
         }
     }

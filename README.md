@@ -65,6 +65,91 @@ Walrus is a dynamically-typed, interpreted programming language that combines si
 | `__heap_stats__()`    | Get heap statistics as a dict       |
 | `__gc_threshold__(n)` | Configure GC allocation threshold   |
 
+### Standard Library
+
+Walrus provides a standard library through an import system. Modules are imported using the `import` statement and return a dictionary of functions.
+
+```walrus
+import "std/io";
+import "std/sys" as system;
+```
+
+#### `std/io` - File I/O Operations
+
+| Function                         | Description                                           |
+| -------------------------------- | ----------------------------------------------------- |
+| `io.file_open(path, mode)`       | Open a file, returns a handle. Modes: `"r"`, `"w"`, `"a"`, `"rw"` |
+| `io.file_read(handle)`           | Read entire file contents as string                   |
+| `io.file_read_line(handle)`      | Read a single line (returns `nil` at EOF)             |
+| `io.file_write(handle, content)` | Write string to file, returns bytes written           |
+| `io.file_close(handle)`          | Close a file handle                                   |
+| `io.file_exists(path)`           | Check if a file exists (returns bool)                 |
+| `io.read_file(path)`             | Convenience: read entire file in one call             |
+| `io.write_file(path, content)`   | Convenience: write entire file in one call            |
+
+**Example: File Operations**
+
+```walrus
+import "std/io";
+
+// Simple read/write (convenience functions)
+io.write_file("hello.txt", "Hello, Walrus!");
+let content = io.read_file("hello.txt");
+println(content);  // Hello, Walrus!
+
+// Handle-based operations (for larger files or streaming)
+let handle = io.file_open("data.txt", "w");
+io.file_write(handle, "Line 1\n");
+io.file_write(handle, "Line 2\n");
+io.file_close(handle);
+
+// Reading with handles
+let reader = io.file_open("data.txt", "r");
+let line = io.file_read_line(reader);
+while line != nil {
+    println(line);
+    line = io.file_read_line(reader);
+}
+io.file_close(reader);
+```
+
+#### `std/sys` - System Operations
+
+| Function             | Description                                    |
+| -------------------- | ---------------------------------------------- |
+| `sys.env_get(name)`  | Get environment variable (returns `nil` if not set) |
+| `sys.args()`         | Get command line arguments as a list           |
+| `sys.cwd()`          | Get current working directory                  |
+| `sys.exit(code)`     | Exit the program with the given status code    |
+
+**Example: System Information**
+
+```walrus
+import "std/sys";
+
+// Environment variables
+let home = sys.env_get("HOME");
+if home != nil {
+    println(f"Home directory: {home}");
+}
+
+// Command line arguments
+let args = sys.args();
+println(f"Program: {args[0]}");
+if len(args) > 1 {
+    println(f"Arguments: {args[1..]}");
+}
+
+// Current directory
+println(f"Working directory: {sys.cwd()}");
+
+// Exit with status
+if len(args) < 2 {
+    println("Usage: walrus script.walrus <args>");
+    sys.exit(1);
+}
+```
+
 ### Developer Experience
 
 - **REPL Mode**: Interactive shell for rapid prototyping

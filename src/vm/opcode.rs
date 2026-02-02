@@ -93,6 +93,7 @@ pub enum Opcode {
     Gc,        // Trigger garbage collection, returns dict with stats
     HeapStats, // Get heap statistics as a dict
     GcConfig,  // Configure GC threshold (takes 1 int arg)
+    Import,    // (module_name) -> dict of native functions
 }
 
 impl Display for Opcode {
