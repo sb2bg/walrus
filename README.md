@@ -76,16 +76,16 @@ import "std/sys" as system;
 
 #### `std/io` - File I/O Operations
 
-| Function                         | Description                                           |
-| -------------------------------- | ----------------------------------------------------- |
+| Function                         | Description                                                       |
+| -------------------------------- | ----------------------------------------------------------------- |
 | `io.file_open(path, mode)`       | Open a file, returns a handle. Modes: `"r"`, `"w"`, `"a"`, `"rw"` |
-| `io.file_read(handle)`           | Read entire file contents as string                   |
-| `io.file_read_line(handle)`      | Read a single line (returns `nil` at EOF)             |
-| `io.file_write(handle, content)` | Write string to file, returns bytes written           |
-| `io.file_close(handle)`          | Close a file handle                                   |
-| `io.file_exists(path)`           | Check if a file exists (returns bool)                 |
-| `io.read_file(path)`             | Convenience: read entire file in one call             |
-| `io.write_file(path, content)`   | Convenience: write entire file in one call            |
+| `io.file_read(handle)`           | Read entire file contents as string                               |
+| `io.file_read_line(handle)`      | Read a single line (returns `nil` at EOF)                         |
+| `io.file_write(handle, content)` | Write string to file, returns bytes written                       |
+| `io.file_close(handle)`          | Close a file handle                                               |
+| `io.file_exists(path)`           | Check if a file exists (returns bool)                             |
+| `io.read_file(path)`             | Convenience: read entire file in one call                         |
+| `io.write_file(path, content)`   | Convenience: write entire file in one call                        |
 
 **Example: File Operations**
 
@@ -115,12 +115,12 @@ io.file_close(reader);
 
 #### `std/sys` - System Operations
 
-| Function             | Description                                    |
-| -------------------- | ---------------------------------------------- |
-| `sys.env_get(name)`  | Get environment variable (returns `nil` if not set) |
-| `sys.args()`         | Get command line arguments as a list           |
-| `sys.cwd()`          | Get current working directory                  |
-| `sys.exit(code)`     | Exit the program with the given status code    |
+| Function            | Description                                         |
+| ------------------- | --------------------------------------------------- |
+| `sys.env_get(name)` | Get environment variable (returns `nil` if not set) |
+| `sys.args()`        | Get command line arguments as a list                |
+| `sys.cwd()`         | Get current working directory                       |
+| `sys.exit(code)`    | Exit the program with the given status code         |
 
 **Example: System Information**
 

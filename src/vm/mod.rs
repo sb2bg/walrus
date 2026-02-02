@@ -312,15 +312,13 @@ impl<'a> VM<'a> {
                 let list_val = self.get_heap_mut().push(HeapValue::List(list));
                 Ok(list_val)
             }
-            NativeFunction::Cwd => {
-                match crate::stdlib::cwd() {
-                    Some(path) => {
-                        let v = self.get_heap_mut().push(HeapValue::String(&path));
-                        Ok(v)
-                    }
-                    None => Ok(Value::Void),
+            NativeFunction::Cwd => match crate::stdlib::cwd() {
+                Some(path) => {
+                    let v = self.get_heap_mut().push(HeapValue::String(&path));
+                    Ok(v)
                 }
-            }
+                None => Ok(Value::Void),
+            },
             NativeFunction::Exit => {
                 let code = self.value_to_int(args[0], span)?;
                 std::process::exit(code as i32);
@@ -816,7 +814,7 @@ impl<'a> VM<'a> {
                                 }
                                 WalrusFunction::Native(native_fn) => {
                                     let result = self.call_native(*native_fn, args, span)?;
-                                    
+
                                     // For a tail call, we need to return this result
                                     let frame = self
                                         .call_stack
@@ -1674,9 +1672,11 @@ impl<'a> VM<'a> {
                                 // Build a dict where keys are function names and values are the functions
                                 let mut dict = FxHashMap::default();
                                 for native_fn in functions {
-                                    let key = self.get_heap_mut().push(HeapValue::String(native_fn.name()));
+                                    let key = self
+                                        .get_heap_mut()
+                                        .push(HeapValue::String(native_fn.name()));
                                     let func = self.get_heap_mut().push(HeapValue::Function(
-                                        WalrusFunction::Native(native_fn)
+                                        WalrusFunction::Native(native_fn),
                                     ));
                                     dict.insert(key, func);
                                 }
@@ -1684,7 +1684,10 @@ impl<'a> VM<'a> {
                                 self.push(module);
                             } else {
                                 return Err(WalrusError::Exception {
-                                    message: format!("Unknown module: '{}'. Available: std/io, std/sys", name_str),
+                                    message: format!(
+                                        "Unknown module: '{}'. Available: std/io, std/sys",
+                                        name_str
+                                    ),
                                     span,
                                     src: self.source_ref.source().into(),
                                     filename: self.source_ref.filename().into(),
@@ -1861,12 +1864,11 @@ impl<'a> VM<'a> {
                         )?,
                         Value::Dict(key) => {
                             // First, check if this dict contains a native function with this name
-                            let method_key = self
-                                .get_heap_mut()
-                                .push(HeapValue::String(&method_name));
-                            
+                            let method_key =
+                                self.get_heap_mut().push(HeapValue::String(&method_name));
+
                             let dict = self.get_heap().get_dict(key)?;
-                            
+
                             if let Some(func_val) = dict.get(&method_key).copied() {
                                 if let Value::Function(func_key) = func_val {
                                     let func = self.get_heap().get_function(func_key)?.clone();
@@ -1889,7 +1891,7 @@ impl<'a> VM<'a> {
                                 &src,
                                 &filename,
                             )?
-                        },
+                        }
                         Value::StructDef(key) => {
                             // For struct definitions, look up the method and call it
                             let method = {

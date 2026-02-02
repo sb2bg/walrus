@@ -10,11 +10,11 @@ use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::Path;
 
+use crate::WalrusResult;
 use crate::error::WalrusError;
 use crate::function::NativeFunction;
 use crate::span::Span;
 use crate::value::Value;
-use crate::WalrusResult;
 
 // File handle table - maps integer handles to open files
 thread_local! {
@@ -84,9 +84,21 @@ pub fn get_module_functions(module: &str) -> Option<Vec<NativeFunction>> {
 pub fn file_open(path: &str, mode: &str, span: Span) -> WalrusResult<Value> {
     let file = match mode {
         "r" => OpenOptions::new().read(true).open(path),
-        "w" => OpenOptions::new().write(true).create(true).truncate(true).open(path),
-        "a" => OpenOptions::new().write(true).create(true).append(true).open(path),
-        "rw" => OpenOptions::new().read(true).write(true).create(true).open(path),
+        "w" => OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(path),
+        "a" => OpenOptions::new()
+            .write(true)
+            .create(true)
+            .append(true)
+            .open(path),
+        "rw" => OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(path),
         _ => {
             return Err(WalrusError::Exception {
                 message: format!("Invalid file mode '{}'. Use 'r', 'w', 'a', or 'rw'", mode),
@@ -100,7 +112,9 @@ pub fn file_open(path: &str, mode: &str, span: Span) -> WalrusResult<Value> {
     match file {
         Ok(f) => {
             let handle = FILE_TABLE.with(|table| {
-                table.borrow_mut().insert(f, path.to_string(), mode.to_string())
+                table
+                    .borrow_mut()
+                    .insert(f, path.to_string(), mode.to_string())
             });
             Ok(Value::Int(handle))
         }
@@ -272,5 +286,7 @@ pub fn args() -> Vec<String> {
 
 /// Get current working directory
 pub fn cwd() -> Option<String> {
-    std::env::current_dir().ok().map(|p| p.to_string_lossy().to_string())
+    std::env::current_dir()
+        .ok()
+        .map(|p| p.to_string_lossy().to_string())
 }
