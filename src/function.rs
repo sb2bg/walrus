@@ -1,3 +1,5 @@
+use rustc_hash::FxHashMap;
+
 use crate::ast::Node;
 use crate::interpreter::InterpreterResult;
 use crate::source_ref::SourceRef;
@@ -33,6 +35,8 @@ pub struct NodeFunction {
     pub name: String,
     pub args: Vec<String>,
     pub body: Node,
+    /// Captured variables from the enclosing scope (for closures)
+    pub captures: FxHashMap<String, Value>,
 }
 
 impl NodeFunction {
@@ -41,6 +45,21 @@ impl NodeFunction {
             name,
             args,
             body: node,
+            captures: FxHashMap::default(),
+        }
+    }
+
+    pub fn new_with_captures(
+        name: String,
+        args: Vec<String>,
+        node: Node,
+        captures: FxHashMap<String, Value>,
+    ) -> Self {
+        Self {
+            name,
+            args,
+            body: node,
+            captures,
         }
     }
 }
