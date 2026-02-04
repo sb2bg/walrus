@@ -216,6 +216,18 @@ let count = 0;
 for _ in 0..n {
     count = count + 1;
 }
+
+// Pattern 4: Simple println of loop variable
+for i in 0..n {
+    println(i);  // Single println of integer is JIT-compiled
+}
+
+// Pattern 5: Sum with println
+let sum = 0;
+for i in 0..n {
+    sum = sum + i;
+    println(i);  // Can be combined with accumulation
+}
 ```
 
 **❌ NOT JIT-Compatible (falls back to interpreter):**
@@ -226,9 +238,10 @@ for i in 0..n {
     result = compute(i);  // Contains Call opcode
 }
 
-// I/O operations
+// Multiple print operations per iteration
 for i in 0..n {
-    println(i);  // Contains Print/Println opcode
+    print(i);     // Multiple prints = not JIT-compatible
+    print(" ");   // String printing not yet supported
 }
 
 // Complex operations (method calls, string ops, etc.)
@@ -243,7 +256,8 @@ for i in 0..n {
 2. **Type Analysis**: Tracks runtime types to ensure type stability
 3. **Bytecode Analysis**: Examines loop body for JIT-compatible operations
 4. **Native Code Generation**: Uses Cranelift to compile to native machine code
-5. **Seamless Execution**: JIT code reads/writes the same local variables as the interpreter
+5. **External Callbacks**: Print operations call back into Rust for I/O
+6. **Seamless Execution**: JIT code reads/writes the same local variables as the interpreter
 
 **Example JIT Output (with `--jit-stats`):**
 
