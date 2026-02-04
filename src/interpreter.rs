@@ -6,7 +6,7 @@ use rustc_hash::FxHashMap;
 use uuid::Uuid;
 
 use crate::WalrusResult;
-use crate::arenas::{Free, HeapValue, Resolve, ResolveMut};
+use crate::arenas::{Free, HeapValue, Resolve};
 use crate::ast::{Node, NodeKind};
 use crate::error::WalrusError;
 use crate::function::{NodeFunction, WalrusFunction};
@@ -157,6 +157,53 @@ impl<'a> Interpreter<'a> {
         right: Node,
         span: Span,
     ) -> InterpreterResult {
+        // Handle short-circuit evaluation for and/or
+        // These operators must evaluate left first and only evaluate right if needed
+        match op {
+            Opcode::And => {
+                let left_val = self.interpret(left)?;
+                // Short-circuit: if left is falsy, return false without evaluating right
+                match left_val {
+                    Value::Bool(false) => return Ok(Value::Bool(false)),
+                    Value::Bool(true) => {
+                        let right_val = self.interpret(right)?;
+                        return self.and(left_val, right_val, span);
+                    }
+                    _ => {
+                        return Err(WalrusError::TypeMismatch {
+                            expected: "bool".to_string(),
+                            found: left_val.get_type().to_string(),
+                            span,
+                            src: self.source_ref.source().to_string(),
+                            filename: self.source_ref.filename().to_string(),
+                        });
+                    }
+                }
+            }
+            Opcode::Or => {
+                let left_val = self.interpret(left)?;
+                // Short-circuit: if left is truthy, return true without evaluating right
+                match left_val {
+                    Value::Bool(true) => return Ok(Value::Bool(true)),
+                    Value::Bool(false) => {
+                        let right_val = self.interpret(right)?;
+                        return self.or(left_val, right_val, span);
+                    }
+                    _ => {
+                        return Err(WalrusError::TypeMismatch {
+                            expected: "bool".to_string(),
+                            found: left_val.get_type().to_string(),
+                            span,
+                            src: self.source_ref.source().to_string(),
+                            filename: self.source_ref.filename().to_string(),
+                        });
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        // Non-short-circuit operators: evaluate both sides
         let left_val = self.interpret(left)?;
         let right_val = self.interpret(right)?;
 
@@ -173,8 +220,7 @@ impl<'a> Interpreter<'a> {
             Opcode::LessEqual => self.less_equal(left_val, right_val, span),
             Opcode::Greater => self.greater(left_val, right_val, span),
             Opcode::GreaterEqual => self.greater_equal(left_val, right_val, span),
-            Opcode::And => self.and(left_val, right_val, span),
-            Opcode::Or => self.or(left_val, right_val, span),
+            Opcode::And | Opcode::Or => unreachable!(), // Handled above
             _ => Err(WalrusError::UnknownError {
                 message: format!("Unknown binary operator {}", op),
             }),
@@ -240,21 +286,44 @@ impl<'a> Interpreter<'a> {
     }
 
     fn visit_anon_fn_def(&mut self, args: Vec<String>, body: Node) -> InterpreterResult {
+        use crate::ast::collect_free_variables;
+
         let fn_name = format!("anon_{}", Uuid::new_v4());
 
+        // Capture free variables from the current scope
+        let free_vars = collect_free_variables(&body, &args);
+        let mut captures = FxHashMap::default();
+        for var in free_vars {
+            if let Some(value) = self.scope.get(&var) {
+                captures.insert(var, value);
+            }
+        }
+
         Ok(
-            HeapValue::Function(WalrusFunction::TreeWalk(NodeFunction::new(
-                fn_name, args, body,
+            HeapValue::Function(WalrusFunction::TreeWalk(NodeFunction::new_with_captures(
+                fn_name, args, body, captures,
             )))
             .alloc(),
         )
     }
 
     fn visit_fn_def(&mut self, name: String, args: Vec<String>, body: Node) -> InterpreterResult {
-        let value = HeapValue::Function(WalrusFunction::TreeWalk(NodeFunction::new(
+        use crate::ast::collect_free_variables;
+
+        // Capture free variables from the current scope
+        let free_vars = collect_free_variables(&body, &args);
+        let mut captures = FxHashMap::default();
+        for var in free_vars {
+            if let Some(value) = self.scope.get(&var) {
+                captures.insert(var, value);
+            }
+        }
+
+        let value = HeapValue::Function(WalrusFunction::TreeWalk(NodeFunction::new_with_captures(
             name.clone(),
             args,
             body,
+            captures,
         )))
         .alloc();
 
@@ -293,10 +362,12 @@ impl<'a> Interpreter<'a> {
         loop {
             let condition = self.interpret(condition.clone())?;
 
-            // fixme: i believe this will fail to return a value if a return statement is
-            // encountered in the body of the while loop.
             if self.is_truthy(condition, cond_span)? {
-                self.interpret(body.clone())?;
+                let result = self.interpret(body.clone())?;
+                // Propagate return value if a return statement was executed
+                if self.is_returning {
+                    return Ok(result);
+                }
             } else {
                 break;
             }
@@ -428,17 +499,19 @@ impl<'a> Interpreter<'a> {
                             })?
                         }
 
-                        // fixme: this creates a double nested interpreter child because statements also creates a new child
-                        // for now this is okay but for performance reasons we should probably avoid this
-                        // todo: I think I should make a new child and give ownership of the child interpreter to the function
-                        // object
-                        let mut sub_interpreter = self.create_child(node_fn.name.clone()); // todo: clone
+                        // Create child interpreter
+                        let mut sub_interpreter = self.create_child(node_fn.name.clone());
 
-                        for (name, value) in node_fn.args.iter().zip(args) {
-                            sub_interpreter.scope.assign(name.clone(), value); // fixme: clone
+                        // Inject captured variables (closures)
+                        for (name, value) in &node_fn.captures {
+                            sub_interpreter.scope.assign(name.clone(), *value);
                         }
 
-                        // todo: I'm pretty sure this clone is required but see if we can avoid it
+                        // Bind function arguments
+                        for (name, value) in node_fn.args.iter().zip(args) {
+                            sub_interpreter.scope.assign(name.clone(), value);
+                        }
+
                         sub_interpreter.interpret(node_fn.body.clone())
                     }
                     WalrusFunction::Vm(_) | WalrusFunction::Native(_) => unsafe {
@@ -638,8 +711,6 @@ impl<'a> Interpreter<'a> {
         let value = self.interpret(value)?;
 
         // todo: see visit_for comment for info on possible optimization and why clone is required
-        // fixme: i believe this will fail to return a value if a return statement is
-        // encountered in the body of the for loop.
         match value {
             Value::List(l) => {
                 let list = l.resolve()?;
@@ -648,12 +719,17 @@ impl<'a> Interpreter<'a> {
                     let mut sub_interpreter = self.create_child("for_list".to_string());
 
                     if sub_interpreter.scope.is_defined(&name) {
-                        sub_interpreter.scope.reassign(&name, *value).unwrap_or(());
+                        sub_interpreter.scope.reassign(&name, value).unwrap_or(());
                     } else {
-                        sub_interpreter.scope.assign(name.clone(), *value);
+                        sub_interpreter.scope.assign(name.clone(), value);
                     };
 
-                    sub_interpreter.interpret(body.clone())?;
+                    let result = sub_interpreter.interpret(body.clone())?;
+                    // Propagate return value if a return statement was executed
+                    if sub_interpreter.is_returning {
+                        self.is_returning = true;
+                        return Ok(result);
+                    }
                 }
 
                 Ok(Value::Void)
@@ -665,14 +741,19 @@ impl<'a> Interpreter<'a> {
                     let mut sub_interpreter = self.create_child("for_dict".to_string());
 
                     if sub_interpreter.scope.is_defined(&name) {
-                        sub_interpreter.scope.reassign(&name, *key).unwrap_or(());
+                        sub_interpreter.scope.reassign(&name, key).unwrap_or(());
                     } else {
-                        sub_interpreter.scope.assign(name.clone(), *key);
+                        sub_interpreter.scope.assign(name.clone(), key);
                     };
 
                     // fixme: this gets overwritten, we need to support destructuring
-                    sub_interpreter.scope.assign(name.clone(), *value);
-                    sub_interpreter.interpret(body.clone())?;
+                    sub_interpreter.scope.assign(name.clone(), value);
+                    let result = sub_interpreter.interpret(body.clone())?;
+                    // Propagate return value if a return statement was executed
+                    if sub_interpreter.is_returning {
+                        self.is_returning = true;
+                        return Ok(result);
+                    }
                 }
 
                 Ok(Value::Void)
@@ -693,7 +774,12 @@ impl<'a> Interpreter<'a> {
                             HeapValue::String(&character.to_string()).alloc(),
                         );
                     };
-                    sub_interpreter.interpret(body.clone())?;
+                    let result = sub_interpreter.interpret(body.clone())?;
+                    // Propagate return value if a return statement was executed
+                    if sub_interpreter.is_returning {
+                        self.is_returning = true;
+                        return Ok(result);
+                    }
                 }
 
                 Ok(Value::Void)
@@ -706,7 +792,12 @@ impl<'a> Interpreter<'a> {
                     let mut sub_interpreter = self.create_child("for_range".to_string());
                     sub_interpreter.scope.assign(name.clone(), Value::Int(i));
 
-                    sub_interpreter.interpret(body.clone())?;
+                    let result = sub_interpreter.interpret(body.clone())?;
+                    // Propagate return value if a return statement was executed
+                    if sub_interpreter.is_returning {
+                        self.is_returning = true;
+                        return Ok(result);
+                    }
                 }
 
                 Ok(Value::Void)
@@ -739,24 +830,27 @@ impl<'a> Interpreter<'a> {
 
         match value {
             Value::List(l) => {
-                let list = l.resolve_mut()?;
+                use crate::arenas::with_arena_mut;
 
                 match index {
                     Value::Int(n) => {
-                        let index = if n < 0 { n + list.len() as i64 } else { n };
+                        with_arena_mut(|arena| {
+                            let list = arena.get_mut_list(l)?;
+                            let idx = if n < 0 { n + list.len() as i64 } else { n };
 
-                        if index < 0 || index as usize >= list.len() {
-                            Err(WalrusError::IndexOutOfBounds {
-                                index: n, // fixme: lossy conversion
-                                len: list.len(),
-                                span: index_span,
-                                src: self.source_ref.source().into(),
-                                filename: self.source_ref.filename().into(),
-                            })?
-                        }
+                            if idx < 0 || idx as usize >= list.len() {
+                                return Err(WalrusError::IndexOutOfBounds {
+                                    index: n,
+                                    len: list.len(),
+                                    span: index_span,
+                                    src: self.source_ref.source().into(),
+                                    filename: self.source_ref.filename().into(),
+                                });
+                            }
 
-                        list[index as usize] = new_value;
-                        Ok(Value::Void)
+                            list[idx as usize] = new_value;
+                            Ok(Value::Void)
+                        })
                     }
                     _ => Err(WalrusError::InvalidIndexType {
                         non_indexable: value.get_type().to_string(),
@@ -768,10 +862,13 @@ impl<'a> Interpreter<'a> {
                 }
             }
             Value::Dict(d) => {
-                let dict = d.resolve_mut()?;
-                dict.insert(index, new_value);
+                use crate::arenas::with_arena_mut;
 
-                Ok(Value::Void)
+                with_arena_mut(|arena| {
+                    let dict = arena.get_mut_dict(d)?;
+                    dict.insert(index, new_value);
+                    Ok(Value::Void)
+                })
             }
             _ => Err(WalrusError::InvalidIndexType {
                 non_indexable: value.get_type().to_string(),
@@ -831,9 +928,9 @@ impl<'a> Interpreter<'a> {
                 Ok(Value::Float(FloatOrd(a + b)))
             }
             (Value::String(a), Value::String(b)) => {
-                let mut a_str = a.resolve()?.to_string();
+                let mut a_str = a.resolve()?;
                 let b_str = b.resolve()?;
-                a_str.push_str(b_str);
+                a_str.push_str(&b_str);
 
                 Ok(HeapValue::String(&a_str).alloc())
             }
