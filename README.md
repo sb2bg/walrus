@@ -158,6 +158,125 @@ if len(args) < 2 {
 - **Comprehensive Error Messages**: Detailed error reporting with source locations
 - **Benchmark Suite**: 20+ benchmarks comparing against Python
 
+### JIT Compilation (Optional)
+
+Walrus includes an optional **Just-In-Time (JIT) compiler** powered by [Cranelift](https://cranelift.dev/) that can dramatically speed up hot loops by compiling them to native machine code.
+
+#### Performance
+
+| Benchmark | Interpreter | JIT | Speedup |
+|-----------|-------------|-----|---------|
+| 10K iterations × sum(0..1000) | 0.68s | 0.01s | **~68x** |
+
+#### Building with JIT Support
+
+```bash
+# Build with JIT feature enabled
+cargo build --release --features jit
+
+# Or add to your Cargo.toml
+[features]
+jit = ["cranelift-codegen", "cranelift-frontend", "cranelift-jit", "cranelift-module", "cranelift-native"]
+```
+
+#### Using the JIT
+
+```bash
+# Run with JIT enabled
+./target/release/walrus program.walrus --jit
+
+# Show JIT profiling statistics
+./target/release/walrus program.walrus --jit --jit-stats
+
+# Disable profiling (baseline comparison)
+./target/release/walrus program.walrus --no-jit-profile
+```
+
+#### What Gets JIT Compiled
+
+The JIT compiler targets **hot integer range loops** that follow specific patterns. A loop becomes "hot" after 1000 iterations.
+
+**✅ JIT-Compatible Patterns:**
+
+```walrus
+// Pattern 1: Sum accumulation (acc += i)
+let sum = 0;
+for i in 0..n {
+    sum = sum + i;
+}
+
+// Pattern 2: Simple iteration with reassignment
+let result = 0;
+for i in 0..n {
+    result = result + some_value;
+}
+
+// Pattern 3: Count iterations
+let count = 0;
+for _ in 0..n {
+    count = count + 1;
+}
+```
+
+**❌ NOT JIT-Compatible (falls back to interpreter):**
+
+```walrus
+// Function calls inside loop
+for i in 0..n {
+    result = compute(i);  // Contains Call opcode
+}
+
+// I/O operations
+for i in 0..n {
+    println(i);  // Contains Print/Println opcode
+}
+
+// Complex operations (method calls, string ops, etc.)
+for i in 0..n {
+    list = list + [i];  // Complex heap operations
+}
+```
+
+#### How It Works
+
+1. **Hot-Spot Detection**: The VM profiles loop iterations and function calls
+2. **Type Analysis**: Tracks runtime types to ensure type stability
+3. **Bytecode Analysis**: Examines loop body for JIT-compatible operations
+4. **Native Code Generation**: Uses Cranelift to compile to native machine code
+5. **Seamless Execution**: JIT code reads/writes the same local variables as the interpreter
+
+**Example JIT Output (with `--jit-stats`):**
+
+```
+Hot-spot Statistics:
+  Total tracked regions: 3
+  Hot loops: 1
+  Hot functions: 1
+  JIT compiled regions: 1
+  Hottest spot: loop@5..5 (402000x)
+
+Type Profile: 4 locations observed
+JIT Stats: 1 functions compiled
+```
+
+#### Generated Native Code
+
+For a simple sum loop, the JIT generates optimized native code:
+
+```
+// Walrus: for i in 0..n { sum = sum + i; }
+// Cranelift IR:
+block1(i, acc):
+    cmp i < end
+    branch to body or exit
+block2:
+    acc = acc + i
+    i = i + 1
+    jump block1
+block3:
+    return acc
+```
+
 ## Installation
 
 ### Prerequisites
@@ -480,6 +599,7 @@ Walrus is licensed under the MIT License. See [LICENSE](LICENSE) for details.
 Built with:
 
 - [LALRPOP](https://github.com/lalrpop/lalrpop) - Parser generator
+- [Cranelift](https://cranelift.dev/) - Native code generation for JIT compilation
 - [SlotMap](https://github.com/orlp/slotmap) - Arena-based memory management
 - [mimalloc](https://github.com/microsoft/mimalloc) - High-performance allocator
 - [rustc-hash](https://github.com/rust-lang/rustc-hash) - Fast hashing (FxHashMap/FxHashSet)
