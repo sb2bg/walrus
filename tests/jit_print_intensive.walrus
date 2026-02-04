@@ -1,0 +1,19 @@
+// Test JIT compilation with println statements (intensive version)
+// This test runs enough iterations to trigger JIT compilation
+
+fn println_loop_test : n {
+    // This inner loop will become hot and get JIT compiled
+    // Uses only println(i) which is a supported pattern
+    for i in 0..n {
+        println(i);
+    }
+    return n;
+}
+
+// Run the test multiple times to trigger hot-spot detection
+println("Starting JIT println test...");
+println("Below should print 0-4 many times:");
+for _ in 0..200 {
+    println_loop_test(5);
+}
+println("Test completed!");

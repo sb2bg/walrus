@@ -5,6 +5,7 @@
 //! - Simple integer range loops (for i in 0..n)
 //! - Integer arithmetic (+, -, *, /)
 //! - Integer comparisons (<, <=, >, >=, ==, !=)
+//! - Print/Println operations (via callback to Rust)
 //!
 //! The JIT compiler works by:
 //! 1. Analyzing a bytecode region for JIT-ability (must be type-stable)
@@ -17,7 +18,7 @@
 use std::mem;
 
 use cranelift_codegen::ir::condcodes::IntCC;
-use cranelift_codegen::ir::{types, AbiParam, InstBuilder};
+use cranelift_codegen::ir::{AbiParam, InstBuilder, types};
 use cranelift_codegen::settings::{self, Configurable};
 use cranelift_codegen::{self as codegen};
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
@@ -31,6 +32,26 @@ use crate::vm::opcode::Opcode;
 
 // Alias for Cranelift's Value type to distinguish from Walrus Value
 type CraneliftValue = cranelift_codegen::ir::Value;
+
+// ============================================================================
+// External callbacks - these are called from JIT-compiled code
+// ============================================================================
+
+/// Print an integer without newline (called from JIT code)
+extern "C" fn jit_print_int(value: i64) {
+    print!("{}", value);
+}
+
+/// Print an integer with newline (called from JIT code)
+extern "C" fn jit_println_int(value: i64) {
+    println!("{}", value);
+}
+
+/// Flush stdout (needed after prints in tight loops)
+extern "C" fn jit_flush_stdout() {
+    use std::io::Write;
+    let _ = std::io::stdout().flush();
+}
 
 /// Errors that can occur during JIT compilation
 #[derive(Debug, Clone)]
@@ -92,6 +113,10 @@ pub enum CompiledPattern {
     CountIterations,
     /// Just skip the loop (empty body)
     EmptyLoop,
+    /// Print loop index only (no accumulation)
+    PrintOnly,
+    /// acc += i with print operations
+    SumIndexWithPrint,
 }
 
 impl CompiledFunction {
@@ -119,10 +144,12 @@ pub struct JitCompiler {
     module: JITModule,
     /// Cranelift context for building functions
     ctx: codegen::Context,
-    /// Function builder context (reusable)
-    func_ctx: FunctionBuilderContext,
     /// Cache of compiled functions by their start IP
     compiled_cache: FxHashMap<usize, CompiledFunction>,
+    /// Function ID for print_int callback
+    print_int_id: FuncId,
+    /// Function ID for println_int callback
+    println_int_id: FuncId,
 }
 
 impl JitCompiler {
@@ -130,26 +157,52 @@ impl JitCompiler {
     pub fn new() -> JitResult<Self> {
         let mut flag_builder = settings::builder();
         // Enable speed optimizations
-        flag_builder.set("opt_level", "speed").map_err(|e| {
-            JitError::CompilationFailed(format!("Failed to set opt_level: {}", e))
-        })?;
+        flag_builder
+            .set("opt_level", "speed")
+            .map_err(|e| JitError::CompilationFailed(format!("Failed to set opt_level: {}", e)))?;
 
         let isa_builder = cranelift_native::builder().map_err(|e| {
             JitError::CompilationFailed(format!("Failed to create ISA builder: {}", e))
         })?;
 
-        let isa = isa_builder.finish(settings::Flags::new(flag_builder)).map_err(|e| {
-            JitError::CompilationFailed(format!("Failed to create ISA: {}", e))
-        })?;
+        let isa = isa_builder
+            .finish(settings::Flags::new(flag_builder))
+            .map_err(|e| JitError::CompilationFailed(format!("Failed to create ISA: {}", e)))?;
 
-        let builder = JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
-        let module = JITModule::new(builder);
+        // Create builder and register external symbols
+        let mut builder = JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
+
+        // Register callback functions
+        builder.symbol("jit_print_int", jit_print_int as *const u8);
+        builder.symbol("jit_println_int", jit_println_int as *const u8);
+        builder.symbol("jit_flush_stdout", jit_flush_stdout as *const u8);
+
+        let mut module = JITModule::new(builder);
+
+        // Declare print_int function: fn(i64) -> void
+        let mut print_sig = module.make_signature();
+        print_sig.params.push(AbiParam::new(types::I64));
+        let print_int_id = module
+            .declare_function("jit_print_int", Linkage::Import, &print_sig)
+            .map_err(|e| {
+                JitError::CompilationFailed(format!("Failed to declare print_int: {}", e))
+            })?;
+
+        // Declare println_int function: fn(i64) -> void
+        let mut println_sig = module.make_signature();
+        println_sig.params.push(AbiParam::new(types::I64));
+        let println_int_id = module
+            .declare_function("jit_println_int", Linkage::Import, &println_sig)
+            .map_err(|e| {
+                JitError::CompilationFailed(format!("Failed to declare println_int: {}", e))
+            })?;
 
         Ok(Self {
             module,
             ctx: codegen::Context::new(),
-            func_ctx: FunctionBuilderContext::new(),
             compiled_cache: FxHashMap::default(),
+            print_int_id,
+            println_int_id,
         })
     }
 
@@ -184,7 +237,12 @@ impl JitCompiler {
         );
 
         // Analyze the loop to determine what it computes
-        let loop_analysis = self.analyze_int_range_loop(instructions, loop_header_ip, loop_exit_ip)?;
+        let loop_analysis =
+            self.analyze_int_range_loop(instructions, loop_header_ip, loop_exit_ip)?;
+
+        // Create fresh context for each compilation to avoid stale state issues
+        self.ctx = codegen::Context::new();
+        let mut func_ctx = FunctionBuilderContext::new();
 
         // Create function signature: (start: i64, end: i64, initial_acc: i64) -> i64
         let mut sig = self.module.make_signature();
@@ -198,14 +256,35 @@ impl JitCompiler {
         let func_id = self
             .module
             .declare_function(&func_name, Linkage::Local, &sig)
-            .map_err(|e| JitError::CompilationFailed(format!("Failed to declare function: {}", e)))?;
+            .map_err(|e| {
+                JitError::CompilationFailed(format!("Failed to declare function: {}", e))
+            })?;
 
         // Build the function
         self.ctx.func.signature = sig;
         self.ctx.func.name = cranelift_codegen::ir::UserFuncName::user(0, func_id.as_u32());
 
+        // Import external functions if needed for print operations
+        let print_func_ref = if loop_analysis.has_print {
+            let local_print_id = self
+                .module
+                .declare_func_in_func(self.print_int_id, &mut self.ctx.func);
+            Some(local_print_id)
+        } else {
+            None
+        };
+
+        let println_func_ref = if loop_analysis.has_println {
+            let local_println_id = self
+                .module
+                .declare_func_in_func(self.println_int_id, &mut self.ctx.func);
+            Some(local_println_id)
+        } else {
+            None
+        };
+
         {
-            let mut builder = FunctionBuilder::new(&mut self.ctx.func, &mut self.func_ctx);
+            let mut builder = FunctionBuilder::new(&mut self.ctx.func, &mut func_ctx);
 
             // Create entry block
             let entry_block = builder.create_block();
@@ -240,18 +319,28 @@ impl JitCompiler {
             builder.append_block_param(loop_exit, types::I64); // final acc
 
             builder.ins().brif(cond, loop_body, &[], loop_exit, &[acc]);
-            builder.seal_block(loop_header);
+            // Note: Don't seal loop_header yet - it has a back-edge from loop_body
 
             // Build loop body based on analysis
             builder.switch_to_block(loop_body);
-            let new_acc = generate_loop_body(&mut builder, &loop_analysis, i, acc)?;
+
+            // Create callbacks struct for external function calls
+            let callbacks = JitCallbacks {
+                print_int: print_func_ref,
+                println_int: println_func_ref,
+            };
+
+            let new_acc = generate_loop_body(&mut builder, &loop_analysis, i, acc, &callbacks)?;
 
             // Increment i
             let one = builder.ins().iconst(types::I64, 1);
             let next_i = builder.ins().iadd(i, one);
 
-            // Jump back to header
+            // Jump back to header (this is the back-edge)
             builder.ins().jump(loop_header, &[next_i, new_acc]);
+
+            // Now we can seal loop_header - all predecessors (entry and loop_body) are known
+            builder.seal_block(loop_header);
             builder.seal_block(loop_body);
 
             // Build exit block
@@ -266,12 +355,14 @@ impl JitCompiler {
         // Compile the function
         self.module
             .define_function(func_id, &mut self.ctx)
-            .map_err(|e| JitError::CompilationFailed(format!("Failed to define function: {}", e)))?;
+            .map_err(|e| {
+                JitError::CompilationFailed(format!("Failed to define function: {}", e))
+            })?;
 
-        self.module.clear_context(&mut self.ctx);
-        self.module.finalize_definitions().map_err(|e| {
-            JitError::CompilationFailed(format!("Failed to finalize: {}", e))
-        })?;
+        // Finalize to get function pointer
+        self.module
+            .finalize_definitions()
+            .map_err(|e| JitError::CompilationFailed(format!("Failed to finalize: {}", e)))?;
 
         // Get function pointer
         let func_ptr = self.module.get_finalized_function(func_id);
@@ -279,6 +370,8 @@ impl JitCompiler {
         let compiled_pattern = match loop_analysis.pattern {
             LoopPattern::SumIndex => CompiledPattern::SumIndex,
             LoopPattern::CountIterations => CompiledPattern::CountIterations,
+            LoopPattern::PrintOnly => CompiledPattern::PrintOnly,
+            LoopPattern::SumIndexWithPrint => CompiledPattern::SumIndexWithPrint,
             _ => CompiledPattern::SumIndex,
         };
 
@@ -377,10 +470,37 @@ impl JitCompiler {
                 Opcode::IncrementLocal(_) => {
                     analysis.has_increment = true;
                 }
-                // These operations make the loop not JIT-able for now
-                Opcode::Call(_) | Opcode::Print | Opcode::Println => {
+                // Print/Println can be JIT compiled with callbacks
+                // But only if we're printing the loop variable (simple case)
+                Opcode::Print => {
+                    analysis.print_count += 1;
+                    // Only allow one print per loop iteration for now
+                    // Multiple prints might involve string constants we can't handle
+                    if analysis.print_count > 1 {
+                        return Err(JitError::NotJitCompatible(
+                            "Loop contains multiple print operations".into(),
+                        ));
+                    }
+                    analysis.has_print = true;
+                    analysis.operations.push(JitOp::PrintInt);
+                }
+                Opcode::Println => {
+                    analysis.print_count += 1;
+                    if analysis.print_count > 1 {
+                        return Err(JitError::NotJitCompatible(
+                            "Loop contains multiple print operations".into(),
+                        ));
+                    }
+                    analysis.has_println = true;
+                    analysis.operations.push(JitOp::PrintlnInt);
+                }
+                // LoadString means we're dealing with string operations - not JIT-able
+                // Note: String constants are loaded via LoadConst, but we allow those
+                // for now since they might be used in non-print contexts
+                // Function calls make the loop not JIT-able (for now)
+                Opcode::Call(_) => {
                     return Err(JitError::NotJitCompatible(
-                        "Loop contains function calls or I/O".into(),
+                        "Loop contains function calls".into(),
                     ));
                 }
                 _ => {
@@ -394,6 +514,13 @@ impl JitCompiler {
         // Determine the pattern based on analysis
         if analysis.is_empty_body {
             analysis.pattern = LoopPattern::CountIterations;
+        } else if analysis.has_print || analysis.has_println {
+            // Print loop - might also have accumulation
+            if analysis.has_add && analysis.loads_local && analysis.stores_to_local {
+                analysis.pattern = LoopPattern::SumIndexWithPrint;
+            } else {
+                analysis.pattern = LoopPattern::PrintOnly;
+            }
         } else if analysis.has_add && analysis.loads_local && analysis.stores_to_local {
             // Classic acc += i pattern
             analysis.pattern = LoopPattern::SumIndex;
@@ -415,15 +542,39 @@ impl JitCompiler {
     }
 }
 
+/// Callbacks to external Rust functions for JIT-compiled code
+struct JitCallbacks {
+    print_int: Option<cranelift_codegen::ir::FuncRef>,
+    println_int: Option<cranelift_codegen::ir::FuncRef>,
+}
+
 /// Generate Cranelift IR for the loop body based on analysis (free function to avoid borrow issues)
 fn generate_loop_body(
     builder: &mut FunctionBuilder,
     analysis: &LoopAnalysis,
     i: CraneliftValue,
     acc: CraneliftValue,
+    callbacks: &JitCallbacks,
 ) -> JitResult<CraneliftValue> {
+    // First, handle any print operations
+    for op in &analysis.operations {
+        match op {
+            JitOp::PrintInt => {
+                if let Some(print_ref) = callbacks.print_int {
+                    builder.ins().call(print_ref, &[i]);
+                }
+            }
+            JitOp::PrintlnInt => {
+                if let Some(println_ref) = callbacks.println_int {
+                    builder.ins().call(println_ref, &[i]);
+                }
+            }
+        }
+    }
+
+    // Then handle the accumulation pattern
     match analysis.pattern {
-        LoopPattern::SumIndex => {
+        LoopPattern::SumIndex | LoopPattern::SumIndexWithPrint => {
             // acc += i
             Ok(builder.ins().iadd(acc, i))
         }
@@ -443,6 +594,10 @@ fn generate_loop_body(
             let one = builder.ins().iconst(types::I64, 1);
             Ok(builder.ins().iadd(acc, one))
         }
+        LoopPattern::PrintOnly => {
+            // No accumulation, just return acc unchanged
+            Ok(acc)
+        }
         LoopPattern::Complex => {
             // For complex patterns, just count iterations for now
             let one = builder.ins().iconst(types::I64, 1);
@@ -459,6 +614,9 @@ struct LoopAnalysis {
     has_mul: bool,
     has_reassign: bool,
     has_increment: bool,
+    has_print: bool,
+    has_println: bool,
+    print_count: usize,
     loads_local: bool,
     stores_to_local: bool,
     pattern: LoopPattern,
@@ -466,6 +624,15 @@ struct LoopAnalysis {
     accumulator_local: Option<u32>,
     /// Whether the loop body is empty (just Pop)
     is_empty_body: bool,
+    /// Sequence of JIT operations to emit
+    operations: Vec<JitOp>,
+}
+
+/// Individual JIT operations that can be emitted in the loop body
+#[derive(Debug, Clone, Copy)]
+enum JitOp {
+    PrintInt,
+    PrintlnInt,
 }
 
 /// Recognized loop computation patterns
@@ -480,6 +647,10 @@ enum LoopPattern {
     SumIndexTimesConstant(i64),
     /// acc += 1 (counting)
     CountIterations,
+    /// Print loop index only (no accumulation)
+    PrintOnly,
+    /// acc += i with print
+    SumIndexWithPrint,
     /// Complex pattern (not fully recognized)
     Complex,
 }
@@ -492,7 +663,11 @@ pub struct JitStats {
 
 impl std::fmt::Display for JitStats {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "JIT Stats: {} functions compiled", self.compiled_functions)
+        write!(
+            f,
+            "JIT Stats: {} functions compiled",
+            self.compiled_functions
+        )
     }
 }
 

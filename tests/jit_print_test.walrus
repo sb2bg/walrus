@@ -1,0 +1,28 @@
+// Test JIT compilation with print statements
+
+// Test 1: Simple println in loop
+print("Test 1 - println in loop (should print 0-4): ");
+for i in 0..5 {
+    print(i);
+    print(" ");
+}
+println("Done");
+
+// Test 2: Print with accumulation
+print("Test 2 - print with accumulation: ");
+let total = 0;
+for i in 0..10 {
+    total = total + i;
+    print(i);
+    print(" ");
+}
+println("");
+println(f"Total: {total}");
+
+// Test 3: Just println (no accumulation)
+println("Test 3 - countdown:");
+for i in 0..5 {
+    println(5 - i);
+}
+
+println("All tests passed!");

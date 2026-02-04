@@ -114,7 +114,7 @@ fn try_main() -> WalrusResult<()> {
     } else if args.debug {
         LevelFilter::Debug
     } else {
-        LevelFilter::Info
+        LevelFilter::Warn
     })?;
 
     // TODO: make this more idiomatic
