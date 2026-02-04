@@ -8,7 +8,7 @@ use simplelog::SimpleLogger;
 
 use crate::error::WalrusError;
 use crate::interpreter::InterpreterResult;
-use crate::program::{Opts, Program};
+use crate::program::{JitOpts, Opts, Program};
 
 mod arenas;
 mod ast;
@@ -17,6 +17,7 @@ mod function;
 mod gc;
 mod interpreter;
 mod iter;
+pub mod jit;
 mod program;
 mod range;
 mod scope;
@@ -61,6 +62,24 @@ struct Args {
 
     #[clap(short = 't', long = "trace", help = "Enable trace mode")]
     trace: bool,
+
+    #[clap(
+        long = "jit-stats",
+        help = "Show JIT profiling statistics after execution"
+    )]
+    jit_stats: bool,
+
+    #[clap(
+        long = "no-jit-profile",
+        help = "Disable JIT profiling (for benchmarking baseline)"
+    )]
+    no_jit_profile: bool,
+
+    #[clap(
+        long = "jit",
+        help = "Enable JIT compilation of hot code (requires 'jit' feature)"
+    )]
+    enable_jit: bool,
 }
 
 type WalrusResult<T> = Result<T, WalrusError>;
@@ -110,12 +129,18 @@ fn try_main() -> WalrusResult<()> {
         }
     };
 
-    create_shell(args.file, opts)?;
+    let jit_opts = JitOpts {
+        show_stats: args.jit_stats,
+        disable_profiling: args.no_jit_profile,
+        enable_jit: args.enable_jit,
+    };
+
+    create_shell(args.file, opts, jit_opts)?;
     Ok(())
 }
 
-pub fn create_shell(file: Option<PathBuf>, opts: Opts) -> InterpreterResult {
-    Program::new(file, None, opts)?.execute()
+pub fn create_shell(file: Option<PathBuf>, opts: Opts, jit_opts: JitOpts) -> InterpreterResult {
+    Program::new_with_jit_opts(file, None, opts, jit_opts)?.execute()
 }
 
 fn setup_logger(level: LevelFilter) -> WalrusResult<()> {
