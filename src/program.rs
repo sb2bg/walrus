@@ -21,10 +21,22 @@ pub enum Opts {
     Disassemble,
 }
 
+/// Options for JIT profiling
+#[derive(Debug, Clone, Copy, Default)]
+pub struct JitOpts {
+    /// Whether to show JIT profiling statistics after execution
+    pub show_stats: bool,
+    /// Whether to disable JIT profiling entirely
+    pub disable_profiling: bool,
+    /// Whether to enable JIT compilation (requires "jit" feature)
+    pub enable_jit: bool,
+}
+
 pub struct Program {
     source_ref: Option<OwnedSourceRef>,
     parser: ProgramParser,
     opts: Opts,
+    jit_opts: JitOpts,
     loaded_modules: HashSet<String>,
 }
 
@@ -33,6 +45,15 @@ impl Program {
         file: Option<PathBuf>,
         parser: Option<ProgramParser>,
         opts: Opts,
+    ) -> Result<Self, WalrusError> {
+        Self::new_with_jit_opts(file, parser, opts, JitOpts::default())
+    }
+
+    pub fn new_with_jit_opts(
+        file: Option<PathBuf>,
+        parser: Option<ProgramParser>,
+        opts: Opts,
+        jit_opts: JitOpts,
     ) -> Result<Self, WalrusError> {
         let source_ref = match file {
             Some(file) => Some(get_source(file)?),
@@ -44,6 +65,7 @@ impl Program {
             parser: parser.unwrap_or_else(ProgramParser::new),
             loaded_modules: HashSet::new(),
             opts,
+            jit_opts,
         })
     }
 
@@ -82,10 +104,39 @@ impl Program {
         emitter.emit_void(span);
         emitter.emit_return(span);
 
-        let mut vm = VM::new(source_ref, emitter.instruction_set());
-        vm.run()?;
+        let mut vm = if self.jit_opts.disable_profiling {
+            VM::new_without_profiling(source_ref, emitter.instruction_set())
+        } else {
+            VM::new(source_ref, emitter.instruction_set())
+        };
+        
+        // Enable JIT compilation if requested
+        #[cfg(feature = "jit")]
+        if self.jit_opts.enable_jit {
+            vm.set_jit_enabled(true);
+        }
+        
+        let result = vm.run()?;
 
-        Ok(Value::Void)
+        // Show JIT profiling stats if requested
+        if self.jit_opts.show_stats {
+            let stats = vm.hotspot_stats();
+            eprintln!("\n{}", stats);
+            
+            // Show type profile summary
+            let profile = vm.type_profile();
+            if !profile.is_empty() {
+                eprintln!("Type Profile: {} locations observed", profile.len());
+            }
+            
+            // Show JIT compilation stats
+            #[cfg(feature = "jit")]
+            if let Some(jit_stats) = vm.jit_stats() {
+                eprintln!("{}", jit_stats);
+            }
+        }
+
+        Ok(result)
     }
 
     fn interpret(&self, ast: Node, source_ref: SourceRef) -> InterpreterResult {

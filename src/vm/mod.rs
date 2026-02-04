@@ -15,6 +15,7 @@ use crate::arenas::HeapValue;
 use crate::error::WalrusError;
 use crate::function::WalrusFunction;
 use crate::iter::ValueIterator;
+use crate::jit::{HotSpotDetector, TypeProfile, WalrusType};
 use crate::range::RangeValue;
 use crate::source_ref::SourceRef;
 use crate::span::Span;
@@ -78,7 +79,14 @@ struct CallFrame {
 /// Heap-allocated values (strings, lists, dicts, functions) are stored in a global
 /// arena (`ARENA`) and referenced by keys. The VM never directly holds heap data,
 /// only keys that index into the arena.
-#[derive(Debug)]
+///
+/// ## JIT Compilation (Phase 2)
+/// The VM tracks type information and execution counts at key points:
+/// - Loop headers (for hot loop detection)
+/// - Function calls (for hot function detection)
+/// - Arithmetic operations (for type specialization)
+/// When a loop becomes "hot" (>1000 iterations), it is compiled to native code
+/// using Cranelift and executed directly, bypassing the interpreter.
 pub struct VM<'a> {
     stack: Vec<Value>,          // Operand stack for expression evaluation
     locals: Vec<Value>,         // Shared across all call frames
@@ -88,10 +96,36 @@ pub struct VM<'a> {
     source_ref: SourceRef<'a>,
     paused: bool,
     breakpoints: Vec<usize>,
+    // JIT profiling
+    hotspot_detector: HotSpotDetector,
+    type_profile: TypeProfile,
+    profiling_enabled: bool,
+    // JIT compiler (Phase 2)
+    #[cfg(feature = "jit")]
+    jit_compiler: Option<crate::jit::JitCompiler>,
+    #[cfg(feature = "jit")]
+    jit_enabled: bool,
 }
 
 impl<'a> VM<'a> {
     pub fn new(source_ref: SourceRef<'a>, is: InstructionSet) -> Self {
+        // Initialize hot-spot detector with loop and function metadata from the bytecode
+        let mut hotspot_detector = HotSpotDetector::new();
+
+        // Register all loops detected during compilation
+        for loop_meta in &is.loops {
+            hotspot_detector.register_loop(
+                loop_meta.header_ip,
+                loop_meta.back_edge_ip,
+                loop_meta.exit_ip,
+            );
+        }
+
+        // Register all functions detected during compilation
+        for func_meta in &is.functions {
+            hotspot_detector.register_function(&func_meta.name, func_meta.start_ip);
+        }
+
         // Create the initial call frame for the main program
         let main_frame = CallFrame {
             return_ip: 0,
@@ -109,7 +143,50 @@ impl<'a> VM<'a> {
             source_ref,
             paused: false,
             breakpoints: Vec::new(),
+            // JIT profiling enabled by default
+            hotspot_detector,
+            type_profile: TypeProfile::new(),
+            profiling_enabled: true,
+            // JIT compiler (Phase 2)
+            #[cfg(feature = "jit")]
+            jit_compiler: crate::jit::JitCompiler::new().ok(),
+            #[cfg(feature = "jit")]
+            jit_enabled: true,
         }
+    }
+
+    /// Create a VM with profiling disabled (for benchmarking baseline)
+    pub fn new_without_profiling(source_ref: SourceRef<'a>, is: InstructionSet) -> Self {
+        let mut vm = Self::new(source_ref, is);
+        vm.profiling_enabled = false;
+        vm
+    }
+
+    /// Enable or disable JIT profiling
+    pub fn set_profiling(&mut self, enabled: bool) {
+        self.profiling_enabled = enabled;
+    }
+
+    /// Enable or disable JIT compilation and execution
+    #[cfg(feature = "jit")]
+    pub fn set_jit_enabled(&mut self, enabled: bool) {
+        self.jit_enabled = enabled;
+    }
+
+    /// Get JIT compilation statistics
+    #[cfg(feature = "jit")]
+    pub fn jit_stats(&self) -> Option<crate::jit::JitStats> {
+        self.jit_compiler.as_ref().map(|jit| jit.stats())
+    }
+
+    /// Get hot-spot detection statistics
+    pub fn hotspot_stats(&self) -> crate::jit::hotspot::HotSpotStats {
+        self.hotspot_detector.stats()
+    }
+
+    /// Get the type profile for analysis
+    pub fn type_profile(&self) -> &TypeProfile {
+        &self.type_profile
     }
 
     /// Get the current call frame (the one at the top of the call stack)
@@ -479,7 +556,136 @@ impl<'a> VM<'a> {
                     self.locals[idx + 1] = end;
                 }
                 Opcode::ForRangeNext(jump_target, local_idx) => {
-                    // Check if current < end, if so push current and increment, else jump
+                    // JIT PROFILING: This is a loop header - track iterations
+                    let loop_header_ip = self.ip - 1;
+
+                    if self.profiling_enabled {
+                        // Dynamic loop registration: if this is the first time seeing this loop,
+                        // register it with the hotspot detector
+                        if !self.hotspot_detector.is_loop_header(loop_header_ip) {
+                            // Calculate exit IP from jump target
+                            self.hotspot_detector.register_loop(
+                                loop_header_ip,
+                                loop_header_ip, // back edge is also at header for ForRangeNext
+                                jump_target as usize,
+                            );
+                        }
+
+                        if self.hotspot_detector.record_loop_iteration(loop_header_ip) {
+                            debug!("Hot range loop detected at IP {}", loop_header_ip);
+                        }
+                    }
+
+                    // JIT EXECUTION: Check if we should use compiled code
+                    #[cfg(feature = "jit")]
+                    let mut jit_handled = false;
+
+                    #[cfg(feature = "jit")]
+                    if self.jit_enabled {
+                        // First, check if loop is compiled and execute if so
+                        if let Some(ref jit_compiler) = self.jit_compiler {
+                            if jit_compiler.is_compiled(loop_header_ip) {
+                                // Execute the compiled loop directly
+                                let fp = self.frame_pointer();
+                                let loop_var_idx = fp + local_idx as usize;
+                                if let (Value::Int(current), Value::Int(end)) =
+                                    (self.locals[loop_var_idx], self.locals[loop_var_idx + 1])
+                                {
+                                    let compiled =
+                                        jit_compiler.get_compiled(loop_header_ip).unwrap();
+
+                                    // Get the initial accumulator value from the correct local
+                                    let initial_acc =
+                                        if let Some(acc_local) = compiled.accumulator_local {
+                                            let acc_idx = fp + acc_local as usize;
+                                            if acc_idx < self.locals.len() {
+                                                match self.locals[acc_idx] {
+                                                    Value::Int(v) => v,
+                                                    _ => 0,
+                                                }
+                                            } else {
+                                                0
+                                            }
+                                        } else {
+                                            0
+                                        };
+
+                                    // Execute the JIT compiled function
+                                    let result = unsafe {
+                                        compiled.call_int_range_accum(current, end, initial_acc)
+                                    };
+
+                                    // Store the result back to the accumulator local
+                                    if let Some(acc_local) = compiled.accumulator_local {
+                                        let acc_idx = fp + acc_local as usize;
+                                        // Ensure locals is large enough
+                                        while self.locals.len() <= acc_idx {
+                                            self.locals.push(Value::Void);
+                                        }
+                                        self.locals[acc_idx] = Value::Int(result);
+                                    }
+
+                                    // Set the loop counter to the end value (loop is complete)
+                                    self.locals[loop_var_idx] = Value::Int(end);
+
+                                    // Ensure locals vector has space for any locals the loop body
+                                    // would have created. The loop body might StoreAt to higher indices.
+                                    // We need to examine the bytecode to find the max local used,
+                                    // but for now we ensure at least loop_var + 2 exists (for the
+                                    // loop variable that gets pushed/stored each iteration).
+                                    let min_locals_needed = fp + local_idx as usize + 3;
+                                    while self.locals.len() < min_locals_needed {
+                                        self.locals.push(Value::Void);
+                                    }
+
+                                    // Jump to exit
+                                    self.ip = jump_target as usize;
+                                    jit_handled = true;
+                                }
+                            }
+                        }
+
+                        // Try to compile if loop is hot (and not already handled or compiled)
+                        if !jit_handled {
+                            if let Some(ref jit_compiler) = self.jit_compiler {
+                                if !jit_compiler.is_compiled(loop_header_ip)
+                                    && self.hotspot_detector.is_loop_hot(loop_header_ip)
+                                {
+                                    let exit_ip = jump_target as usize;
+                                    let instructions = self.current_frame().instructions.clone();
+
+                                    if let Some(ref mut jit_compiler) = self.jit_compiler {
+                                        match jit_compiler.compile_int_range_sum_loop(
+                                            &instructions,
+                                            loop_header_ip,
+                                            exit_ip,
+                                        ) {
+                                            Ok(_compiled) => {
+                                                self.hotspot_detector.mark_compiled(loop_header_ip);
+                                                debug!(
+                                                    "JIT: Compiled loop at IP {}",
+                                                    loop_header_ip
+                                                );
+                                            }
+                                            Err(e) => {
+                                                debug!(
+                                                    "JIT: Failed to compile loop at IP {}: {}",
+                                                    loop_header_ip, e
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    #[cfg(feature = "jit")]
+                    if jit_handled {
+                        continue;
+                    }
+
+                    // Standard interpreted execution
                     let fp = self.frame_pointer();
                     let idx = fp + local_idx as usize;
                     if let (Value::Int(current), Value::Int(end)) =
@@ -655,6 +861,26 @@ impl<'a> VM<'a> {
                     }
                 }
                 Opcode::Jump(offset) => {
+                    // JIT PROFILING: Backward jumps indicate loops (while loops)
+                    if self.profiling_enabled && (offset as usize) < self.ip {
+                        let loop_header_ip = offset as usize;
+
+                        // Register while loop dynamically
+                        if !self.hotspot_detector.is_loop_header(loop_header_ip) {
+                            // For while loops, the back edge is here (current IP - 1)
+                            // and the header is the jump target
+                            self.hotspot_detector.register_loop(
+                                loop_header_ip,
+                                self.ip - 1,
+                                self.ip, // Exit is right after this jump
+                            );
+                        }
+
+                        if self.hotspot_detector.record_loop_iteration(loop_header_ip) {
+                            debug!("Hot while loop detected at IP {}", loop_header_ip);
+                        }
+                    }
+
                     self.ip = offset as usize;
                 }
                 Opcode::GetIter => {
@@ -663,6 +889,24 @@ impl<'a> VM<'a> {
                     self.push(iter);
                 }
                 Opcode::IterNext(offset) => {
+                    // JIT PROFILING: This is also a loop header for iterator-based loops
+                    if self.profiling_enabled {
+                        let loop_header_ip = self.ip - 1;
+
+                        // Dynamic loop registration for iterator loops
+                        if !self.hotspot_detector.is_loop_header(loop_header_ip) {
+                            self.hotspot_detector.register_loop(
+                                loop_header_ip,
+                                loop_header_ip,
+                                offset as usize,
+                            );
+                        }
+
+                        if self.hotspot_detector.record_loop_iteration(loop_header_ip) {
+                            debug!("Hot iterator loop detected at IP {}", loop_header_ip);
+                        }
+                    }
+
                     let iter = self.pop(opcode, span)?;
 
                     match iter {
@@ -692,6 +936,29 @@ impl<'a> VM<'a> {
                     let arg_count = args as usize;
                     let func = self.pop(opcode, span)?;
                     let args = self.pop_n(arg_count, opcode, span)?;
+
+                    // JIT PROFILING: Track function calls and argument types
+                    if self.profiling_enabled {
+                        if let Value::Function(key) = func {
+                            if let Ok(func_ref) = self.get_heap().get_function(key) {
+                                let name = match func_ref {
+                                    WalrusFunction::Vm(f) => f.name.clone(),
+                                    WalrusFunction::Rust(f) => f.name.clone(),
+                                    _ => String::new(),
+                                };
+                                if !name.is_empty() {
+                                    if self.hotspot_detector.record_function_call(&name) {
+                                        debug!("Hot function detected: {}", name);
+                                    }
+                                    // Track argument types
+                                    for (i, arg) in args.iter().enumerate() {
+                                        let arg_type = WalrusType::from_value(arg);
+                                        self.type_profile.observe(self.ip - 1 + i, arg_type);
+                                    }
+                                }
+                            }
+                        }
+                    }
 
                     match func {
                         Value::Function(key) => {
@@ -935,6 +1202,15 @@ impl<'a> VM<'a> {
                 Opcode::Add => {
                     let b = self.pop_unchecked();
                     let a = self.pop_unchecked();
+
+                    // JIT TYPE PROFILING: Track operand types for arithmetic
+                    if self.profiling_enabled {
+                        let type_a = WalrusType::from_value(&a);
+                        let type_b = WalrusType::from_value(&b);
+                        // Record both operand types at this IP
+                        self.type_profile.observe(self.ip - 1, type_a);
+                        self.type_profile.observe(self.ip - 1, type_b);
+                    }
 
                     match (a, b) {
                         (Value::Int(a), Value::Int(b)) => {

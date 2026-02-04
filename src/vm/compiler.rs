@@ -366,13 +366,18 @@ impl<'a> BytecodeEmitter<'a> {
 
                 self.emit(*body)?;
 
+                let back_edge = self.instructions.len();
                 self.instructions
                     .push(Instruction::new(Opcode::Jump(start as u32), span));
 
+                let exit_ip = self.instructions.len();
                 self.instructions.set(
                     jump,
-                    Instruction::new(Opcode::JumpIfFalse(self.instructions.len() as u32), span),
+                    Instruction::new(Opcode::JumpIfFalse(exit_ip as u32), span),
                 );
+
+                // JIT: Register the while loop for hot-spot detection
+                self.instructions.register_loop(start, back_edge, exit_ip, false);
 
                 // Pop loop context and patch break jumps
                 if let Some(loop_ctx) = self.loop_stack.pop() {
@@ -443,6 +448,7 @@ impl<'a> BytecodeEmitter<'a> {
                     // Only pop body locals, not range locals
                     self.dec_depth(span);
 
+                    let back_edge = self.instructions.len();
                     self.instructions
                         .push(Instruction::new(Opcode::Jump(jump as u32), span));
 
@@ -452,6 +458,10 @@ impl<'a> BytecodeEmitter<'a> {
                         jump,
                         Instruction::new(Opcode::ForRangeNext(end_pos as u32, range_idx), span),
                     );
+
+                    // JIT: Register the range-based for loop for hot-spot detection
+                    // The header is at 'jump' where ForRangeNext is
+                    self.instructions.register_loop(jump, back_edge, end_pos, true);
 
                     // Pop the 3 range locals at the end
                     self.instructions
@@ -507,13 +517,18 @@ impl<'a> BytecodeEmitter<'a> {
                     // would reuse their slots on subsequent iterations, seeing stale values
                     self.dec_depth(span);
 
+                    let back_edge = self.instructions.len();
                     self.instructions
                         .push(Instruction::new(Opcode::Jump(jump as u32), span));
 
+                    let exit_ip = self.instructions.len();
                     self.instructions.set(
                         jump,
-                        Instruction::new(Opcode::IterNext(self.instructions.len() as u32), span),
+                        Instruction::new(Opcode::IterNext(exit_ip as u32), span),
                     );
+
+                    // JIT: Register the iterator-based for loop for hot-spot detection
+                    self.instructions.register_loop(jump, back_edge, exit_ip, false);
 
                     // Patch break jumps
                     if let Some(loop_ctx) = loop_ctx {
@@ -558,6 +573,13 @@ impl<'a> BytecodeEmitter<'a> {
                 emitter.emit_void(span);
                 emitter.emit_return(span);
 
+                // Get the compiled function's instruction set
+                let func_instructions = emitter.instruction_set();
+
+                // JIT: Register the function for hot-spot detection
+                // Note: We register it in the parent instruction set since that's where calls happen
+                self.instructions.register_function(name.clone(), 0, arg_len);
+
                 // Create the function heap value
                 let func =
                     self.instructions
@@ -565,7 +587,7 @@ impl<'a> BytecodeEmitter<'a> {
                         .push(HeapValue::Function(WalrusFunction::Vm(VmFunction::new(
                             name.clone(),
                             arg_len,
-                            emitter.instruction_set(),
+                            func_instructions,
                         ))));
 
                 // Load the function constant and store it

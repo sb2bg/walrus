@@ -8,6 +8,30 @@ use crate::value::Value;
 use crate::vm::opcode::Instruction;
 use crate::vm::symbol_table::SymbolTable;
 
+/// Metadata about a loop for JIT compilation
+#[derive(Debug, Clone)]
+pub struct LoopMetadata {
+    /// IP of the loop header (where iteration check happens)
+    pub header_ip: usize,
+    /// IP of the backward jump (end of loop body)
+    pub back_edge_ip: usize,
+    /// IP to jump to when loop exits
+    pub exit_ip: usize,
+    /// True if this is an optimized range-based loop
+    pub is_range_loop: bool,
+}
+
+/// Metadata about a function for JIT compilation
+#[derive(Debug, Clone)]
+pub struct FunctionMetadata {
+    /// Function name
+    pub name: String,
+    /// IP where function body starts
+    pub start_ip: usize,
+    /// Number of parameters
+    pub arity: usize,
+}
+
 #[derive(Default, Debug, Clone)]
 pub struct InstructionSet {
     // TODO: name these so we can have better disassembly output
@@ -16,6 +40,12 @@ pub struct InstructionSet {
     pub locals: SymbolTable,
     pub globals: SymbolTable,
     // Note: heap is stored globally in ARENA, not per InstructionSet
+
+    // JIT metadata (Phase 1)
+    /// Detected loops for hot-spot tracking
+    pub loops: Vec<LoopMetadata>,
+    /// Registered functions for call tracking
+    pub functions: Vec<FunctionMetadata>,
 }
 
 impl InstructionSet {
@@ -25,6 +55,8 @@ impl InstructionSet {
             constants: Vec::new(),
             locals: SymbolTable::new(),
             globals: SymbolTable::new(),
+            loops: Vec::new(),
+            functions: Vec::new(),
         }
     }
 
@@ -34,6 +66,8 @@ impl InstructionSet {
             constants: Vec::new(),
             locals,
             globals: SymbolTable::new(),
+            loops: Vec::new(),
+            functions: Vec::new(),
         }
     }
 
@@ -43,7 +77,28 @@ impl InstructionSet {
             constants: Vec::new(),
             locals: SymbolTable::new(),
             globals,
+            loops: Vec::new(),
+            functions: Vec::new(),
         }
+    }
+
+    /// Register a loop for JIT hot-spot detection
+    pub fn register_loop(&mut self, header_ip: usize, back_edge_ip: usize, exit_ip: usize, is_range_loop: bool) {
+        self.loops.push(LoopMetadata {
+            header_ip,
+            back_edge_ip,
+            exit_ip,
+            is_range_loop,
+        });
+    }
+
+    /// Register a function for JIT hot-spot detection
+    pub fn register_function(&mut self, name: String, start_ip: usize, arity: usize) {
+        self.functions.push(FunctionMetadata {
+            name,
+            start_ip,
+            arity,
+        });
     }
 
     pub fn push(&mut self, instruction: Instruction) {
