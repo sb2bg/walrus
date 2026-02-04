@@ -70,6 +70,9 @@ pub struct ValueHolder {
     lists: DenseSlotMap<ListKey, Vec<Value>>,
     tuples: DenseSlotMap<TupleKey, Vec<Value>>,
     strings: DenseSlotMap<StringKey, String>,
+    /// Reverse lookup for string interning: content -> key
+    /// This ensures equal strings get the same StringKey
+    string_intern: FxHashMap<String, StringKey>,
     functions: DenseSlotMap<FuncKey, WalrusFunction>,
     iterators: DenseSlotMap<IterKey, ValueIter>,
     struct_defs: DenseSlotMap<StructDefKey, StructDefinition>,
@@ -84,6 +87,7 @@ impl ValueHolder {
             lists: DenseSlotMap::with_key(),
             tuples: DenseSlotMap::with_key(),
             strings: DenseSlotMap::with_key(),
+            string_intern: FxHashMap::default(),
             functions: DenseSlotMap::with_key(),
             iterators: DenseSlotMap::with_key(),
             struct_defs: DenseSlotMap::with_key(),
@@ -96,7 +100,13 @@ impl ValueHolder {
         match key {
             Value::Dict(key) => self.dicts.remove(key).is_some(),
             Value::List(key) => self.lists.remove(key).is_some(),
-            Value::String(key) => self.strings.remove(key).is_some(),
+            Value::String(key) => {
+                // Also remove from intern table
+                if let Some(s) = self.strings.get(key) {
+                    self.string_intern.remove(s);
+                }
+                self.strings.remove(key).is_some()
+            }
             Value::Function(key) => self.functions.remove(key).is_some(),
             Value::Tuple(key) => self.tuples.remove(key).is_some(),
             Value::Iter(key) => self.iterators.remove(key).is_some(),
@@ -132,7 +142,16 @@ impl ValueHolder {
             HeapValue::Tuple(tuple) => Value::Tuple(self.tuples.insert(tuple.to_vec())),
             HeapValue::Dict(dict) => Value::Dict(self.dicts.insert(dict)),
             HeapValue::Function(func) => Value::Function(self.functions.insert(func)),
-            HeapValue::String(string) => Value::String(self.strings.insert(string.to_string())),
+            HeapValue::String(string) => {
+                // String interning: return existing key if string already exists
+                let string = string.to_string();
+                if let Some(&key) = self.string_intern.get(&string) {
+                    return Value::String(key);
+                }
+                let key = self.strings.insert(string.clone());
+                self.string_intern.insert(string, key);
+                Value::String(key)
+            }
             HeapValue::Iter(iter) => Value::Iter(self.iterators.insert(iter)),
             HeapValue::StructDef(def) => Value::StructDef(self.struct_defs.insert(def)),
             HeapValue::StructInst(inst) => Value::StructInst(self.struct_instances.insert(inst)),
@@ -288,13 +307,17 @@ impl ValueHolder {
             freed += 1;
         }
 
-        // Sweep strings
+        // Sweep strings (also clean up intern table)
         let unmarked_strings: Vec<StringKey> = self
             .strings
             .keys()
             .filter(|&k| !self.gc.is_string_marked(k))
             .collect();
         for key in unmarked_strings {
+            // Remove from intern table before removing from strings
+            if let Some(s) = self.strings.get(key) {
+                self.string_intern.remove(s);
+            }
             self.strings.remove(key);
             freed += 1;
         }

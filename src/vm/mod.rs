@@ -2061,44 +2061,64 @@ impl<'a> VM<'a> {
                     }
                 }
                 Opcode::GetMethod => {
-                    // Pop method name (string) and struct definition from stack
-                    let method_name_value = self.pop(opcode, span)?;
-                    let struct_def_value = self.pop(opcode, span)?;
+                    // Pop member name (string) and object from stack
+                    let member_name_value = self.pop(opcode, span)?;
+                    let object_value = self.pop(opcode, span)?;
 
-                    if let (Value::String(method_name_sym), Value::StructDef(struct_def_key)) =
-                        (method_name_value, struct_def_value)
-                    {
-                        let method_name = self.get_heap().get_string(method_name_sym)?.to_string();
-                        let method_clone = {
-                            let struct_def = self.get_heap().get_struct_def(struct_def_key)?;
-                            if let Some(method) = struct_def.get_method(&method_name) {
-                                method.clone()
+                    match (member_name_value, object_value) {
+                        // Struct method access
+                        (Value::String(method_name_sym), Value::StructDef(struct_def_key)) => {
+                            let method_name = self.get_heap().get_string(method_name_sym)?.to_string();
+                            let method_clone = {
+                                let struct_def = self.get_heap().get_struct_def(struct_def_key)?;
+                                if let Some(method) = struct_def.get_method(&method_name) {
+                                    method.clone()
+                                } else {
+                                    return Err(WalrusError::Exception {
+                                        message: format!(
+                                            "Method '{}' not found on struct '{}'",
+                                            method_name,
+                                            struct_def.name()
+                                        ),
+                                        span,
+                                        src: self.source_ref.source().into(),
+                                        filename: self.source_ref.filename().into(),
+                                    });
+                                }
+                            };
+
+                            // Push the method as a function value
+                            let func_value =
+                                self.get_heap_mut().push(HeapValue::Function(method_clone));
+                            self.push(func_value);
+                        }
+                        // Dict/Module member access (for imported modules)
+                        (Value::String(member_name_sym), Value::Dict(dict_key)) => {
+                            let dict = self.get_heap().get_dict(dict_key)?;
+                            // Look up by the string key
+                            if let Some(&value) = dict.get(&Value::String(member_name_sym)) {
+                                self.push(value);
                             } else {
+                                let member_name = self.get_heap().get_string(member_name_sym)?;
                                 return Err(WalrusError::Exception {
                                     message: format!(
-                                        "Method '{}' not found on struct '{}'",
-                                        method_name,
-                                        struct_def.name()
+                                        "Member '{}' not found in module/dict",
+                                        member_name
                                     ),
                                     span,
                                     src: self.source_ref.source().into(),
                                     filename: self.source_ref.filename().into(),
                                 });
                             }
-                        };
-
-                        // Push the method as a function value
-                        let func_value =
-                            self.get_heap_mut().push(HeapValue::Function(method_clone));
-                        self.push(func_value);
-                    } else {
-                        return Err(WalrusError::Exception {
-                            message: "GetMethod expects string method name and struct definition"
-                                .to_string(),
-                            span,
-                            src: self.source_ref.source().into(),
-                            filename: self.source_ref.filename().into(),
-                        });
+                        }
+                        _ => {
+                            return Err(WalrusError::Exception {
+                                message: "Member access requires a struct or module".to_string(),
+                                span,
+                                src: self.source_ref.source().into(),
+                                filename: self.source_ref.filename().into(),
+                            });
+                        }
                     }
                 }
                 Opcode::CallMethod(arg_count) => {
