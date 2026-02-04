@@ -34,6 +34,7 @@ mod symbol_table;
 /// Each function invocation creates a new CallFrame which tracks:
 /// - Where to return to after the function completes
 /// - Where this function's local variables start in the shared locals vector
+/// - Where the operand stack was at call time (for cleanup on return)
 /// - The function's bytecode (via Rc to avoid cloning)
 /// - The function name for debugging/stack traces
 #[derive(Debug)]
@@ -42,6 +43,8 @@ struct CallFrame {
     return_ip: usize,
     /// Index into the shared `locals` vector where this frame's variables start
     frame_pointer: usize,
+    /// Index into the operand stack where this frame started (for cleanup on return)
+    stack_pointer: usize,
     /// Reference to the function's InstructionSet (shared via Rc to avoid cloning)
     instructions: Rc<InstructionSet>,
     /// Function name for debugging and stack traces
@@ -130,6 +133,7 @@ impl<'a> VM<'a> {
         let main_frame = CallFrame {
             return_ip: 0,
             frame_pointer: 0,
+            stack_pointer: 0,
             instructions: Rc::new(is),
             function_name: "<main>".to_string(),
         };
@@ -1008,6 +1012,7 @@ impl<'a> VM<'a> {
                                     let new_frame = CallFrame {
                                         return_ip: self.ip,                  // Where to return after this function
                                         frame_pointer: self.locals.len(), // New frame starts at current locals end
+                                        stack_pointer: self.stack.len(),  // Operand stack position for cleanup on return
                                         instructions: Rc::clone(&func.code), // Share the instruction set via Rc
                                         function_name: format!("fn<{}>", func.name),
                                     };
@@ -2006,6 +2011,10 @@ impl<'a> VM<'a> {
                     // Truncate locals back to the frame pointer (cleanup this frame's locals)
                     self.locals.truncate(frame.frame_pointer);
 
+                    // Truncate operand stack back to where it was at call time
+                    // This cleans up any leftover values (e.g., iterators from loops)
+                    self.stack.truncate(frame.stack_pointer);
+
                     // Restore the instruction pointer to where we should continue
                     self.ip = frame.return_ip;
 
@@ -2233,6 +2242,7 @@ impl<'a> VM<'a> {
                                 let new_frame = CallFrame {
                                     return_ip: self.ip,
                                     frame_pointer: self.locals.len(),
+                                    stack_pointer: self.stack.len(),
                                     instructions: Rc::clone(&func.code),
                                     function_name: format!("fn<{}>", func.name),
                                 };
