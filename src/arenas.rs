@@ -1,9 +1,9 @@
+use std::cell::RefCell;
+
 use float_ord::FloatOrd;
 use log::debug;
-use once_cell::sync::Lazy;
 use rustc_hash::FxHashMap;
 use slotmap::{DenseSlotMap, new_key_type};
-use strena::{Interner, Symbol};
 
 use crate::WalrusResult;
 use crate::error::WalrusError;
@@ -16,7 +16,49 @@ use crate::iter::{CollectionIter, DictIter, RangeIter, StrIter};
 use crate::structs::{StructDefinition, StructInstance};
 use crate::value::{Value, ValueIter};
 
-pub static mut ARENA: Lazy<ValueHolder> = Lazy::new(ValueHolder::new);
+// Thread-local arena for heap-allocated values.
+// Using thread_local! with RefCell provides safe interior mutability without
+// the undefined behavior of static mut.
+thread_local! {
+    static ARENA: RefCell<ValueHolder> = RefCell::new(ValueHolder::new());
+}
+
+/// Execute a closure with immutable access to the arena.
+/// This is the safe way to read from the heap.
+#[inline]
+pub fn with_arena<F, R>(f: F) -> R
+where
+    F: FnOnce(&ValueHolder) -> R,
+{
+    ARENA.with(|arena| f(&arena.borrow()))
+}
+
+/// Execute a closure with mutable access to the arena.
+/// This is the safe way to write to the heap.
+#[inline]
+pub fn with_arena_mut<F, R>(f: F) -> R
+where
+    F: FnOnce(&mut ValueHolder) -> R,
+{
+    ARENA.with(|arena| f(&mut arena.borrow_mut()))
+}
+
+/// Get a raw pointer to the thread-local arena.
+///
+/// # Safety
+/// This is unsafe because it bypasses RefCell's borrow checking.
+/// The caller must ensure:
+/// - No other code holds a borrow to the arena while this pointer is used
+/// - The pointer is not used after the current thread exits
+/// - Mutable access through this pointer is not concurrent with other access
+///
+/// This is provided for performance-critical code (like the VM) that needs
+/// direct heap access without closure overhead. Prefer with_arena/with_arena_mut
+/// for most use cases.
+#[inline]
+pub unsafe fn get_arena_ptr() -> *mut ValueHolder {
+    ARENA.with(|arena| arena.as_ptr())
+}
 
 // todo: maybe instead of this, we can use a single slotmap
 // and use a different enum to differentiate between the
@@ -26,8 +68,8 @@ pub static mut ARENA: Lazy<ValueHolder> = Lazy::new(ValueHolder::new);
 pub struct ValueHolder {
     dicts: DenseSlotMap<DictKey, FxHashMap<Value, Value>>,
     lists: DenseSlotMap<ListKey, Vec<Value>>,
-    tuples: DenseSlotMap<TupleKey, Vec<Value>>, // todo: use slice?
-    strings: Interner,
+    tuples: DenseSlotMap<TupleKey, Vec<Value>>,
+    strings: DenseSlotMap<StringKey, String>,
     functions: DenseSlotMap<FuncKey, WalrusFunction>,
     iterators: DenseSlotMap<IterKey, ValueIter>,
     struct_defs: DenseSlotMap<StructDefKey, StructDefinition>,
@@ -41,7 +83,7 @@ impl ValueHolder {
             dicts: DenseSlotMap::with_key(),
             lists: DenseSlotMap::with_key(),
             tuples: DenseSlotMap::with_key(),
-            strings: Interner::default(), // todo: use FxHasher
+            strings: DenseSlotMap::with_key(),
             functions: DenseSlotMap::with_key(),
             iterators: DenseSlotMap::with_key(),
             struct_defs: DenseSlotMap::with_key(),
@@ -54,11 +96,7 @@ impl ValueHolder {
         match key {
             Value::Dict(key) => self.dicts.remove(key).is_some(),
             Value::List(key) => self.lists.remove(key).is_some(),
-            Value::String(_key) => {
-                // fixme: for now, no way to free strings
-                // self.string_interner.remove(key).is_some()
-                false
-            }
+            Value::String(key) => self.strings.remove(key).is_some(),
             Value::Function(key) => self.functions.remove(key).is_some(),
             Value::Tuple(key) => self.tuples.remove(key).is_some(),
             Value::Iter(key) => self.iterators.remove(key).is_some(),
@@ -94,7 +132,7 @@ impl ValueHolder {
             HeapValue::Tuple(tuple) => Value::Tuple(self.tuples.insert(tuple.to_vec())),
             HeapValue::Dict(dict) => Value::Dict(self.dicts.insert(dict)),
             HeapValue::Function(func) => Value::Function(self.functions.insert(func)),
-            HeapValue::String(string) => Value::String(self.strings.get_or_insert(string)),
+            HeapValue::String(string) => Value::String(self.strings.insert(string.to_string())),
             HeapValue::Iter(iter) => Value::Iter(self.iterators.insert(iter)),
             HeapValue::StructDef(def) => Value::StructDef(self.struct_defs.insert(def)),
             HeapValue::StructInst(inst) => Value::StructInst(self.struct_instances.insert(inst)),
@@ -250,6 +288,17 @@ impl ValueHolder {
             freed += 1;
         }
 
+        // Sweep strings
+        let unmarked_strings: Vec<StringKey> = self
+            .strings
+            .keys()
+            .filter(|&k| !self.gc.is_string_marked(k))
+            .collect();
+        for key in unmarked_strings {
+            self.strings.remove(key);
+            freed += 1;
+        }
+
         // Clear marks and reset for next cycle
         self.gc.clear_marks();
         // Estimate bytes freed (rough estimate based on object count)
@@ -345,8 +394,8 @@ impl ValueHolder {
         })
     }
 
-    pub fn push_ident(&mut self, ident: &str) -> Symbol {
-        self.strings.get_or_insert(ident)
+    pub fn push_ident(&mut self, ident: &str) -> StringKey {
+        self.strings.insert(ident.to_string())
     }
 
     pub fn get_mut_dict(&mut self, key: DictKey) -> WalrusResult<&mut FxHashMap<Value, Value>> {
@@ -369,8 +418,8 @@ impl ValueHolder {
         Self::check(self.tuples.get(key))
     }
 
-    pub fn get_string(&self, key: Symbol) -> WalrusResult<&str> {
-        Self::check(self.strings.resolve(key))
+    pub fn get_string(&self, key: StringKey) -> WalrusResult<&str> {
+        Self::check(self.strings.get(key).map(|s| s.as_str()))
     }
 
     pub fn get_function(&self, key: FuncKey) -> WalrusResult<&WalrusFunction> {
@@ -571,7 +620,7 @@ pub enum HeapValue<'a> {
 
 impl HeapValue<'_> {
     pub fn alloc(self) -> Value {
-        unsafe { (*std::ptr::addr_of_mut!(ARENA)).push(self) }
+        with_arena_mut(|arena| arena.push(self))
     }
 }
 
@@ -583,104 +632,117 @@ new_key_type! {
     pub struct IterKey;
     pub struct StructDefKey;
     pub struct StructInstKey;
+    pub struct StringKey;
 }
 
 pub trait Free {
     fn free(&mut self) -> bool;
 }
 
-pub trait Resolve<'a> {
+/// Trait for resolving arena keys to their values.
+/// Returns owned/cloned data for safety (no dangling references).
+/// For performance-critical code, use with_arena/with_arena_mut directly.
+pub trait Resolve {
     type Output;
     fn resolve(self) -> WalrusResult<Self::Output>;
 }
 
-pub trait ResolveMut<'a> {
+/// Trait for resolving arena keys to mutable values.
+/// Returns cloned data. To persist changes, use with_arena_mut directly.
+pub trait ResolveMut {
     type Output;
     fn resolve_mut(self) -> WalrusResult<Self::Output>;
 }
 
 impl Free for Value {
     fn free(&mut self) -> bool {
-        unsafe { (*std::ptr::addr_of_mut!(ARENA)).free(*self) }
+        with_arena_mut(|arena| arena.free(*self))
     }
 }
 
-impl<'a> Resolve<'a> for ListKey {
-    type Output = &'a Vec<Value>;
+// Note: These Resolve/ResolveMut implementations clone data for safety.
+// The previous implementation used fabricated lifetimes with unsafe code.
+// For performance-critical code, use with_arena/with_arena_mut directly.
+
+impl Resolve for ListKey {
+    type Output = Vec<Value>;
 
     fn resolve(self) -> WalrusResult<Self::Output> {
-        unsafe { (*std::ptr::addr_of_mut!(ARENA)).get_list(self) }
+        with_arena(|arena| arena.get_list(self).cloned())
     }
 }
 
-impl<'a> Resolve<'a> for DictKey {
-    type Output = &'a FxHashMap<Value, Value>;
+impl Resolve for DictKey {
+    type Output = FxHashMap<Value, Value>;
 
     fn resolve(self) -> WalrusResult<Self::Output> {
-        unsafe { (*std::ptr::addr_of_mut!(ARENA)).get_dict(self) }
+        with_arena(|arena| arena.get_dict(self).cloned())
     }
 }
 
-impl<'a> Resolve<'a> for FuncKey {
-    type Output = &'a WalrusFunction;
+impl Resolve for FuncKey {
+    type Output = WalrusFunction;
 
     fn resolve(self) -> WalrusResult<Self::Output> {
-        unsafe { (*std::ptr::addr_of_mut!(ARENA)).get_function(self) }
+        with_arena(|arena| arena.get_function(self).cloned())
     }
 }
 
-impl<'a> Resolve<'a> for Symbol {
-    type Output = &'a str;
+impl Resolve for StringKey {
+    type Output = String;
 
     fn resolve(self) -> WalrusResult<Self::Output> {
-        unsafe { (*std::ptr::addr_of_mut!(ARENA)).get_string(self) }
+        with_arena(|arena| arena.get_string(self).map(|s| s.to_string()))
     }
 }
 
-impl<'a> ResolveMut<'a> for ListKey {
-    type Output = &'a mut Vec<Value>;
+impl Resolve for TupleKey {
+    type Output = Vec<Value>;
+
+    fn resolve(self) -> WalrusResult<Self::Output> {
+        with_arena(|arena| arena.get_tuple(self).cloned())
+    }
+}
+
+impl Resolve for StructDefKey {
+    type Output = StructDefinition;
+
+    fn resolve(self) -> WalrusResult<Self::Output> {
+        with_arena(|arena| arena.get_struct_def(self).cloned())
+    }
+}
+
+impl Resolve for StructInstKey {
+    type Output = StructInstance;
+
+    fn resolve(self) -> WalrusResult<Self::Output> {
+        with_arena(|arena| arena.get_struct_inst(self).cloned())
+    }
+}
+
+// ResolveMut now returns cloned data that the caller can modify.
+// To persist changes, use with_arena_mut directly.
+
+impl ResolveMut for ListKey {
+    type Output = Vec<Value>;
 
     fn resolve_mut(self) -> WalrusResult<Self::Output> {
-        unsafe { (*std::ptr::addr_of_mut!(ARENA)).get_mut_list(self) }
+        with_arena(|arena| arena.get_list(self).cloned())
     }
 }
 
-impl<'a> ResolveMut<'a> for DictKey {
-    type Output = &'a mut FxHashMap<Value, Value>;
+impl ResolveMut for DictKey {
+    type Output = FxHashMap<Value, Value>;
 
     fn resolve_mut(self) -> WalrusResult<Self::Output> {
-        unsafe { (*std::ptr::addr_of_mut!(ARENA)).get_mut_dict(self) }
+        with_arena(|arena| arena.get_dict(self).cloned())
     }
 }
 
-impl<'a> Resolve<'a> for TupleKey {
-    type Output = &'a Vec<Value>;
-
-    fn resolve(self) -> WalrusResult<Self::Output> {
-        unsafe { (*std::ptr::addr_of_mut!(ARENA)).get_tuple(self) }
-    }
-}
-
-impl<'a> Resolve<'a> for StructDefKey {
-    type Output = &'a StructDefinition;
-
-    fn resolve(self) -> WalrusResult<Self::Output> {
-        unsafe { (*std::ptr::addr_of_mut!(ARENA)).get_struct_def(self) }
-    }
-}
-
-impl<'a> Resolve<'a> for StructInstKey {
-    type Output = &'a StructInstance;
-
-    fn resolve(self) -> WalrusResult<Self::Output> {
-        unsafe { (*std::ptr::addr_of_mut!(ARENA)).get_struct_inst(self) }
-    }
-}
-
-impl<'a> ResolveMut<'a> for StructInstKey {
-    type Output = &'a mut StructInstance;
+impl ResolveMut for StructInstKey {
+    type Output = StructInstance;
 
     fn resolve_mut(self) -> WalrusResult<Self::Output> {
-        unsafe { (*std::ptr::addr_of_mut!(ARENA)).get_mut_struct_inst(self) }
+        with_arena(|arena| arena.get_struct_inst(self).cloned())
     }
 }

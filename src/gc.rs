@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use rustc_hash::FxHashSet;
 
-use crate::arenas::{DictKey, FuncKey, IterKey, ListKey, StructDefKey, StructInstKey, TupleKey};
+use crate::arenas::{DictKey, FuncKey, IterKey, ListKey, StringKey, StructDefKey, StructInstKey, TupleKey};
 use crate::value::Value;
 
 /// Default allocation count threshold before GC is triggered
@@ -97,6 +97,8 @@ pub struct GcState {
     marked_struct_defs: FxHashSet<StructDefKey>,
     /// Set of marked struct instance keys
     marked_struct_insts: FxHashSet<StructInstKey>,
+    /// Set of marked string keys
+    marked_strings: FxHashSet<StringKey>,
     /// Number of allocations since last collection
     allocation_count: usize,
     /// Estimated bytes allocated since last collection
@@ -166,6 +168,7 @@ impl GcState {
         self.marked_iters.clear();
         self.marked_struct_defs.clear();
         self.marked_struct_insts.clear();
+        self.marked_strings.clear();
     }
 
     /// Mark a value as reachable. Returns true if it was newly marked.
@@ -178,13 +181,12 @@ impl GcState {
             Value::Iter(key) => self.marked_iters.insert(key),
             Value::StructDef(key) => self.marked_struct_defs.insert(key),
             Value::StructInst(key) => self.marked_struct_insts.insert(key),
-            // Primitives and strings don't need marking
-            // (strings are interned and never freed)
+            Value::String(key) => self.marked_strings.insert(key),
+            // Primitives don't need marking (stored inline, not on heap)
             Value::Int(_)
             | Value::Float(_)
             | Value::Bool(_)
             | Value::Range(_)
-            | Value::String(_)
             | Value::Void => false,
         }
     }
@@ -222,5 +224,10 @@ impl GcState {
     /// Check if a struct instance is marked
     pub fn is_struct_inst_marked(&self, key: StructInstKey) -> bool {
         self.marked_struct_insts.contains(&key)
+    }
+
+    /// Check if a string is marked
+    pub fn is_string_marked(&self, key: StringKey) -> bool {
+        self.marked_strings.contains(&key)
     }
 }

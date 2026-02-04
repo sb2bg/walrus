@@ -208,16 +208,25 @@ impl<'a> VM<'a> {
         &self.current_frame().function_name
     }
 
-    /// Helper to access heap - uses global ARENA
+    /// Helper to access heap - uses thread-local ARENA
+    ///
+    /// # Safety
+    /// Uses unsafe get_arena_ptr() for performance. This is safe because:
+    /// - The VM is single-threaded
+    /// - We only access the arena within VM methods (no escaping references)
+    /// - No concurrent borrows occur within VM execution
     #[inline]
     fn get_heap(&self) -> &crate::arenas::ValueHolder {
-        unsafe { &*std::ptr::addr_of!(crate::arenas::ARENA) }
+        unsafe { &*crate::arenas::get_arena_ptr() }
     }
 
-    /// Helper to access heap mutably - uses global ARENA
+    /// Helper to access heap mutably - uses thread-local ARENA
+    ///
+    /// # Safety
+    /// See get_heap() for safety rationale.
     #[inline]
     fn get_heap_mut(&mut self) -> &mut crate::arenas::ValueHolder {
-        unsafe { &mut *std::ptr::addr_of_mut!(crate::arenas::ARENA) }
+        unsafe { &mut *crate::arenas::get_arena_ptr() }
     }
 
     /// Collect all root values that the GC needs to trace from

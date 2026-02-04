@@ -18,7 +18,7 @@
 use rustc_hash::FxHashMap;
 
 use crate::WalrusResult;
-use crate::arenas::{DictKey, HeapValue, ListKey, ValueHolder};
+use crate::arenas::{DictKey, HeapValue, ListKey, StringKey, ValueHolder};
 use crate::error::WalrusError;
 use crate::span::Span;
 use crate::value::Value;
@@ -163,7 +163,7 @@ pub fn dispatch_list_method(
 /// Dispatch a method call on a string.
 pub fn dispatch_string_method(
     heap: &mut ValueHolder,
-    key: strena::Symbol,
+    key: StringKey,
     method: &str,
     args: Vec<Value>,
     span: Span,

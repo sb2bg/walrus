@@ -3,11 +3,10 @@ use std::fmt::{Debug, Display, Formatter};
 use std::hash::Hash;
 
 use float_ord::FloatOrd;
-use strena::Symbol;
 
 use crate::WalrusResult;
 use crate::arenas::{
-    DictKey, FuncKey, IterKey, ListKey, Resolve, StructDefKey, StructInstKey, TupleKey, ValueHolder,
+    DictKey, FuncKey, IterKey, ListKey, Resolve, StringKey, StructDefKey, StructInstKey, TupleKey, ValueHolder,
 };
 use crate::iter::{CollectionIter, DictIter, RangeIter, StrIter, ValueIterator};
 use crate::range::RangeValue;
@@ -38,7 +37,7 @@ pub enum Value {
     Float(FloatOrd<f64>),
     Bool(bool),
     Range(RangeValue),
-    String(Symbol),
+    String(StringKey),
     List(ListKey),
     Tuple(TupleKey),
     Dict(DictKey),
@@ -149,14 +148,16 @@ impl Value {
             }
             Value::Iter(_) => "iter".to_string(),
             Value::StructDef(s) => {
-                use crate::arenas::ARENA;
-                let def = unsafe { (*std::ptr::addr_of_mut!(ARENA)).get_struct_def(s)? };
-                def.to_string()
+                use crate::arenas::with_arena;
+                with_arena(|arena| {
+                    arena.get_struct_def(s).map(|def| def.to_string())
+                })?
             }
             Value::StructInst(s) => {
-                use crate::arenas::ARENA;
-                let inst = unsafe { (*std::ptr::addr_of_mut!(ARENA)).get_struct_inst(s)? };
-                inst.to_string()
+                use crate::arenas::with_arena;
+                with_arena(|arena| {
+                    arena.get_struct_inst(s).map(|inst| inst.to_string())
+                })?
             }
             Value::Void => "void".to_string(),
         })

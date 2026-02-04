@@ -119,11 +119,11 @@ impl InstructionSet {
     }
 
     pub fn get_heap_mut(&mut self) -> &mut ValueHolder {
-        unsafe { &mut *std::ptr::addr_of_mut!(crate::arenas::ARENA) }
+        unsafe { &mut *crate::arenas::get_arena_ptr() }
     }
 
     pub fn get_heap(&self) -> &ValueHolder {
-        unsafe { &*std::ptr::addr_of!(crate::arenas::ARENA) }
+        unsafe { &*crate::arenas::get_arena_ptr() }
     }
 
     pub fn push_local(&mut self, name: String) -> u32 {
@@ -188,7 +188,7 @@ impl InstructionSet {
     }
 
     pub fn stringify(&self, value: Value) -> WalrusResult<String> {
-        unsafe { (&*std::ptr::addr_of!(crate::arenas::ARENA)).stringify(value) }
+        crate::arenas::with_arena(|arena| arena.stringify(value))
     }
 
     pub fn disassemble_single(&self, index: usize, title: &str) {
