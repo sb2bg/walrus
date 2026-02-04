@@ -12,6 +12,9 @@ debug = true
 
 [features]
 dhat-heap = []
+# JIT compilation support
+jit = ["cranelift-codegen", "cranelift-frontend", "cranelift-jit", "cranelift-module", "cranelift-native", "target-lexicon"]
+jit-profiling = []  # Enable profiling output for JIT analysis
 
 [dependencies]
 clap = { version = "4.0.26", features = ["derive"] }
@@ -33,3 +36,11 @@ dhat = "0.3.2"
 rustc-hash = "1.1.0"
 strena = { git = "https://github.com/jgdavey/strena" }
 rand = "0.8.5"
+
+# Cranelift JIT compilation (optional, enabled with --features jit)
+cranelift-codegen = { version = "0.112", optional = true }
+cranelift-frontend = { version = "0.112", optional = true }
+cranelift-jit = { version = "0.112", optional = true }
+cranelift-module = { version = "0.112", optional = true }
+cranelift-native = { version = "0.112", optional = true }
+target-lexicon = { version = "0.12", optional = true }
