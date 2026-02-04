@@ -164,9 +164,9 @@ Walrus includes an optional **Just-In-Time (JIT) compiler** powered by [Cranelif
 
 #### Performance
 
-| Benchmark | Interpreter | JIT | Speedup |
-|-----------|-------------|-----|---------|
-| 10K iterations × sum(0..1000) | 0.68s | 0.01s | **~68x** |
+| Benchmark                     | Interpreter | JIT   | Speedup  |
+| ----------------------------- | ----------- | ----- | -------- |
+| 10K iterations × sum(0..1000) | 0.68s       | 0.01s | **~68x** |
 
 #### Building with JIT Support
 
