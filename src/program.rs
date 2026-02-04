@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::collections::HashSet;
 use std::fs;
 use std::io::{BufRead, Write, stdout};
@@ -13,6 +14,11 @@ use crate::source_ref::{OwnedSourceRef, SourceRef};
 use crate::value::Value;
 use crate::vm::VM;
 use crate::vm::compiler::BytecodeEmitter;
+
+// Thread-local set to track modules currently being loaded (for circular import detection)
+thread_local! {
+    static LOADING_MODULES: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
+}
 
 #[derive(Debug, Clone, Copy)]
 pub enum Opts {
@@ -190,16 +196,36 @@ impl Program {
     }
 
     pub fn load_module(&self, module_name: &str) -> InterpreterResult {
+        // Check if module is already being loaded (circular import)
+        let is_loading = LOADING_MODULES.with(|modules| {
+            modules.borrow().contains(module_name)
+        });
+
+        if is_loading {
+            return Err(WalrusError::GenericError {
+                message: format!("Circular import detected: '{}' is already being imported", module_name),
+            });
+        }
+
+        // Also check if already loaded
         if self.loaded_modules.contains(module_name) {
             return Ok(Value::Void);
         }
 
+        // Mark as loading before we start
+        LOADING_MODULES.with(|modules| {
+            modules.borrow_mut().insert(module_name.to_string());
+        });
+
         let mut program = Program::new(Some(PathBuf::from(module_name)), None, self.opts)?;
-        let result = program.execute()?;
+        let result = program.execute();
 
-        // self.loaded_modules.insert(module_name.to_string());
+        // Remove from loading set when done (whether successful or not)
+        LOADING_MODULES.with(|modules| {
+            modules.borrow_mut().remove(module_name);
+        });
 
-        Ok(result)
+        result
     }
 }
 
