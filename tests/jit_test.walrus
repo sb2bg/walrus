@@ -1,0 +1,19 @@
+// JIT Test: Simple range sum loop
+// This should be JIT compiled after becoming hot
+
+fn sum_to_n : n {
+    let result = 0;
+    for i in 0..n {
+        result = result + i;
+    }
+    return result;
+}
+
+// Run enough iterations to trigger JIT compilation
+let total = 0;
+for _ in 0..2000 {
+    total = total + sum_to_n(100);
+}
+
+println(f"Total: {total}");
+// Expected: 2000 * 4950 = 9,900,000

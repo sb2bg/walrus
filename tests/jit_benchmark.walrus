@@ -1,0 +1,19 @@
+// JIT Benchmark: Intensive sum loop
+// This tests the JIT compilation with a larger workload
+
+fn sum_to_n : n {
+    let result = 0;
+    for i in 0..n {
+        result = result + i;
+    }
+    return result;
+}
+
+// Compute sum many times to stress the JIT
+let total = 0;
+for _ in 0..10000 {
+    total = total + sum_to_n(1000);
+}
+
+println(f"Total: {total}");
+// Expected: 10000 * 499500 = 4,995,000,000
