@@ -115,12 +115,12 @@ io.file_close(reader);
 
 #### `std/sys` - System Operations
 
-| Function            | Description                                           |
-| ------------------- | ----------------------------------------------------- |
+| Function            | Description                                          |
+| ------------------- | ---------------------------------------------------- |
 | `sys.env_get(name)` | Get environment variable (returns `void` if not set) |
-| `sys.args()`        | Get command line arguments as a list                  |
-| `sys.cwd()`         | Get current working directory                         |
-| `sys.exit(code)`    | Exit the program with the given status code           |
+| `sys.args()`        | Get command line arguments as a list                 |
+| `sys.cwd()`         | Get current working directory                        |
+| `sys.exit(code)`    | Exit the program with the given status code          |
 
 **Example: System Information**
 
