@@ -427,8 +427,9 @@ impl<'a> VM<'a> {
     fn value_to_string(&self, value: Value, span: Span) -> WalrusResult<String> {
         match value {
             Value::String(key) => Ok(self.get_heap().get_string(key)?.to_string()),
-            _ => Err(WalrusError::Exception {
-                message: format!("Expected string, got {}", value.get_type()),
+            _ => Err(WalrusError::TypeMismatch {
+                expected: "string".to_string(),
+                found: value.get_type().to_string(),
                 span,
                 src: self.source_ref.source().into(),
                 filename: self.source_ref.filename().into(),
@@ -440,13 +441,37 @@ impl<'a> VM<'a> {
     fn value_to_int(&self, value: Value, span: Span) -> WalrusResult<i64> {
         match value {
             Value::Int(n) => Ok(n),
-            _ => Err(WalrusError::Exception {
-                message: format!("Expected int, got {}", value.get_type()),
+            _ => Err(WalrusError::TypeMismatch {
+                expected: "int".to_string(),
+                found: value.get_type().to_string(),
                 span,
                 src: self.source_ref.source().into(),
                 filename: self.source_ref.filename().into(),
             }),
         }
+    }
+
+    /// Normalize an index (supports negative indices) against a character length.
+    fn normalize_index(index: i64, len: usize) -> Option<usize> {
+        let len = len as i64;
+        let normalized = if index < 0 { index + len } else { index };
+        if normalized < 0 || normalized >= len {
+            None
+        } else {
+            Some(normalized as usize)
+        }
+    }
+
+    /// Convert a character index to a byte offset.
+    /// Returns `s.len()` when `char_index` is exactly one-past-the-end.
+    fn char_to_byte_offset(s: &str, char_index: usize) -> Option<usize> {
+        if char_index == 0 {
+            return Some(0);
+        }
+        if char_index == s.chars().count() {
+            return Some(s.len());
+        }
+        s.char_indices().nth(char_index).map(|(offset, _)| offset)
     }
 
     /// Run the VM and add stack trace information to any errors
@@ -460,8 +485,9 @@ impl<'a> VM<'a> {
                     Err(err)
                 } else {
                     // Wrap the error with stack trace info
-                    Err(WalrusError::GenericError {
-                        message: format!("{}{}", err, stack_trace),
+                    Err(WalrusError::RuntimeErrorWithStackTrace {
+                        error: err.to_string(),
+                        stack_trace,
                     })
                 }
             }
@@ -553,8 +579,9 @@ impl<'a> VM<'a> {
                     if let Value::Int(v) = self.locals[idx] {
                         self.locals[idx] = Value::Int(v + 1);
                     } else {
-                        return Err(WalrusError::Exception {
-                            message: "IncrementLocal requires integer".to_string(),
+                        return Err(WalrusError::TypeMismatch {
+                            expected: "int".to_string(),
+                            found: self.locals[idx].get_type().to_string(),
                             span,
                             src: self.source_ref.source().into(),
                             filename: self.source_ref.filename().into(),
@@ -567,8 +594,9 @@ impl<'a> VM<'a> {
                     if let Value::Int(v) = self.locals[idx] {
                         self.locals[idx] = Value::Int(v - 1);
                     } else {
-                        return Err(WalrusError::Exception {
-                            message: "DecrementLocal requires integer".to_string(),
+                        return Err(WalrusError::TypeMismatch {
+                            expected: "int".to_string(),
+                            found: self.locals[idx].get_type().to_string(),
                             span,
                             src: self.source_ref.source().into(),
                             filename: self.source_ref.filename().into(),
@@ -622,8 +650,13 @@ impl<'a> VM<'a> {
                             self.ip = jump_target as usize;
                         }
                     } else {
-                        return Err(WalrusError::Exception {
-                            message: "ForRangeNext requires integer range bounds".to_string(),
+                        return Err(WalrusError::TypeMismatch {
+                            expected: "int and int (range bounds)".to_string(),
+                            found: format!(
+                                "{} and {}",
+                                self.locals[idx].get_type(),
+                                self.locals[idx + 1].get_type()
+                            ),
                             span,
                             src: self.source_ref.source().into(),
                             filename: self.source_ref.filename().into(),
@@ -942,9 +975,7 @@ impl<'a> VM<'a> {
                                 _ => {
                                     // In theory, this should never happen because the compiler
                                     // should not compile a call to a node function (but just in case)
-                                    return Err(WalrusError::Exception {
-                                        message: "Cannot call a node function from the VM"
-                                            .to_string(),
+                                    return Err(WalrusError::NodeFunctionNotSupportedInVm {
                                         span,
                                         src: self.source_ref.source().into(),
                                         filename: self.source_ref.filename().into(),
@@ -1059,9 +1090,7 @@ impl<'a> VM<'a> {
                                     self.ip = 0;
                                 }
                                 _ => {
-                                    return Err(WalrusError::Exception {
-                                        message: "Cannot call a node function from the VM"
-                                            .to_string(),
+                                    return Err(WalrusError::NodeFunctionNotSupportedInVm {
                                         span,
                                         src: self.source_ref.source().into(),
                                         filename: self.source_ref.filename().into(),
@@ -1088,8 +1117,9 @@ impl<'a> VM<'a> {
                         self.push(Value::Int(a + b));
                     } else {
                         // Fallback for safety (shouldn't happen with correct compilation)
-                        return Err(WalrusError::Exception {
-                            message: "AddInt requires integers".to_string(),
+                        return Err(WalrusError::TypeMismatch {
+                            expected: "int and int".to_string(),
+                            found: format!("{} and {}", a.get_type(), b.get_type()),
                             span,
                             src: self.source_ref.source().into(),
                             filename: self.source_ref.filename().into(),
@@ -1102,8 +1132,9 @@ impl<'a> VM<'a> {
                     if let (Value::Int(a), Value::Int(b)) = (a, b) {
                         self.push(Value::Int(a - b));
                     } else {
-                        return Err(WalrusError::Exception {
-                            message: "SubtractInt requires integers".to_string(),
+                        return Err(WalrusError::TypeMismatch {
+                            expected: "int and int".to_string(),
+                            found: format!("{} and {}", a.get_type(), b.get_type()),
                             span,
                             src: self.source_ref.source().into(),
                             filename: self.source_ref.filename().into(),
@@ -1116,8 +1147,9 @@ impl<'a> VM<'a> {
                     if let (Value::Int(a), Value::Int(b)) = (a, b) {
                         self.push(Value::Bool(a < b));
                     } else {
-                        return Err(WalrusError::Exception {
-                            message: "LessInt requires integers".to_string(),
+                        return Err(WalrusError::TypeMismatch {
+                            expected: "int and int".to_string(),
+                            found: format!("{} and {}", a.get_type(), b.get_type()),
                             span,
                             src: self.source_ref.source().into(),
                             filename: self.source_ref.filename().into(),
@@ -1540,25 +1572,30 @@ impl<'a> VM<'a> {
                         }
                         (Value::String(a), Value::Int(b)) => {
                             let a = self.get_heap().get_string(a)?;
-                            let mut b = b;
+                            let char_len = a.chars().count();
                             let original = b;
 
-                            if b < 0 {
-                                b += a.len() as i64;
-                            }
-
-                            if b < 0 || b >= a.len() as i64 {
+                            let Some(char_idx) = Self::normalize_index(b, char_len) else {
                                 return Err(WalrusError::IndexOutOfBounds {
                                     index: original,
-                                    len: a.len(),
+                                    len: char_len,
                                     span,
                                     src: self.source_ref.source().to_string(),
                                     filename: self.source_ref.filename().to_string(),
                                 });
-                            }
+                            };
 
-                            let b = b as usize;
-                            let res = a[b..b + 1].to_string();
+                            let res = a
+                                .chars()
+                                .nth(char_idx)
+                                .map(|ch| ch.to_string())
+                                .ok_or_else(|| WalrusError::IndexOutOfBounds {
+                                    index: original,
+                                    len: char_len,
+                                    span,
+                                    src: self.source_ref.source().to_string(),
+                                    filename: self.source_ref.filename().to_string(),
+                                })?;
                             let value = self.get_heap_mut().push(HeapValue::String(&res));
 
                             self.push(value);
@@ -1585,7 +1622,7 @@ impl<'a> VM<'a> {
                         }
                         (Value::String(a), Value::Range(range)) => {
                             let a = self.get_heap().get_string(a)?;
-                            let a_len = a.len();
+                            let a_len = a.chars().count();
 
                             let start = if range.start < 0 {
                                 a_len as i64 + range.start + 1
@@ -1606,7 +1643,7 @@ impl<'a> VM<'a> {
                             {
                                 return Err(WalrusError::IndexOutOfBounds {
                                     index: range.start,
-                                    len: a.len(),
+                                    len: a_len,
                                     span,
                                     src: self.source_ref.source().to_string(),
                                     filename: self.source_ref.filename().to_string(),
@@ -1623,7 +1660,29 @@ impl<'a> VM<'a> {
                                 });
                             }
 
-                            let res = a[start as usize..end as usize].to_string();
+                            let start = start as usize;
+                            let end = end as usize;
+
+                            let start_byte = Self::char_to_byte_offset(a, start).ok_or_else(|| {
+                                WalrusError::IndexOutOfBounds {
+                                    index: range.start,
+                                    len: a_len,
+                                    span,
+                                    src: self.source_ref.source().to_string(),
+                                    filename: self.source_ref.filename().to_string(),
+                                }
+                            })?;
+                            let end_byte = Self::char_to_byte_offset(a, end).ok_or_else(|| {
+                                WalrusError::IndexOutOfBounds {
+                                    index: range.end,
+                                    len: a_len,
+                                    span,
+                                    src: self.source_ref.source().to_string(),
+                                    filename: self.source_ref.filename().to_string(),
+                                }
+                            })?;
+
+                            let res = a[start_byte..end_byte].to_string();
                             let value = self.get_heap_mut().push(HeapValue::String(&res));
 
                             self.push(value);
@@ -1857,8 +1916,10 @@ impl<'a> VM<'a> {
                             self.push(Value::Int(old as i64));
                         }
                         _ => {
-                            return Err(WalrusError::GenericError {
-                                message: "__gc_threshold__ requires a positive integer".to_string(),
+                            return Err(WalrusError::InvalidGcThresholdArg {
+                                span,
+                                src: self.source_ref.source().to_string(),
+                                filename: self.source_ref.filename().to_string(),
                             });
                         }
                     }
@@ -1884,11 +1945,8 @@ impl<'a> VM<'a> {
                                 let module = self.get_heap_mut().push(HeapValue::Dict(dict));
                                 self.push(module);
                             } else {
-                                return Err(WalrusError::Exception {
-                                    message: format!(
-                                        "Unknown module: '{}'. Available: std/io, std/sys",
-                                        name_str
-                                    ),
+                                return Err(WalrusError::ModuleNotFound {
+                                    module: name_str.to_string(),
                                     span,
                                     src: self.source_ref.source().into(),
                                     filename: self.source_ref.filename().into(),
@@ -1896,8 +1954,9 @@ impl<'a> VM<'a> {
                             }
                         }
                         _ => {
-                            return Err(WalrusError::Exception {
-                                message: "import requires a string module name".to_string(),
+                            return Err(WalrusError::TypeMismatch {
+                                expected: "string".to_string(),
+                                found: module_name.get_type().to_string(),
                                 span,
                                 src: self.source_ref.source().into(),
                                 filename: self.source_ref.filename().into(),
@@ -1969,11 +2028,9 @@ impl<'a> VM<'a> {
 
                         self.push(instance_value);
                     } else {
-                        return Err(WalrusError::Exception {
-                            message: format!(
-                                "Expected struct definition, got {}",
-                                struct_def_value.get_type()
-                            ),
+                        return Err(WalrusError::TypeMismatch {
+                            expected: "struct definition".to_string(),
+                            found: struct_def_value.get_type().to_string(),
                             span,
                             src: self.source_ref.source().into(),
                             filename: self.source_ref.filename().into(),
@@ -1995,12 +2052,9 @@ impl<'a> VM<'a> {
                                 if let Some(method) = struct_def.get_method(&method_name) {
                                     method.clone()
                                 } else {
-                                    return Err(WalrusError::Exception {
-                                        message: format!(
-                                            "Method '{}' not found on struct '{}'",
-                                            method_name,
-                                            struct_def.name()
-                                        ),
+                                    return Err(WalrusError::MethodNotFound {
+                                        type_name: struct_def.name().to_string(),
+                                        method: method_name.clone(),
                                         span,
                                         src: self.source_ref.source().into(),
                                         filename: self.source_ref.filename().into(),
@@ -2021,20 +2075,19 @@ impl<'a> VM<'a> {
                                 self.push(value);
                             } else {
                                 let member_name = self.get_heap().get_string(member_name_sym)?;
-                                return Err(WalrusError::Exception {
-                                    message: format!(
-                                        "Member '{}' not found in module/dict",
-                                        member_name
-                                    ),
+                                return Err(WalrusError::MemberNotFound {
+                                    type_name: "module/dict".to_string(),
+                                    member: member_name.to_string(),
                                     span,
                                     src: self.source_ref.source().into(),
                                     filename: self.source_ref.filename().into(),
                                 });
                             }
                         }
-                        _ => {
-                            return Err(WalrusError::Exception {
-                                message: "Member access requires a struct or module".to_string(),
+                        (member, object) => {
+                            return Err(WalrusError::InvalidMemberAccessTarget {
+                                object_type: object.get_type().to_string(),
+                                member_type: member.get_type().to_string(),
                                 span,
                                 src: self.source_ref.source().into(),
                                 filename: self.source_ref.filename().into(),
@@ -2048,9 +2101,10 @@ impl<'a> VM<'a> {
                     let method_name_val = self.pop(opcode, span)?;
                     let method_name = match method_name_val {
                         Value::String(sym) => self.get_heap().get_string(sym)?.to_string(),
-                        _ => {
-                            return Err(WalrusError::Exception {
-                                message: "Method name must be a string".to_string(),
+                        other => {
+                            return Err(WalrusError::TypeMismatch {
+                                expected: "string".to_string(),
+                                found: other.get_type().to_string(),
                                 span,
                                 src: self.source_ref.source().into(),
                                 filename: self.source_ref.filename().into(),
@@ -2125,12 +2179,9 @@ impl<'a> VM<'a> {
                                 if let Some(method) = struct_def.get_method(&method_name) {
                                     method.clone()
                                 } else {
-                                    return Err(WalrusError::Exception {
-                                        message: format!(
-                                            "Struct '{}' has no method '{}'",
-                                            struct_def.name(),
-                                            method_name
-                                        ),
+                                    return Err(WalrusError::MethodNotFound {
+                                        type_name: struct_def.name().to_string(),
+                                        method: method_name.clone(),
                                         span,
                                         src: self.source_ref.source().into(),
                                         filename: self.source_ref.filename().into(),
@@ -2168,8 +2219,7 @@ impl<'a> VM<'a> {
                                 self.ip = 0;
                                 continue; // Skip pushing result, function handles its own return
                             } else {
-                                return Err(WalrusError::Exception {
-                                    message: "Struct methods must be VM functions".to_string(),
+                                return Err(WalrusError::StructMethodMustBeVmFunction {
                                     span,
                                     src: self.source_ref.source().into(),
                                     filename: self.source_ref.filename().into(),
@@ -2177,12 +2227,9 @@ impl<'a> VM<'a> {
                             }
                         }
                         _ => {
-                            return Err(WalrusError::Exception {
-                                message: format!(
-                                    "Cannot call method '{}' on type '{}'",
-                                    method_name,
-                                    object.get_type()
-                                ),
+                            return Err(WalrusError::InvalidMethodReceiver {
+                                method: method_name,
+                                type_name: object.get_type().to_string(),
                                 span,
                                 src: self.source_ref.source().into(),
                                 filename: self.source_ref.filename().into(),

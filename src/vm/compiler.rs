@@ -1118,8 +1118,10 @@ impl<'a> BytecodeEmitter<'a> {
             }
             NodeKind::PackageImport(_, _) => {
                 // Package imports not yet implemented
-                return Err(WalrusError::GenericError {
-                    message: "Package imports (@package) are not yet implemented".to_string(),
+                return Err(WalrusError::PackageImportNotImplemented {
+                    span,
+                    src: self.source_ref.source().to_string(),
+                    filename: self.source_ref.filename().to_string(),
                 });
             }
             _ => unimplemented!("{}", kind),

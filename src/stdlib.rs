@@ -81,7 +81,7 @@ pub fn get_module_functions(module: &str) -> Option<Vec<NativeFunction>> {
 
 /// Open a file and return a handle
 /// Modes: "r" (read), "w" (write/create), "a" (append), "rw" (read+write)
-pub fn file_open(path: &str, mode: &str, span: Span) -> WalrusResult<Value> {
+pub fn file_open(path: &str, mode: &str, _span: Span) -> WalrusResult<Value> {
     let file = match mode {
         "r" => OpenOptions::new().read(true).open(path),
         "w" => OpenOptions::new()
@@ -100,11 +100,8 @@ pub fn file_open(path: &str, mode: &str, span: Span) -> WalrusResult<Value> {
             .create(true)
             .open(path),
         _ => {
-            return Err(WalrusError::Exception {
-                message: format!("Invalid file mode '{}'. Use 'r', 'w', 'a', or 'rw'", mode),
-                span,
-                src: String::new(),
-                filename: String::new(),
+            return Err(WalrusError::InvalidFileMode {
+                mode: mode.to_string(),
             });
         }
     };
@@ -118,43 +115,34 @@ pub fn file_open(path: &str, mode: &str, span: Span) -> WalrusResult<Value> {
             });
             Ok(Value::Int(handle))
         }
-        Err(e) => Err(WalrusError::Exception {
-            message: format!("Failed to open '{}': {}", path, e),
-            span,
-            src: String::new(),
-            filename: String::new(),
+        Err(e) => Err(WalrusError::FileOpenFailed {
+            path: path.to_string(),
+            reason: e.to_string(),
         }),
     }
 }
 
 /// Read entire file contents as a string
-pub fn file_read(handle: i64, span: Span) -> WalrusResult<String> {
+pub fn file_read(handle: i64, _span: Span) -> WalrusResult<String> {
     FILE_TABLE.with(|table| {
         let mut table = table.borrow_mut();
         if let Some(entry) = table.get_mut(handle) {
             let mut contents = String::new();
             match entry.file.read_to_string(&mut contents) {
                 Ok(_) => Ok(contents),
-                Err(e) => Err(WalrusError::Exception {
-                    message: format!("Failed to read file: {}", e),
-                    span,
-                    src: String::new(),
-                    filename: String::new(),
+                Err(e) => Err(WalrusError::FileReadFailed {
+                    handle,
+                    reason: e.to_string(),
                 }),
             }
         } else {
-            Err(WalrusError::Exception {
-                message: format!("Invalid file handle: {}", handle),
-                span,
-                src: String::new(),
-                filename: String::new(),
-            })
+            Err(WalrusError::InvalidFileHandle { handle })
         }
     })
 }
 
 /// Read a single line from a file
-pub fn file_read_line(handle: i64, span: Span) -> WalrusResult<Option<String>> {
+pub fn file_read_line(handle: i64, _span: Span) -> WalrusResult<Option<String>> {
     FILE_TABLE.with(|table| {
         let mut table = table.borrow_mut();
         if let Some(entry) = table.get_mut(handle) {
@@ -173,62 +161,43 @@ pub fn file_read_line(handle: i64, span: Span) -> WalrusResult<Option<String>> {
                     }
                     Ok(Some(line))
                 }
-                Err(e) => Err(WalrusError::Exception {
-                    message: format!("Failed to read line: {}", e),
-                    span,
-                    src: String::new(),
-                    filename: String::new(),
+                Err(e) => Err(WalrusError::FileReadLineFailed {
+                    handle,
+                    reason: e.to_string(),
                 }),
             }
         } else {
-            Err(WalrusError::Exception {
-                message: format!("Invalid file handle: {}", handle),
-                span,
-                src: String::new(),
-                filename: String::new(),
-            })
+            Err(WalrusError::InvalidFileHandle { handle })
         }
     })
 }
 
 /// Write string to file, returns bytes written
-pub fn file_write(handle: i64, content: &str, span: Span) -> WalrusResult<i64> {
+pub fn file_write(handle: i64, content: &str, _span: Span) -> WalrusResult<i64> {
     FILE_TABLE.with(|table| {
         let mut table = table.borrow_mut();
         if let Some(entry) = table.get_mut(handle) {
             match entry.file.write_all(content.as_bytes()) {
                 Ok(_) => Ok(content.len() as i64),
-                Err(e) => Err(WalrusError::Exception {
-                    message: format!("Failed to write to file: {}", e),
-                    span,
-                    src: String::new(),
-                    filename: String::new(),
+                Err(e) => Err(WalrusError::FileWriteFailed {
+                    handle,
+                    reason: e.to_string(),
                 }),
             }
         } else {
-            Err(WalrusError::Exception {
-                message: format!("Invalid file handle: {}", handle),
-                span,
-                src: String::new(),
-                filename: String::new(),
-            })
+            Err(WalrusError::InvalidFileHandle { handle })
         }
     })
 }
 
 /// Close a file handle
-pub fn file_close(handle: i64, span: Span) -> WalrusResult<()> {
+pub fn file_close(handle: i64, _span: Span) -> WalrusResult<()> {
     FILE_TABLE.with(|table| {
         let mut table = table.borrow_mut();
         if table.remove(handle).is_some() {
             Ok(())
         } else {
-            Err(WalrusError::Exception {
-                message: format!("Invalid file handle: {}", handle),
-                span,
-                src: String::new(),
-                filename: String::new(),
-            })
+            Err(WalrusError::InvalidFileHandle { handle })
         }
     })
 }
@@ -249,27 +218,23 @@ pub fn is_file(path: &str) -> bool {
 }
 
 /// Read entire file as string (convenience function - opens, reads, closes)
-pub fn read_file(path: &str, span: Span) -> WalrusResult<String> {
+pub fn read_file(path: &str, _span: Span) -> WalrusResult<String> {
     match std::fs::read_to_string(path) {
         Ok(content) => Ok(content),
-        Err(e) => Err(WalrusError::Exception {
-            message: format!("Failed to read '{}': {}", path, e),
-            span,
-            src: String::new(),
-            filename: String::new(),
+        Err(e) => Err(WalrusError::ReadFileFailed {
+            path: path.to_string(),
+            reason: e.to_string(),
         }),
     }
 }
 
 /// Write string to file (convenience function - opens, writes, closes)
-pub fn write_file(path: &str, content: &str, span: Span) -> WalrusResult<()> {
+pub fn write_file(path: &str, content: &str, _span: Span) -> WalrusResult<()> {
     match std::fs::write(path, content) {
         Ok(_) => Ok(()),
-        Err(e) => Err(WalrusError::Exception {
-            message: format!("Failed to write '{}': {}", path, e),
-            span,
-            src: String::new(),
-            filename: String::new(),
+        Err(e) => Err(WalrusError::WriteFileFailed {
+            path: path.to_string(),
+            reason: e.to_string(),
         }),
     }
 }

@@ -126,8 +126,9 @@ fn try_main() -> WalrusResult<()> {
         (false, true) => Opts::Disassemble,
         (false, false) => Opts::Compile,
         (true, true) => {
-            return Err(WalrusError::GenericError {
-                message: "Invalid combination of program arguments.".to_string(),
+            return Err(WalrusError::InvalidArgumentCombination {
+                first_arg: "--interpreted".to_string(),
+                second_arg: "--disassemble".to_string(),
             });
         }
     };

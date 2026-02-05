@@ -224,6 +224,17 @@ pub enum WalrusError {
     #[error("Number '{number}' is too large at {line}")]
     NumberTooLarge { number: String, line: String },
 
+    #[error("Circular import detected: module '{module}' is already being imported")]
+    CircularImport { module: String },
+
+    #[error(
+        "Invalid argument combination: '{first_arg}' cannot be used with '{second_arg}'"
+    )]
+    InvalidArgumentCombination {
+        first_arg: String,
+        second_arg: String,
+    },
+
     #[error(
         "Invalid operation '{op}' on operands '{left}' and '{right}' at {}",
         get_line(src, filename, *span)
@@ -478,6 +489,146 @@ pub enum WalrusError {
         src: String,
         filename: String,
     },
+
+    #[error("Type '{type_name}' has no method '{method}' at {}",
+        get_line(src, filename, *span)
+    )]
+    MethodNotFound {
+        type_name: String,
+        method: String,
+        span: Span,
+        src: String,
+        filename: String,
+    },
+
+    #[error("Type '{type_name}' has no member '{member}' at {}",
+        get_line(src, filename, *span)
+    )]
+    MemberNotFound {
+        type_name: String,
+        member: String,
+        span: Span,
+        src: String,
+        filename: String,
+    },
+
+    #[error(
+        "Member access requires object type 'struct' or 'dict' and member name type 'string', found object '{object_type}' and member '{member_type}' at {}",
+        get_line(src, filename, *span)
+    )]
+    InvalidMemberAccessTarget {
+        object_type: String,
+        member_type: String,
+        span: Span,
+        src: String,
+        filename: String,
+    },
+
+    #[error("Cannot execute node-based function bodies in the VM runtime at {}",
+        get_line(src, filename, *span)
+    )]
+    NodeFunctionNotSupportedInVm {
+        span: Span,
+        src: String,
+        filename: String,
+    },
+
+    #[error("Struct methods must compile to VM bytecode functions at {}",
+        get_line(src, filename, *span)
+    )]
+    StructMethodMustBeVmFunction {
+        span: Span,
+        src: String,
+        filename: String,
+    },
+
+    #[error("Cannot call method '{method}' on value of type '{type_name}' at {}",
+        get_line(src, filename, *span)
+    )]
+    InvalidMethodReceiver {
+        method: String,
+        type_name: String,
+        span: Span,
+        src: String,
+        filename: String,
+    },
+
+    #[error("Module '{module}' not found. Available modules: std/io, std/sys at {}",
+        get_line(src, filename, *span)
+    )]
+    ModuleNotFound {
+        module: String,
+        span: Span,
+        src: String,
+        filename: String,
+    },
+
+    #[error("Thrown value: {message} at {}",
+        get_line(src, filename, *span)
+    )]
+    ThrownValue {
+        message: String,
+        span: Span,
+        src: String,
+        filename: String,
+    },
+
+    #[error("Invalid file mode '{mode}'. Supported modes: r, w, a, rw")]
+    InvalidFileMode { mode: String },
+
+    #[error("Failed to open file '{path}': {reason}")]
+    FileOpenFailed { path: String, reason: String },
+
+    #[error("Invalid file handle: {handle}")]
+    InvalidFileHandle { handle: i64 },
+
+    #[error("Failed to read from handle {handle}: {reason}")]
+    FileReadFailed { handle: i64, reason: String },
+
+    #[error("Failed to read line from handle {handle}: {reason}")]
+    FileReadLineFailed { handle: i64, reason: String },
+
+    #[error("Failed to write to handle {handle}: {reason}")]
+    FileWriteFailed { handle: i64, reason: String },
+
+    #[error("Failed to read '{path}': {reason}")]
+    ReadFileFailed { path: String, reason: String },
+
+    #[error("Failed to write '{path}': {reason}")]
+    WriteFileFailed { path: String, reason: String },
+
+    #[error("Cannot pop from an empty list at {}",
+        get_line(src, filename, *span)
+    )]
+    EmptyListPop {
+        span: Span,
+        src: String,
+        filename: String,
+    },
+
+    #[error("__gc_threshold__ requires a positive integer argument at {}",
+        get_line(src, filename, *span)
+    )]
+    InvalidGcThresholdArg {
+        span: Span,
+        src: String,
+        filename: String,
+    },
+
+    #[error("Package imports (@package) are not yet implemented at {}",
+        get_line(src, filename, *span)
+    )]
+    PackageImportNotImplemented {
+        span: Span,
+        src: String,
+        filename: String,
+    },
+
+    #[error("{error}{stack_trace}")]
+    RuntimeErrorWithStackTrace {
+        error: String,
+        stack_trace: String,
+    },
 }
 
 pub fn parser_err_mapper(
@@ -525,15 +676,13 @@ pub fn parser_err_mapper(
                     line: get_line(source, filename, span),
                 }
             }
-            RecoveredParseError::InvalidFStringExpression(expr, span) => {
-                WalrusError::GenericError {
-                    message: format!(
-                        "Invalid f-string expression '{}' at {}",
-                        expr,
-                        get_line(source, filename, span)
-                    ),
-                }
-            }
+            RecoveredParseError::InvalidFStringExpression(expr, span) => WalrusError::FStringParseError {
+                expr,
+                error: "invalid expression syntax".to_string(),
+                span,
+                src: source.to_string(),
+                filename: filename.to_string(),
+            },
         },
     }
 }

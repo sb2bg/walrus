@@ -117,8 +117,13 @@ impl<'a> VM<'a> {
             }
             Ok(false)
         } else {
-            Err(WalrusError::Exception {
-                message: "ForRangeNext requires integer range bounds".to_string(),
+            Err(WalrusError::TypeMismatch {
+                expected: "int and int (range bounds)".to_string(),
+                found: format!(
+                    "{} and {}",
+                    self.locals[idx].get_type(),
+                    self.locals[idx + 1].get_type()
+                ),
                 span,
                 src: self.source_ref.source().into(),
                 filename: self.source_ref.filename().into(),

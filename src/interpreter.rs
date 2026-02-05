@@ -422,7 +422,7 @@ impl<'a> Interpreter<'a> {
     fn visit_throw(&mut self, value: Node, span: Span) -> InterpreterResult {
         let value = self.interpret(value)?;
 
-        Err(WalrusError::Exception {
+        Err(WalrusError::ThrownValue {
             message: value.stringify()?,
             span,
             src: self.source_ref.source().into(),

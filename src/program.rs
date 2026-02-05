@@ -214,8 +214,8 @@ impl Program {
         });
 
         if is_loading {
-            return Err(WalrusError::GenericError {
-                message: format!("Circular import detected: '{}' is already being imported", module_name),
+            return Err(WalrusError::CircularImport {
+                module: module_name.to_string(),
             });
         }
 

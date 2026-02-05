@@ -107,25 +107,30 @@ impl<'a> VM<'a> {
             }
             (Value::String(a), Value::Int(b)) => {
                 let a = self.get_heap().get_string(a)?;
-                let mut b = b;
+                let char_len = a.chars().count();
                 let original = b;
 
-                if b < 0 {
-                    b += a.len() as i64;
-                }
-
-                if b < 0 || b >= a.len() as i64 {
+                let Some(char_idx) = Self::normalize_index(b, char_len) else {
                     return Err(WalrusError::IndexOutOfBounds {
                         index: original,
-                        len: a.len(),
+                        len: char_len,
                         span,
                         src: self.source_ref.source().to_string(),
                         filename: self.source_ref.filename().to_string(),
                     });
-                }
+                };
 
-                let b = b as usize;
-                let res = a[b..b + 1].to_string();
+                let res = a
+                    .chars()
+                    .nth(char_idx)
+                    .map(|ch| ch.to_string())
+                    .ok_or_else(|| WalrusError::IndexOutOfBounds {
+                        index: original,
+                        len: char_len,
+                        span,
+                        src: self.source_ref.source().to_string(),
+                        filename: self.source_ref.filename().to_string(),
+                    })?;
                 let value = self.get_heap_mut().push(HeapValue::String(&res));
 
                 self.push(value);
@@ -148,7 +153,7 @@ impl<'a> VM<'a> {
             }
             (Value::String(a), Value::Range(range)) => {
                 let a = self.get_heap().get_string(a)?;
-                let a_len = a.len();
+                let a_len = a.chars().count();
 
                 let start = if range.start < 0 {
                     a_len as i64 + range.start + 1
@@ -165,7 +170,7 @@ impl<'a> VM<'a> {
                 if start < 0 || end < 0 || start as usize > a_len || end as usize > a_len {
                     return Err(WalrusError::IndexOutOfBounds {
                         index: range.start,
-                        len: a.len(),
+                        len: a_len,
                         span,
                         src: self.source_ref.source().to_string(),
                         filename: self.source_ref.filename().to_string(),
@@ -182,7 +187,29 @@ impl<'a> VM<'a> {
                     });
                 }
 
-                let res = a[start as usize..end as usize].to_string();
+                let start = start as usize;
+                let end = end as usize;
+
+                let start_byte = Self::char_to_byte_offset(a, start).ok_or_else(|| {
+                    WalrusError::IndexOutOfBounds {
+                        index: range.start,
+                        len: a_len,
+                        span,
+                        src: self.source_ref.source().to_string(),
+                        filename: self.source_ref.filename().to_string(),
+                    }
+                })?;
+                let end_byte = Self::char_to_byte_offset(a, end).ok_or_else(|| {
+                    WalrusError::IndexOutOfBounds {
+                        index: range.end,
+                        len: a_len,
+                        span,
+                        src: self.source_ref.source().to_string(),
+                        filename: self.source_ref.filename().to_string(),
+                    }
+                })?;
+
+                let res = a[start_byte..end_byte].to_string();
                 let value = self.get_heap_mut().push(HeapValue::String(&res));
 
                 self.push(value);

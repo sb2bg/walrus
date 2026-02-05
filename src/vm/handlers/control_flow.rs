@@ -134,8 +134,7 @@ impl<'a> VM<'a> {
                         self.ip = 0;
                     }
                     _ => {
-                        return Err(WalrusError::Exception {
-                            message: "Cannot call a node function from the VM".to_string(),
+                        return Err(WalrusError::NodeFunctionNotSupportedInVm {
                             span,
                             src: self.source_ref.source().into(),
                             filename: self.source_ref.filename().into(),
@@ -239,8 +238,7 @@ impl<'a> VM<'a> {
                         self.ip = 0;
                     }
                     _ => {
-                        return Err(WalrusError::Exception {
-                            message: "Cannot call a node function from the VM".to_string(),
+                        return Err(WalrusError::NodeFunctionNotSupportedInVm {
                             span,
                             src: self.source_ref.source().into(),
                             filename: self.source_ref.filename().into(),

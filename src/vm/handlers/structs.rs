@@ -34,11 +34,9 @@ impl<'a> VM<'a> {
             self.push(instance_value);
             Ok(())
         } else {
-            Err(WalrusError::Exception {
-                message: format!(
-                    "Expected struct definition, got {}",
-                    struct_def_value.get_type()
-                ),
+            Err(WalrusError::TypeMismatch {
+                expected: "struct definition".to_string(),
+                found: struct_def_value.get_type().to_string(),
                 span,
                 src: self.source_ref.source().into(),
                 filename: self.source_ref.filename().into(),
@@ -59,12 +57,9 @@ impl<'a> VM<'a> {
                     if let Some(method) = struct_def.get_method(&method_name) {
                         method.clone()
                     } else {
-                        return Err(WalrusError::Exception {
-                            message: format!(
-                                "Method '{}' not found on struct '{}'",
-                                method_name,
-                                struct_def.name()
-                            ),
+                        return Err(WalrusError::MethodNotFound {
+                            type_name: struct_def.name().to_string(),
+                            method: method_name,
                             span,
                             src: self.source_ref.source().into(),
                             filename: self.source_ref.filename().into(),
@@ -81,17 +76,19 @@ impl<'a> VM<'a> {
                     self.push(value);
                 } else {
                     let member_name = self.get_heap().get_string(member_name_sym)?;
-                    return Err(WalrusError::Exception {
-                        message: format!("Member '{}' not found in module/dict", member_name),
+                    return Err(WalrusError::MemberNotFound {
+                        type_name: "module/dict".to_string(),
+                        member: member_name.to_string(),
                         span,
                         src: self.source_ref.source().into(),
                         filename: self.source_ref.filename().into(),
                     });
                 }
             }
-            _ => {
-                return Err(WalrusError::Exception {
-                    message: "Member access requires a struct or module".to_string(),
+            (member, object) => {
+                return Err(WalrusError::InvalidMemberAccessTarget {
+                    object_type: object.get_type().to_string(),
+                    member_type: member.get_type().to_string(),
                     span,
                     src: self.source_ref.source().into(),
                     filename: self.source_ref.filename().into(),
@@ -110,9 +107,10 @@ impl<'a> VM<'a> {
         let method_name_val = self.pop(Opcode::CallMethod(arg_count), span)?;
         let method_name = match method_name_val {
             Value::String(sym) => self.get_heap().get_string(sym)?.to_string(),
-            _ => {
-                return Err(WalrusError::Exception {
-                    message: "Method name must be a string".to_string(),
+            other => {
+                return Err(WalrusError::TypeMismatch {
+                    expected: "string".to_string(),
+                    found: other.get_type().to_string(),
                     span,
                     src: self.source_ref.source().into(),
                     filename: self.source_ref.filename().into(),
@@ -186,12 +184,9 @@ impl<'a> VM<'a> {
                     if let Some(method) = struct_def.get_method(&method_name) {
                         method.clone()
                     } else {
-                        return Err(WalrusError::Exception {
-                            message: format!(
-                                "Struct '{}' has no method '{}'",
-                                struct_def.name(),
-                                method_name
-                            ),
+                        return Err(WalrusError::MethodNotFound {
+                            type_name: struct_def.name().to_string(),
+                            method: method_name.clone(),
                             span,
                             src: self.source_ref.source().into(),
                             filename: self.source_ref.filename().into(),
@@ -228,21 +223,17 @@ impl<'a> VM<'a> {
                     self.ip = 0;
                     return Ok(MethodCallResult::FrameCreated);
                 } else {
-                    return Err(WalrusError::Exception {
-                        message: "Struct methods must be VM functions".to_string(),
+                    return Err(WalrusError::StructMethodMustBeVmFunction {
                         span,
                         src: self.source_ref.source().into(),
                         filename: self.source_ref.filename().into(),
                     });
                 }
             }
-            _ => {
-                return Err(WalrusError::Exception {
-                    message: format!(
-                        "Cannot call method '{}' on type '{}'",
-                        method_name,
-                        object.get_type()
-                    ),
+            other => {
+                return Err(WalrusError::InvalidMethodReceiver {
+                    method: method_name,
+                    type_name: other.get_type().to_string(),
                     span,
                     src: self.source_ref.source().into(),
                     filename: self.source_ref.filename().into(),

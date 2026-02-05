@@ -174,8 +174,9 @@ impl<'a> VM<'a> {
             self.push(Value::Bool(a < b));
             Ok(())
         } else {
-            Err(WalrusError::Exception {
-                message: "LessInt requires integers".to_string(),
+            Err(WalrusError::TypeMismatch {
+                expected: "int and int".to_string(),
+                found: format!("{} and {}", a.get_type(), b.get_type()),
                 span,
                 src: self.source_ref.source().into(),
                 filename: self.source_ref.filename().into(),

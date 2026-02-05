@@ -217,8 +217,9 @@ impl<'a> VM<'a> {
             self.locals[idx] = Value::Int(v + 1);
             Ok(())
         } else {
-            Err(WalrusError::Exception {
-                message: "IncrementLocal requires integer".to_string(),
+            Err(WalrusError::TypeMismatch {
+                expected: "int".to_string(),
+                found: self.locals[idx].get_type().to_string(),
                 span,
                 src: self.source_ref.source().into(),
                 filename: self.source_ref.filename().into(),
@@ -234,8 +235,9 @@ impl<'a> VM<'a> {
             self.locals[idx] = Value::Int(v - 1);
             Ok(())
         } else {
-            Err(WalrusError::Exception {
-                message: "DecrementLocal requires integer".to_string(),
+            Err(WalrusError::TypeMismatch {
+                expected: "int".to_string(),
+                found: self.locals[idx].get_type().to_string(),
                 span,
                 src: self.source_ref.source().into(),
                 filename: self.source_ref.filename().into(),

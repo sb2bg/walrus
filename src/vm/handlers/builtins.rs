@@ -160,8 +160,10 @@ impl<'a> VM<'a> {
                 self.push(Value::Int(old as i64));
                 Ok(())
             }
-            _ => Err(WalrusError::GenericError {
-                message: "__gc_threshold__ requires a positive integer".to_string(),
+            _ => Err(WalrusError::InvalidGcThresholdArg {
+                span,
+                src: self.source_ref.source().to_string(),
+                filename: self.source_ref.filename().to_string(),
             }),
         }
     }
@@ -187,19 +189,17 @@ impl<'a> VM<'a> {
                     self.push(module);
                     Ok(())
                 } else {
-                    Err(WalrusError::Exception {
-                        message: format!(
-                            "Unknown module: '{}'. Available: std/io, std/sys",
-                            name_str
-                        ),
+                    Err(WalrusError::ModuleNotFound {
+                        module: name_str.to_string(),
                         span,
                         src: self.source_ref.source().into(),
                         filename: self.source_ref.filename().into(),
                     })
                 }
             }
-            _ => Err(WalrusError::Exception {
-                message: "import requires a string module name".to_string(),
+            _ => Err(WalrusError::TypeMismatch {
+                expected: "string".to_string(),
+                found: module_name.get_type().to_string(),
                 span,
                 src: self.source_ref.source().into(),
                 filename: self.source_ref.filename().into(),

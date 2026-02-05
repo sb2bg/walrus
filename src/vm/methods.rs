@@ -66,8 +66,10 @@ pub fn dispatch_list_method(
         "pop" => {
             check_arity("pop", 0, args.len(), span, src, filename)?;
             let list = heap.get_mut_list(key)?;
-            list.pop().ok_or_else(|| WalrusError::GenericError {
-                message: "pop from empty list".to_string(),
+            list.pop().ok_or_else(|| WalrusError::EmptyListPop {
+                span,
+                src: src.to_string(),
+                filename: filename.to_string(),
             })
         }
         "len" => {
@@ -151,8 +153,9 @@ pub fn dispatch_list_method(
             let removed = list.remove(index as usize);
             Ok(removed)
         }
-        _ => Err(WalrusError::Exception {
-            message: format!("List has no method '{}'", method),
+        _ => Err(WalrusError::MethodNotFound {
+            type_name: "list".to_string(),
+            method: method.to_string(),
             span,
             src: src.into(),
             filename: filename.into(),
@@ -297,8 +300,9 @@ pub fn dispatch_string_method(
             let replaced = s.replace(&from, &to);
             Ok(heap.push(HeapValue::String(&replaced)))
         }
-        _ => Err(WalrusError::Exception {
-            message: format!("String has no method '{}'", method),
+        _ => Err(WalrusError::MethodNotFound {
+            type_name: "string".to_string(),
+            method: method.to_string(),
             span,
             src: src.into(),
             filename: filename.into(),
@@ -362,8 +366,9 @@ pub fn dispatch_dict_method(
                 None => Ok(Value::Void),
             }
         }
-        _ => Err(WalrusError::Exception {
-            message: format!("Dict has no method '{}'", method),
+        _ => Err(WalrusError::MethodNotFound {
+            type_name: "dict".to_string(),
+            method: method.to_string(),
             span,
             src: src.into(),
             filename: filename.into(),
