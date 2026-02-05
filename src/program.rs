@@ -27,7 +27,7 @@ pub enum Opts {
     Disassemble,
 }
 
-/// Options for JIT profiling
+/// Options for JIT profiling and runtime configuration
 #[derive(Debug, Clone, Copy, Default)]
 pub struct JitOpts {
     /// Whether to show JIT profiling statistics after execution
@@ -36,6 +36,8 @@ pub struct JitOpts {
     pub disable_profiling: bool,
     /// Whether to enable JIT compilation (requires "jit" feature)
     pub enable_jit: bool,
+    /// Whether to enable the interactive debugger
+    pub enable_debugger: bool,
 }
 
 pub struct Program {
@@ -110,11 +112,21 @@ impl Program {
         emitter.emit_void(span);
         emitter.emit_return(span);
 
+        // Build debug info if debugger is enabled
+        if self.jit_opts.enable_debugger {
+            emitter.build_debug_info();
+        }
+
         let mut vm = if self.jit_opts.disable_profiling {
             VM::new_without_profiling(source_ref, emitter.instruction_set())
         } else {
             VM::new(source_ref, emitter.instruction_set())
         };
+
+        // Enable debugger if requested
+        if self.jit_opts.enable_debugger {
+            vm.enable_debugger();
+        }
         
         // Enable JIT compilation if requested
         #[cfg(feature = "jit")]

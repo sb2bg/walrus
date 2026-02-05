@@ -57,6 +57,9 @@ struct Args {
     #[clap(short = 'd', long = "debug", help = "Enable debug mode")]
     debug: bool,
 
+    #[clap(long = "debugger", help = "Enable interactive debugger")]
+    debugger: bool,
+
     #[clap(short = 'v', long = "verbose", help = "Enable verbose mode")]
     verbose: bool,
 
@@ -133,6 +136,7 @@ fn try_main() -> WalrusResult<()> {
         show_stats: args.jit_stats,
         disable_profiling: args.no_jit_profile,
         enable_jit: args.enable_jit,
+        enable_debugger: args.debugger,
     };
 
     create_shell(args.file, opts, jit_opts)?;

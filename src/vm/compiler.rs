@@ -84,10 +84,10 @@ pub struct BytecodeEmitter<'a> {
 }
 
 struct LoopContext {
-    start: usize,           // Address of loop start (for continue)
-    breaks: Vec<usize>,     // Addresses of break jumps to patch
-    is_for_loop: bool,      // True if this is a for loop (needs to pop iterator on break)
-    locals_at_start: usize, // Number of locals at loop body start (for continue cleanup)
+    start: usize,               // Address of loop start (for continue)
+    breaks: Vec<usize>,         // Addresses of break jumps to patch
+    has_stack_iterator: bool,    // True if loop has an iterator on the operand stack (iterator-based for loops only)
+    locals_at_start: usize,     // Number of locals at loop body start (for continue cleanup)
 }
 
 impl<'a> BytecodeEmitter<'a> {
@@ -353,7 +353,7 @@ impl<'a> BytecodeEmitter<'a> {
                 self.loop_stack.push(LoopContext {
                     start,
                     breaks: Vec::new(),
-                    is_for_loop: false,
+                    has_stack_iterator: false,
                     locals_at_start: self.instructions.local_len(),
                 });
 
@@ -433,11 +433,11 @@ impl<'a> BytecodeEmitter<'a> {
                     // Now increase depth for the loop body
                     self.inc_depth();
 
-                    // Push loop context
+                    // Push loop context - range loops don't have an iterator on the stack
                     self.loop_stack.push(LoopContext {
                         start: jump,
                         breaks: Vec::new(),
-                        is_for_loop: true,
+                        has_stack_iterator: false,
                         locals_at_start: self.instructions.local_len(),
                     });
 
@@ -503,7 +503,7 @@ impl<'a> BytecodeEmitter<'a> {
                     self.loop_stack.push(LoopContext {
                         start: jump,
                         breaks: Vec::new(),
-                        is_for_loop: true,
+                        has_stack_iterator: true,
                         locals_at_start: self.instructions.local_len(),
                     });
 
@@ -916,8 +916,9 @@ impl<'a> BytecodeEmitter<'a> {
                         self.instructions
                             .push(Instruction::new(Opcode::PopLocal(to_pop as u32), span));
                     }
-                    // For for-loops, pop the iterator from the stack before breaking
-                    if loop_ctx.is_for_loop {
+                    // For iterator-based for-loops, pop the iterator from the stack before breaking
+                    // Range-based for-loops don't have an iterator on the stack (they use locals)
+                    if loop_ctx.has_stack_iterator {
                         self.instructions.push(Instruction::new(Opcode::Pop, span));
                     }
                     // Add a placeholder jump that will be patched later
@@ -1316,5 +1317,66 @@ impl<'a> BytecodeEmitter<'a> {
                 self.instructions.push(Instruction::new(opcode, span));
             }
         }
+    }
+
+    /// Build debug information for the instruction set.
+    /// This maps instruction pointers to source line numbers and stores variable names.
+    pub fn build_debug_info(&mut self) {
+        use crate::vm::instruction_set::{DebugInfo, LineTable};
+
+        let source = self.source_ref.source();
+
+        // Precompute line offsets (byte offset where each line starts)
+        let line_offsets: Vec<usize> = std::iter::once(0)
+            .chain(source.match_indices('\n').map(|(i, _)| i + 1))
+            .collect();
+
+        // Helper to convert byte offset to line number (1-indexed)
+        let byte_to_line = |byte_offset: usize| -> usize {
+            match line_offsets.binary_search(&byte_offset) {
+                Ok(i) => i + 1, // Exact match at start of line
+                Err(i) => i,    // Between lines, return the line we're in
+            }
+        };
+
+        // Build line table by walking instructions
+        let mut line_table = LineTable::new();
+        let mut current_line: Option<usize> = None;
+        let mut line_start_ip: usize = 0;
+
+        for (ip, instr) in self.instructions.instructions.iter().enumerate() {
+            let span = instr.span();
+            let line = byte_to_line(span.0);
+
+            match current_line {
+                None => {
+                    current_line = Some(line);
+                    line_start_ip = ip;
+                }
+                Some(prev_line) if prev_line != line => {
+                    // New line, close the previous entry
+                    line_table.add_entry(prev_line, line_start_ip, ip);
+                    current_line = Some(line);
+                    line_start_ip = ip;
+                }
+                _ => {} // Same line, continue
+            }
+        }
+
+        // Close final line entry
+        if let Some(line) = current_line {
+            line_table.add_entry(line, line_start_ip, self.instructions.instructions.len());
+        }
+
+        // Copy variable names from symbol tables
+        let local_names = self.instructions.locals.get_all_names();
+        let global_names = self.instructions.globals.get_all_names();
+
+        self.instructions.debug_info = Some(DebugInfo {
+            local_names,
+            global_names,
+            line_table,
+            source: source.to_string(),
+        });
     }
 }

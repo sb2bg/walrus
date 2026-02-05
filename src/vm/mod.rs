@@ -1,6 +1,4 @@
 use std::cell::RefCell;
-use std::io;
-use std::io::Write;
 use std::ptr::NonNull;
 use std::rc::Rc;
 
@@ -23,6 +21,8 @@ use crate::value::Value;
 use crate::vm::opcode::Opcode;
 
 pub mod compiler;
+pub mod debugger;
+pub mod handlers;
 pub mod instruction_set;
 pub mod methods;
 pub mod opcode;
@@ -97,8 +97,9 @@ pub struct VM<'a> {
     ip: usize,                  // Current instruction pointer
     globals: Rc<RefCell<Vec<Value>>>,
     source_ref: SourceRef<'a>,
-    paused: bool,
-    breakpoints: Vec<usize>,
+    // Debugger state
+    debugger: Option<debugger::Debugger>,
+    debug_mode: bool,
     // JIT profiling
     hotspot_detector: HotSpotDetector,
     type_profile: TypeProfile,
@@ -145,8 +146,8 @@ impl<'a> VM<'a> {
             ip: 0,
             globals: Rc::new(RefCell::new(Vec::new())),
             source_ref,
-            paused: false,
-            breakpoints: Vec::new(),
+            debugger: None,
+            debug_mode: false,
             // JIT profiling enabled by default
             hotspot_detector,
             type_profile: TypeProfile::new(),
@@ -157,6 +158,12 @@ impl<'a> VM<'a> {
             #[cfg(feature = "jit")]
             jit_enabled: true,
         }
+    }
+
+    /// Enable the debugger
+    pub fn enable_debugger(&mut self) {
+        self.debug_mode = true;
+        self.debugger = Some(debugger::Debugger::new());
     }
 
     /// Create a VM with profiling disabled (for benchmarking baseline)
@@ -485,8 +492,22 @@ impl<'a> VM<'a> {
 
             instructions.disassemble_single(self.ip, self.function_name());
 
-            if self.paused || self.breakpoints.contains(&self.ip) {
-                self.debug_prompt()?;
+            // Check if debugger should pause
+            if self.debug_mode {
+                if let Some(ref mut dbg) = self.debugger {
+                    let call_depth = self.call_stack.len();
+                    if dbg.should_break(self.ip, call_depth) || dbg.should_prompt {
+                        dbg.trigger_prompt();
+                        match self.run_debugger_prompt(&instructions)? {
+                            debugger::DebuggerCommand::Quit => {
+                                return Err(WalrusError::UnknownError {
+                                    message: "Debugger quit".to_string(),
+                                });
+                            }
+                            _ => {} // Continue execution with the new mode
+                        }
+                    }
+                }
             }
 
             let instruction = instructions.get(self.ip);
@@ -2374,73 +2395,40 @@ impl<'a> VM<'a> {
         }
     }
 
-    fn debug_prompt(&mut self) -> WalrusResult<()> {
-        loop {
-            print!("(debug) ");
-            io::stdout().flush().expect("Failed to flush stdout");
+    /// Run the debugger prompt and return the command
+    fn run_debugger_prompt(
+        &mut self,
+        instructions: &Rc<InstructionSet>,
+    ) -> WalrusResult<debugger::DebuggerCommand> {
+        // Build call stack info for debugger
+        let call_stack: Vec<debugger::DebugCallFrame> = self
+            .call_stack
+            .iter()
+            .map(|f| debugger::DebugCallFrame {
+                function_name: f.function_name.clone(),
+                return_ip: f.return_ip,
+                frame_pointer: f.frame_pointer,
+            })
+            .collect();
 
-            let mut input = String::new();
-            io::stdin()
-                .read_line(&mut input)
-                .expect("Failed to read line");
+        let globals = self.globals.borrow();
+        let ctx = debugger::DebugContext {
+            ip: self.ip,
+            stack: &self.stack,
+            locals: &self.locals,
+            globals: &globals,
+            call_stack: &call_stack,
+            debug_info: instructions.debug_info.as_ref(),
+            instructions: &instructions.instructions,
+            source: self.source_ref.source(),
+        };
 
-            match input.trim() {
-                "s" | "step" => {
-                    self.paused = true;
-                    break;
-                }
-                "c" | "continue" => {
-                    self.paused = false;
-                    break;
-                }
-                "p" | "print" => self.print_debug_info(),
-                "b" | "breakpoint" => {
-                    print!("Enter breakpoint line number: ");
-                    io::stdout().flush().expect("Failed to flush stdout");
-                    let mut line = String::new();
-                    io::stdin()
-                        .read_line(&mut line)
-                        .expect("Failed to read line");
-                    if let Ok(line_num) = line.trim().parse::<usize>() {
-                        self.breakpoints.push(line_num);
-                        debug!("Breakpoint set at line {}", line_num);
-                    } else {
-                        debug!("Invalid line number");
-                    }
-                }
-                "q" | "quit" => {
-                    return Err(WalrusError::UnknownError {
-                        message: "Debugger quit".to_string(),
-                    });
-                }
-                _ => debug!(
-                    "Unknown command. Available commands: step (s), continue (c), print (p), breakpoint (b), quit (q)"
-                ),
-            }
-        }
+        let cmd = if let Some(ref mut dbg) = self.debugger {
+            debugger::debug_prompt(dbg, &ctx)
+        } else {
+            debugger::DebuggerCommand::Continue
+        };
 
-        Ok(())
-    }
-
-    fn print_current_instruction(&self) {
-        let instruction = self.current_frame().instructions.get(self.ip);
-        debug!(
-            "Executing {} -> {}",
-            instruction.opcode(),
-            &self.source_ref.source()[instruction.span().0..instruction.span().1],
-        );
-    }
-
-    fn print_debug_info(&self) {
-        self.print_current_instruction();
-        debug!("Current instruction pointer -> {}", self.ip);
-        debug!("Stack ->");
-        for (i, value) in self.stack.iter().enumerate() {
-            debug!("  {}: {:?}", i, value);
-        }
-        debug!("Locals ->");
-        for (i, value) in self.locals.iter().enumerate() {
-            debug!("  {}: {:?}", i, value);
-        }
+        Ok(cmd)
     }
 }

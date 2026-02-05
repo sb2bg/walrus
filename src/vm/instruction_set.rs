@@ -8,6 +8,71 @@ use crate::value::Value;
 use crate::vm::opcode::Instruction;
 use crate::vm::symbol_table::SymbolTable;
 
+/// Maps source line numbers to instruction pointer ranges.
+/// Used by the debugger to set line-based breakpoints and show source context.
+#[derive(Debug, Clone, Default)]
+pub struct LineTable {
+    /// Vec of (line_number, start_ip, end_ip) - sorted by start_ip
+    entries: Vec<(usize, usize, usize)>,
+}
+
+impl LineTable {
+    pub fn new() -> Self {
+        Self {
+            entries: Vec::new(),
+        }
+    }
+
+    /// Add a mapping from a line number to an IP range
+    pub fn add_entry(&mut self, line: usize, start_ip: usize, end_ip: usize) {
+        self.entries.push((line, start_ip, end_ip));
+    }
+
+    /// Get the line number for a given instruction pointer
+    pub fn get_line(&self, ip: usize) -> Option<usize> {
+        for &(line, start, end) in &self.entries {
+            if ip >= start && ip < end {
+                return Some(line);
+            }
+        }
+        None
+    }
+
+    /// Get the IP range for a given line number.
+    /// Returns the first matching entry (there may be multiple instructions on one line).
+    pub fn get_ip_range(&self, line: usize) -> Option<(usize, usize)> {
+        for &(l, start, end) in &self.entries {
+            if l == line {
+                return Some((start, end));
+            }
+        }
+        None
+    }
+
+    /// Get all IPs that correspond to a given line
+    pub fn get_ips_for_line(&self, line: usize) -> Vec<usize> {
+        self.entries
+            .iter()
+            .filter(|(l, _, _)| *l == line)
+            .map(|(_, start, _)| *start)
+            .collect()
+    }
+}
+
+/// Runtime debug information stored in InstructionSet.
+/// Contains mappings from indices to variable names and line number information.
+#[derive(Debug, Clone, Default)]
+pub struct DebugInfo {
+    /// Variable name at each local index
+    pub local_names: Vec<String>,
+    /// Global variable names
+    pub global_names: Vec<String>,
+    /// IP <-> line mapping
+    pub line_table: LineTable,
+    /// Source code (stored for debugger display)
+    pub source: String,
+}
+
 /// Metadata about a loop for JIT compilation
 #[derive(Debug, Clone)]
 pub struct LoopMetadata {
@@ -46,6 +111,9 @@ pub struct InstructionSet {
     pub loops: Vec<LoopMetadata>,
     /// Registered functions for call tracking
     pub functions: Vec<FunctionMetadata>,
+
+    /// Debug information for the debugger (variable names, line table)
+    pub debug_info: Option<DebugInfo>,
 }
 
 impl InstructionSet {
@@ -57,6 +125,7 @@ impl InstructionSet {
             globals: SymbolTable::new(),
             loops: Vec::new(),
             functions: Vec::new(),
+            debug_info: None,
         }
     }
 
@@ -68,6 +137,7 @@ impl InstructionSet {
             globals: SymbolTable::new(),
             loops: Vec::new(),
             functions: Vec::new(),
+            debug_info: None,
         }
     }
 
@@ -79,6 +149,7 @@ impl InstructionSet {
             globals,
             loops: Vec::new(),
             functions: Vec::new(),
+            debug_info: None,
         }
     }
 

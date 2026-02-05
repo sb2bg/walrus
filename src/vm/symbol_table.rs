@@ -76,6 +76,21 @@ impl SymbolTable {
         self.locals.len()
     }
 
+    /// Iterate over all locals
+    pub fn iter_locals(&self) -> impl Iterator<Item = &Local> {
+        self.locals.iter()
+    }
+
+    /// Get the name of a local at the given index
+    pub fn get_name(&self, index: usize) -> Option<&str> {
+        self.locals.get(index).map(|l| l.name())
+    }
+
+    /// Get all local names as a Vec (for debug info)
+    pub fn get_all_names(&self) -> Vec<String> {
+        self.locals.iter().map(|l| l.name().to_string()).collect()
+    }
+
     /// Remove the last n locals from the symbol table
     pub fn pop_n(&mut self, n: usize) {
         let new_len = self.locals.len().saturating_sub(n);
