@@ -569,134 +569,24 @@ impl<'a> VM<'a> {
                     self.locals[idx + 1] = end;
                 }
                 Opcode::ForRangeNext(jump_target, local_idx) => {
-                    // JIT PROFILING: This is a loop header - track iterations
                     let loop_header_ip = self.ip - 1;
+                    let exit_ip = jump_target as usize;
 
-                    if self.profiling_enabled {
-                        // Dynamic loop registration: if this is the first time seeing this loop,
-                        // register it with the hotspot detector
-                        if !self.hotspot_detector.is_loop_header(loop_header_ip) {
-                            // Calculate exit IP from jump target
-                            self.hotspot_detector.register_loop(
-                                loop_header_ip,
-                                loop_header_ip, // back edge is also at header for ForRangeNext
-                                jump_target as usize,
-                            );
-                        }
+                    // Profile for hotspot detection
+                    self.profile_loop_iteration(loop_header_ip, exit_ip);
 
-                        if self.hotspot_detector.record_loop_iteration(loop_header_ip) {
-                            debug!("Hot range loop detected at IP {}", loop_header_ip);
-                        }
-                    }
-
-                    // JIT EXECUTION: Check if we should use compiled code
+                    // Try JIT execution if available
                     #[cfg(feature = "jit")]
-                    let mut jit_handled = false;
-
-                    #[cfg(feature = "jit")]
-                    if self.jit_enabled {
-                        // First, check if loop is compiled and execute if so
-                        if let Some(ref jit_compiler) = self.jit_compiler {
-                            if jit_compiler.is_compiled(loop_header_ip) {
-                                // Execute the compiled loop directly
-                                let fp = self.frame_pointer();
-                                let loop_var_idx = fp + local_idx as usize;
-                                if let (Value::Int(current), Value::Int(end)) =
-                                    (self.locals[loop_var_idx], self.locals[loop_var_idx + 1])
-                                {
-                                    let compiled =
-                                        jit_compiler.get_compiled(loop_header_ip).unwrap();
-
-                                    // Get the initial accumulator value from the correct local
-                                    let initial_acc =
-                                        if let Some(acc_local) = compiled.accumulator_local {
-                                            let acc_idx = fp + acc_local as usize;
-                                            if acc_idx < self.locals.len() {
-                                                match self.locals[acc_idx] {
-                                                    Value::Int(v) => v,
-                                                    _ => 0,
-                                                }
-                                            } else {
-                                                0
-                                            }
-                                        } else {
-                                            0
-                                        };
-
-                                    // Execute the JIT compiled function
-                                    let result = unsafe {
-                                        compiled.call_int_range_accum(current, end, initial_acc)
-                                    };
-
-                                    // Store the result back to the accumulator local
-                                    if let Some(acc_local) = compiled.accumulator_local {
-                                        let acc_idx = fp + acc_local as usize;
-                                        // Ensure locals is large enough
-                                        while self.locals.len() <= acc_idx {
-                                            self.locals.push(Value::Void);
-                                        }
-                                        self.locals[acc_idx] = Value::Int(result);
-                                    }
-
-                                    // Set the loop counter to the end value (loop is complete)
-                                    self.locals[loop_var_idx] = Value::Int(end);
-
-                                    // Ensure locals vector has space for any locals the loop body
-                                    // would have created. The loop body might StoreAt to higher indices.
-                                    // We need to examine the bytecode to find the max local used,
-                                    // but for now we ensure at least loop_var + 2 exists (for the
-                                    // loop variable that gets pushed/stored each iteration).
-                                    let min_locals_needed = fp + local_idx as usize + 3;
-                                    while self.locals.len() < min_locals_needed {
-                                        self.locals.push(Value::Void);
-                                    }
-
-                                    // Jump to exit
-                                    self.ip = jump_target as usize;
-                                    jit_handled = true;
-                                }
-                            }
-                        }
-
-                        // Try to compile if loop is hot (and not already handled or compiled)
-                        if !jit_handled {
-                            if let Some(ref jit_compiler) = self.jit_compiler {
-                                if !jit_compiler.is_compiled(loop_header_ip)
-                                    && self.hotspot_detector.is_loop_hot(loop_header_ip)
-                                {
-                                    let exit_ip = jump_target as usize;
-                                    let instructions = self.current_frame().instructions.clone();
-
-                                    if let Some(ref mut jit_compiler) = self.jit_compiler {
-                                        match jit_compiler.compile_int_range_sum_loop(
-                                            &instructions,
-                                            loop_header_ip,
-                                            exit_ip,
-                                        ) {
-                                            Ok(_compiled) => {
-                                                self.hotspot_detector.mark_compiled(loop_header_ip);
-                                                debug!(
-                                                    "JIT: Compiled loop at IP {}",
-                                                    loop_header_ip
-                                                );
-                                            }
-                                            Err(e) => {
-                                                debug!(
-                                                    "JIT: Failed to compile loop at IP {}: {}",
-                                                    loop_header_ip, e
-                                                );
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    #[cfg(feature = "jit")]
-                    if jit_handled {
+                    if let Some(jit_exit) =
+                        self.try_jit_range_loop(loop_header_ip, local_idx, jump_target)
+                    {
+                        self.ip = jit_exit;
                         continue;
                     }
+
+                    // Try to compile hot loops
+                    #[cfg(feature = "jit")]
+                    self.try_compile_hot_range_loop(loop_header_ip, exit_ip);
 
                     // Standard interpreted execution
                     let fp = self.frame_pointer();
@@ -1012,7 +902,7 @@ impl<'a> VM<'a> {
                                     let new_frame = CallFrame {
                                         return_ip: self.ip,                  // Where to return after this function
                                         frame_pointer: self.locals.len(), // New frame starts at current locals end
-                                        stack_pointer: self.stack.len(),  // Operand stack position for cleanup on return
+                                        stack_pointer: self.stack.len(), // Operand stack position for cleanup on return
                                         instructions: Rc::clone(&func.code), // Share the instruction set via Rc
                                         function_name: format!("fn<{}>", func.name),
                                     };
@@ -1169,10 +1059,10 @@ impl<'a> VM<'a> {
                     }
                 }
                 // Specialized integer arithmetic (hot path - skips type checking)
+                // SAFETY: Compiler guarantees stack has operands and both are integers
                 Opcode::AddInt => {
-                    // SAFETY: Compiler guarantees both operands are integers
-                    let b = self.stack.pop().unwrap();
-                    let a = self.stack.pop().unwrap();
+                    let b = self.pop_unchecked();
+                    let a = self.pop_unchecked();
                     if let (Value::Int(a), Value::Int(b)) = (a, b) {
                         self.push(Value::Int(a + b));
                     } else {
@@ -1186,8 +1076,8 @@ impl<'a> VM<'a> {
                     }
                 }
                 Opcode::SubtractInt => {
-                    let b = self.stack.pop().unwrap();
-                    let a = self.stack.pop().unwrap();
+                    let b = self.pop_unchecked();
+                    let a = self.pop_unchecked();
                     if let (Value::Int(a), Value::Int(b)) = (a, b) {
                         self.push(Value::Int(a - b));
                     } else {
@@ -1200,8 +1090,8 @@ impl<'a> VM<'a> {
                     }
                 }
                 Opcode::LessInt => {
-                    let b = self.stack.pop().unwrap();
-                    let a = self.stack.pop().unwrap();
+                    let b = self.pop_unchecked();
+                    let a = self.pop_unchecked();
                     if let (Value::Int(a), Value::Int(b)) = (a, b) {
                         self.push(Value::Bool(a < b));
                     } else {
@@ -2077,7 +1967,8 @@ impl<'a> VM<'a> {
                     match (member_name_value, object_value) {
                         // Struct method access
                         (Value::String(method_name_sym), Value::StructDef(struct_def_key)) => {
-                            let method_name = self.get_heap().get_string(method_name_sym)?.to_string();
+                            let method_name =
+                                self.get_heap().get_string(method_name_sym)?.to_string();
                             let method_clone = {
                                 let struct_def = self.get_heap().get_struct_def(struct_def_key)?;
                                 if let Some(method) = struct_def.get_method(&method_name) {
@@ -2304,6 +2195,138 @@ impl<'a> VM<'a> {
                 span,
                 src: self.source_ref.source().to_string(),
                 filename: self.source_ref.filename().to_string(),
+            }
+        }
+    }
+
+    /// Profile a loop iteration for hotspot detection.
+    /// Returns true if the loop just became hot.
+    fn profile_loop_iteration(&mut self, loop_header_ip: usize, exit_ip: usize) -> bool {
+        if !self.profiling_enabled {
+            return false;
+        }
+
+        // Dynamic loop registration: if this is the first time seeing this loop,
+        // register it with the hotspot detector
+        if !self.hotspot_detector.is_loop_header(loop_header_ip) {
+            self.hotspot_detector.register_loop(
+                loop_header_ip,
+                loop_header_ip, // back edge is also at header for ForRangeNext
+                exit_ip,
+            );
+        }
+
+        let became_hot = self.hotspot_detector.record_loop_iteration(loop_header_ip);
+        if became_hot {
+            debug!("Hot range loop detected at IP {}", loop_header_ip);
+        }
+        became_hot
+    }
+
+    /// Try to execute a JIT-compiled range loop.
+    /// Returns Some(exit_ip) if the loop was handled by JIT, None otherwise.
+    #[cfg(feature = "jit")]
+    fn try_jit_range_loop(
+        &mut self,
+        loop_header_ip: usize,
+        local_idx: u16,
+        jump_target: u16,
+    ) -> Option<usize> {
+        if !self.jit_enabled {
+            return None;
+        }
+
+        let jit_compiler = self.jit_compiler.as_ref()?;
+        if !jit_compiler.is_compiled(loop_header_ip) {
+            return None;
+        }
+
+        let fp = self.frame_pointer();
+        let loop_var_idx = fp + local_idx as usize;
+
+        // Verify we have integer bounds
+        let (current, end) = match (self.locals[loop_var_idx], self.locals[loop_var_idx + 1]) {
+            (Value::Int(c), Value::Int(e)) => (c, e),
+            _ => return None,
+        };
+
+        let compiled = jit_compiler.get_compiled(loop_header_ip)?;
+
+        // Get the initial accumulator value from the correct local
+        let initial_acc = compiled
+            .accumulator_local
+            .and_then(|acc_local| {
+                let acc_idx = fp + acc_local as usize;
+                if acc_idx < self.locals.len() {
+                    match self.locals[acc_idx] {
+                        Value::Int(v) => Some(v),
+                        _ => None,
+                    }
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(0);
+
+        // Execute the JIT compiled function
+        let result = unsafe { compiled.call_int_range_accum(current, end, initial_acc) };
+
+        // Store the result back to the accumulator local
+        if let Some(acc_local) = compiled.accumulator_local {
+            let acc_idx = fp + acc_local as usize;
+            while self.locals.len() <= acc_idx {
+                self.locals.push(Value::Void);
+            }
+            self.locals[acc_idx] = Value::Int(result);
+        }
+
+        // Set the loop counter to the end value (loop is complete)
+        self.locals[loop_var_idx] = Value::Int(end);
+
+        // Ensure locals vector has space for any locals the loop body would have created
+        let min_locals_needed = fp + local_idx as usize + 3;
+        while self.locals.len() < min_locals_needed {
+            self.locals.push(Value::Void);
+        }
+
+        Some(jump_target as usize)
+    }
+
+    /// Try to compile a hot range loop.
+    #[cfg(feature = "jit")]
+    fn try_compile_hot_range_loop(&mut self, loop_header_ip: usize, exit_ip: usize) {
+        if !self.jit_enabled {
+            return;
+        }
+
+        // Check if already compiled or not hot
+        let should_compile = self
+            .jit_compiler
+            .as_ref()
+            .map(|jit| {
+                !jit.is_compiled(loop_header_ip)
+                    && self.hotspot_detector.is_loop_hot(loop_header_ip)
+            })
+            .unwrap_or(false);
+
+        if !should_compile {
+            return;
+        }
+
+        let instructions = self.current_frame().instructions.clone();
+
+        if let Some(ref mut jit_compiler) = self.jit_compiler {
+            match jit_compiler.compile_int_range_sum_loop(&instructions, loop_header_ip, exit_ip) {
+                Ok(_) => {
+                    self.hotspot_detector.mark_compiled(loop_header_ip);
+                    debug!("JIT: Compiled loop at IP {}", loop_header_ip);
+                }
+                Err(e) => {
+                    debug!(
+                        "JIT: Failed to compile loop at IP {}: {}",
+                        loop_header_ip, e
+                    );
+                }
             }
         }
     }
