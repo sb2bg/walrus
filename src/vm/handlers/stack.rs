@@ -55,46 +55,31 @@ impl<'a> VM<'a> {
 
     #[inline(always)]
     pub(crate) fn handle_load_global(&mut self, index: u32) {
-        let value = {
-            let globals = self.globals.borrow();
-            globals[index as usize]
-        };
+        let value = self.globals[index as usize];
         self.push(value);
     }
 
     #[inline(always)]
     pub(crate) fn handle_load_global_0(&mut self) {
-        let value = {
-            let globals = self.globals.borrow();
-            globals[0]
-        };
+        let value = self.globals[0];
         self.push(value);
     }
 
     #[inline(always)]
     pub(crate) fn handle_load_global_1(&mut self) {
-        let value = {
-            let globals = self.globals.borrow();
-            globals[1]
-        };
+        let value = self.globals[1];
         self.push(value);
     }
 
     #[inline(always)]
     pub(crate) fn handle_load_global_2(&mut self) {
-        let value = {
-            let globals = self.globals.borrow();
-            globals[2]
-        };
+        let value = self.globals[2];
         self.push(value);
     }
 
     #[inline(always)]
     pub(crate) fn handle_load_global_3(&mut self) {
-        let value = {
-            let globals = self.globals.borrow();
-            globals[3]
-        };
+        let value = self.globals[3];
         self.push(value);
     }
 
@@ -123,12 +108,11 @@ impl<'a> VM<'a> {
     pub(crate) fn handle_store_global(&mut self, index: u32, span: Span) -> WalrusResult<()> {
         let value = self.pop(Opcode::StoreGlobal(index), span)?;
         let index = index as usize;
-        let mut globals = self.globals.borrow_mut();
 
-        if index == globals.len() {
-            globals.push(value);
+        if index == self.globals.len() {
+            self.globals.push(value);
         } else {
-            globals[index] = value;
+            self.globals[index] = value;
         }
         Ok(())
     }
@@ -144,8 +128,7 @@ impl<'a> VM<'a> {
     #[inline(always)]
     pub(crate) fn handle_reassign_global(&mut self, index: u32, span: Span) -> WalrusResult<()> {
         let value = self.pop(Opcode::ReassignGlobal(index), span)?;
-        let mut globals = self.globals.borrow_mut();
-        globals[index as usize] = value;
+        self.globals[index as usize] = value;
         Ok(())
     }
 

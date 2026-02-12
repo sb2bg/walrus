@@ -1,4 +1,3 @@
-use std::cell::RefCell;
 use std::ptr::NonNull;
 use std::rc::Rc;
 
@@ -75,8 +74,7 @@ struct CallFrame {
 /// This is more memory-efficient than creating child VMs and supports deep recursion.
 ///
 /// ## Global Variables
-/// Globals are stored in a shared `Rc<RefCell<Vec<Value>>>` so they persist across
-/// all call frames.
+/// Globals are stored in a shared vector across all call frames.
 ///
 /// ## Memory Model
 /// Heap-allocated values (strings, lists, dicts, functions) are stored in a global
@@ -96,7 +94,7 @@ pub struct VM<'a> {
     call_stack: Vec<CallFrame>, // Stack of call frames
     ip: usize,                  // Current instruction pointer
     gc_poll_counter: u32,       // Throttle GC checks to avoid per-instruction overhead
-    globals: Rc<RefCell<Vec<Value>>>,
+    globals: Vec<Value>,
     source_ref: SourceRef<'a>,
     // Debugger state
     debugger: Option<debugger::Debugger>,
@@ -146,7 +144,7 @@ impl<'a> VM<'a> {
             call_stack: vec![main_frame],
             ip: 0,
             gc_poll_counter: 0,
-            globals: Rc::new(RefCell::new(Vec::new())),
+            globals: Vec::new(),
             source_ref,
             debugger: None,
             debug_mode: false,
@@ -218,7 +216,8 @@ impl<'a> VM<'a> {
     /// Get the current function name
     #[inline(always)]
     fn function_name(&self) -> &str {
-        &self.current_frame().function_name
+        let name = &self.current_frame().function_name;
+        if name.is_empty() { "<fn>" } else { name }
     }
 
     /// Helper to access heap - uses thread-local ARENA
@@ -253,7 +252,7 @@ impl<'a> VM<'a> {
         roots.extend(self.locals.iter().copied());
 
         // Global variables are roots
-        roots.extend(self.globals.borrow().iter().copied());
+        roots.extend(self.globals.iter().copied());
 
         // Constants in all call frames are roots (they might reference heap objects)
         for frame in &self.call_stack {
@@ -295,12 +294,22 @@ impl<'a> VM<'a> {
         if len <= MAX_FRAMES_TOP + MAX_FRAMES_BOTTOM {
             // Show all frames
             for (i, frame) in self.call_stack.iter().enumerate() {
-                trace.push_str(&format!("  {}: {}\n", i, frame.function_name));
+                let name = if frame.function_name.is_empty() {
+                    "<fn>"
+                } else {
+                    frame.function_name.as_str()
+                };
+                trace.push_str(&format!("  {}: {}\n", i, name));
             }
         } else {
             // Show first N frames
             for (i, frame) in self.call_stack.iter().take(MAX_FRAMES_TOP).enumerate() {
-                trace.push_str(&format!("  {}: {}\n", i, frame.function_name));
+                let name = if frame.function_name.is_empty() {
+                    "<fn>"
+                } else {
+                    frame.function_name.as_str()
+                };
+                trace.push_str(&format!("  {}: {}\n", i, name));
             }
 
             // Show truncation message
@@ -315,7 +324,12 @@ impl<'a> VM<'a> {
                 .enumerate()
             {
                 let actual_index = len - MAX_FRAMES_BOTTOM + i;
-                trace.push_str(&format!("  {}: {}\n", actual_index, frame.function_name));
+                let name = if frame.function_name.is_empty() {
+                    "<fn>"
+                } else {
+                    frame.function_name.as_str()
+                };
+                trace.push_str(&format!("  {}: {}\n", actual_index, name));
             }
         }
         trace
@@ -497,6 +511,9 @@ impl<'a> VM<'a> {
     }
 
     fn run_inner(&mut self) -> WalrusResult<Value> {
+        let debug_logging_enabled = log_enabled!(log::Level::Debug);
+        let profiling_enabled = self.profiling_enabled;
+
         loop {
             // Poll GC periodically instead of every instruction.
             self.gc_poll_counter = self.gc_poll_counter.wrapping_add(1);
@@ -518,7 +535,7 @@ impl<'a> VM<'a> {
                 });
             }
 
-            if log_enabled!(log::Level::Debug) {
+            if debug_logging_enabled {
                 let instructions = self.current_frame().instructions.as_ref();
                 instructions.disassemble_single(self.ip, self.function_name());
             }
@@ -560,34 +577,42 @@ impl<'a> VM<'a> {
                 }
                 Opcode::Load(index) => {
                     let fp = self.frame_pointer();
-                    self.push(self.locals[fp + index as usize]);
+                    let idx = fp + index as usize;
+                    // SAFETY: compiler guarantees local indices are valid for this frame.
+                    self.push(unsafe { *self.locals.get_unchecked(idx) });
                 }
                 Opcode::LoadLocal0 => {
                     let fp = self.frame_pointer();
-                    self.push(self.locals[fp]);
+                    // SAFETY: compiler emits LoadLocal0 only when local 0 exists.
+                    self.push(unsafe { *self.locals.get_unchecked(fp) });
                 }
                 Opcode::LoadLocal1 => {
                     let fp = self.frame_pointer();
-                    self.push(self.locals[fp + 1]);
+                    // SAFETY: compiler emits LoadLocal1 only when local 1 exists.
+                    self.push(unsafe { *self.locals.get_unchecked(fp + 1) });
                 }
                 Opcode::LoadLocal2 => {
                     let fp = self.frame_pointer();
-                    self.push(self.locals[fp + 2]);
+                    // SAFETY: compiler emits LoadLocal2 only when local 2 exists.
+                    self.push(unsafe { *self.locals.get_unchecked(fp + 2) });
                 }
                 Opcode::LoadLocal3 => {
                     let fp = self.frame_pointer();
-                    self.push(self.locals[fp + 3]);
+                    // SAFETY: compiler emits LoadLocal3 only when local 3 exists.
+                    self.push(unsafe { *self.locals.get_unchecked(fp + 3) });
                 }
                 // Specialized increment/decrement for loop counters (hot path)
                 Opcode::IncrementLocal(index) => {
                     let fp = self.frame_pointer();
                     let idx = fp + index as usize;
-                    if let Value::Int(v) = self.locals[idx] {
-                        self.locals[idx] = Value::Int(v + 1);
+                    // SAFETY: compiler guarantees local indices are valid for this frame.
+                    let local = unsafe { self.locals.get_unchecked_mut(idx) };
+                    if let Value::Int(v) = *local {
+                        *local = Value::Int(v + 1);
                     } else {
                         return Err(WalrusError::TypeMismatch {
                             expected: "int".to_string(),
-                            found: self.locals[idx].get_type().to_string(),
+                            found: local.get_type().to_string(),
                             span,
                             src: self.source_ref.source().into(),
                             filename: self.source_ref.filename().into(),
@@ -597,12 +622,14 @@ impl<'a> VM<'a> {
                 Opcode::DecrementLocal(index) => {
                     let fp = self.frame_pointer();
                     let idx = fp + index as usize;
-                    if let Value::Int(v) = self.locals[idx] {
-                        self.locals[idx] = Value::Int(v - 1);
+                    // SAFETY: compiler guarantees local indices are valid for this frame.
+                    let local = unsafe { self.locals.get_unchecked_mut(idx) };
+                    if let Value::Int(v) = *local {
+                        *local = Value::Int(v - 1);
                     } else {
                         return Err(WalrusError::TypeMismatch {
                             expected: "int".to_string(),
-                            found: self.locals[idx].get_type().to_string(),
+                            found: local.get_type().to_string(),
                             span,
                             src: self.source_ref.source().into(),
                             filename: self.source_ref.filename().into(),
@@ -627,7 +654,7 @@ impl<'a> VM<'a> {
                     let loop_header_ip = self.ip - 1;
                     let exit_ip = jump_target as usize;
 
-                    if self.profiling_enabled {
+                    if profiling_enabled {
                         // Profile for hotspot detection
                         self.profile_loop_iteration(loop_header_ip, exit_ip);
 
@@ -648,12 +675,17 @@ impl<'a> VM<'a> {
                     // Standard interpreted execution
                     let fp = self.frame_pointer();
                     let idx = fp + local_idx as usize;
-                    if let (Value::Int(current), Value::Int(end)) =
-                        (self.locals[idx], self.locals[idx + 1])
-                    {
+                    // SAFETY: compiler guarantees range-loop locals are allocated at idx and idx+1.
+                    let current_value = unsafe { *self.locals.get_unchecked(idx) };
+                    // SAFETY: see above.
+                    let end_value = unsafe { *self.locals.get_unchecked(idx + 1) };
+                    if let (Value::Int(current), Value::Int(end)) = (current_value, end_value) {
                         if current < end {
                             self.push(Value::Int(current));
-                            self.locals[idx] = Value::Int(current + 1);
+                            // SAFETY: idx is valid (see above).
+                            unsafe {
+                                *self.locals.get_unchecked_mut(idx) = Value::Int(current + 1);
+                            }
                         } else {
                             self.ip = jump_target as usize;
                         }
@@ -662,8 +694,8 @@ impl<'a> VM<'a> {
                             expected: "int and int (range bounds)".to_string(),
                             found: format!(
                                 "{} and {}",
-                                self.locals[idx].get_type(),
-                                self.locals[idx + 1].get_type()
+                                current_value.get_type(),
+                                end_value.get_type()
                             ),
                             span,
                             src: self.source_ref.source().into(),
@@ -672,75 +704,81 @@ impl<'a> VM<'a> {
                     }
                 }
                 Opcode::LoadGlobal(index) => {
-                    let value = {
-                        let globals = self.globals.borrow();
-                        globals[index as usize]
-                    };
+                    // SAFETY: compiler guarantees global indices are valid.
+                    let value = unsafe { *self.globals.get_unchecked(index as usize) };
                     self.push(value);
                 }
                 Opcode::LoadGlobal0 => {
-                    let value = {
-                        let globals = self.globals.borrow();
-                        globals[0]
-                    };
+                    // SAFETY: compiler emits LoadGlobal0 only when global 0 exists.
+                    let value = unsafe { *self.globals.get_unchecked(0) };
                     self.push(value);
                 }
                 Opcode::LoadGlobal1 => {
-                    let value = {
-                        let globals = self.globals.borrow();
-                        globals[1]
-                    };
+                    // SAFETY: compiler emits LoadGlobal1 only when global 1 exists.
+                    let value = unsafe { *self.globals.get_unchecked(1) };
                     self.push(value);
                 }
                 Opcode::LoadGlobal2 => {
-                    let value = {
-                        let globals = self.globals.borrow();
-                        globals[2]
-                    };
+                    // SAFETY: compiler emits LoadGlobal2 only when global 2 exists.
+                    let value = unsafe { *self.globals.get_unchecked(2) };
                     self.push(value);
                 }
                 Opcode::LoadGlobal3 => {
-                    let value = {
-                        let globals = self.globals.borrow();
-                        globals[3]
-                    };
+                    // SAFETY: compiler emits LoadGlobal3 only when global 3 exists.
+                    let value = unsafe { *self.globals.get_unchecked(3) };
                     self.push(value);
                 }
                 Opcode::Store => {
-                    let value = self.pop(opcode, span)?;
+                    // SAFETY: valid bytecode guarantees stack has a value to store.
+                    let value = self.pop_unchecked();
                     self.locals.push(value);
                 }
                 Opcode::StoreAt(index) => {
-                    let value = self.pop(opcode, span)?;
+                    // SAFETY: valid bytecode guarantees stack has a value to store.
+                    let value = self.pop_unchecked();
                     let fp = self.frame_pointer();
                     let abs_index = fp + index as usize;
 
                     if abs_index == self.locals.len() {
                         self.locals.push(value);
                     } else {
-                        self.locals[abs_index] = value;
+                        // SAFETY: compiler guarantees local index is valid when not appending.
+                        unsafe {
+                            *self.locals.get_unchecked_mut(abs_index) = value;
+                        }
                     }
                 }
                 Opcode::StoreGlobal(index) => {
-                    let value = self.pop(opcode, span)?;
+                    // SAFETY: valid bytecode guarantees stack has a value to store.
+                    let value = self.pop_unchecked();
                     let index = index as usize;
-                    let mut globals = self.globals.borrow_mut();
 
-                    if index == globals.len() {
-                        globals.push(value);
+                    if index == self.globals.len() {
+                        self.globals.push(value);
                     } else {
-                        globals[index] = value;
+                        // SAFETY: compiler guarantees global index is valid when not appending.
+                        unsafe {
+                            *self.globals.get_unchecked_mut(index) = value;
+                        }
                     }
                 }
                 Opcode::Reassign(index) => {
-                    let value = self.pop(opcode, span)?;
+                    // SAFETY: valid bytecode guarantees stack has a value to assign.
+                    let value = self.pop_unchecked();
                     let fp = self.frame_pointer();
-                    self.locals[fp + index as usize] = value;
+                    let idx = fp + index as usize;
+                    // SAFETY: compiler guarantees reassigned local exists.
+                    unsafe {
+                        *self.locals.get_unchecked_mut(idx) = value;
+                    }
                 }
                 Opcode::ReassignGlobal(index) => {
-                    let value = self.pop(opcode, span)?;
-                    let mut globals = self.globals.borrow_mut();
-                    globals[index as usize] = value;
+                    // SAFETY: valid bytecode guarantees stack has a value to assign.
+                    let value = self.pop_unchecked();
+                    // SAFETY: compiler guarantees reassigned global exists.
+                    unsafe {
+                        *self.globals.get_unchecked_mut(index as usize) = value;
+                    }
                 }
                 Opcode::List(cap) => {
                     let cap = cap as usize;
@@ -811,7 +849,8 @@ impl<'a> VM<'a> {
                 Opcode::False => self.push(Value::Bool(false)),
                 Opcode::Void => self.push(Value::Void),
                 Opcode::Pop => {
-                    self.pop(opcode, span)?;
+                    // SAFETY: valid bytecode guarantees stack has a value to pop.
+                    self.pop_unchecked();
                 }
                 Opcode::PopLocal(num) => {
                     for _ in 0..num {
@@ -819,7 +858,8 @@ impl<'a> VM<'a> {
                     }
                 }
                 Opcode::JumpIfFalse(offset) => {
-                    let value = self.pop(opcode, span)?;
+                    // SAFETY: compiler guarantees conditional jump has a condition value.
+                    let value = self.pop_unchecked();
 
                     if let Value::Bool(false) = value {
                         self.ip = offset as usize;
@@ -827,7 +867,7 @@ impl<'a> VM<'a> {
                 }
                 Opcode::Jump(offset) => {
                     // JIT PROFILING: Backward jumps indicate loops (while loops)
-                    if self.profiling_enabled && (offset as usize) < self.ip {
+                    if profiling_enabled && (offset as usize) < self.ip {
                         let loop_header_ip = offset as usize;
 
                         // Register while loop dynamically
@@ -855,7 +895,7 @@ impl<'a> VM<'a> {
                 }
                 Opcode::IterNext(offset) => {
                     // JIT PROFILING: This is also a loop header for iterator-based loops
-                    if self.profiling_enabled {
+                    if profiling_enabled {
                         let loop_header_ip = self.ip - 1;
 
                         // Dynamic loop registration for iterator loops
@@ -872,12 +912,16 @@ impl<'a> VM<'a> {
                         }
                     }
 
-                    let iter = self.stack.last().copied().ok_or_else(|| WalrusError::StackUnderflow {
-                        op: opcode,
-                        span,
-                        src: self.source_ref.source().to_string(),
-                        filename: self.source_ref.filename().to_string(),
-                    })?;
+                    let iter =
+                        self.stack
+                            .last()
+                            .copied()
+                            .ok_or_else(|| WalrusError::StackUnderflow {
+                                op: opcode,
+                                span,
+                                src: self.source_ref.source().to_string(),
+                                filename: self.source_ref.filename().to_string(),
+                            })?;
 
                     let Value::Iter(key) = iter else {
                         return Err(WalrusError::NotIterable {
@@ -916,7 +960,7 @@ impl<'a> VM<'a> {
                     }
 
                     // JIT PROFILING: Track function calls and argument types
-                    if self.profiling_enabled {
+                    if profiling_enabled {
                         if let Value::Function(key) = func {
                             if let Ok(func_ref) = self.get_heap().get_function(key) {
                                 let name = match func_ref {
@@ -958,11 +1002,11 @@ impl<'a> VM<'a> {
 
                                     // Create a new call frame instead of a child VM
                                     let new_frame = CallFrame {
-                                        return_ip: self.ip,                  // Where to return after this function
+                                        return_ip: self.ip,                          // Where to return after this function
                                         frame_pointer: self.locals.len(), // New frame starts at current locals end
                                         stack_pointer: self.stack.len() - arg_count, // Operand stack position for cleanup on return
                                         instructions: Rc::clone(&func.code), // Share the instruction set via Rc
-                                        function_name: format!("fn<{}>", func.name),
+                                        function_name: String::new(),
                                     };
 
                                     // Push the new frame
@@ -1105,7 +1149,7 @@ impl<'a> VM<'a> {
 
                                     // Clone what we need before mutating self
                                     let new_instructions = Rc::clone(&func.code);
-                                    let new_name = format!("fn<{}>", func.name);
+                                    let new_name = String::new();
 
                                     // Get the current frame pointer before modifying
                                     let frame_pointer = self.frame_pointer();
@@ -1201,7 +1245,7 @@ impl<'a> VM<'a> {
                     let a = self.pop_unchecked();
 
                     // JIT TYPE PROFILING: Track operand types for arithmetic
-                    if self.profiling_enabled {
+                    if profiling_enabled {
                         let type_a = WalrusType::from_value(&a);
                         let type_b = WalrusType::from_value(&b);
                         // Record both operand types at this IP
@@ -1703,15 +1747,16 @@ impl<'a> VM<'a> {
                             let start = start as usize;
                             let end = end as usize;
 
-                            let start_byte = Self::char_to_byte_offset(a, start).ok_or_else(|| {
-                                WalrusError::IndexOutOfBounds {
-                                    index: range.start,
-                                    len: a_len,
-                                    span,
-                                    src: self.source_ref.source().to_string(),
-                                    filename: self.source_ref.filename().to_string(),
-                                }
-                            })?;
+                            let start_byte =
+                                Self::char_to_byte_offset(a, start).ok_or_else(|| {
+                                    WalrusError::IndexOutOfBounds {
+                                        index: range.start,
+                                        len: a_len,
+                                        span,
+                                        src: self.source_ref.source().to_string(),
+                                        filename: self.source_ref.filename().to_string(),
+                                    }
+                                })?;
                             let end_byte = Self::char_to_byte_offset(a, end).ok_or_else(|| {
                                 WalrusError::IndexOutOfBounds {
                                     index: range.end,
@@ -2151,15 +2196,78 @@ impl<'a> VM<'a> {
                         }
                     };
 
+                    let arg_count = arg_count as usize;
+
+                    // Fast path for struct VM methods:
+                    // avoid creating an args Vec and move arguments directly into locals.
+                    if self.stack.len() >= arg_count + 1 {
+                        let object_idx = self.stack.len() - arg_count - 1;
+                        if let Value::StructDef(key) = self.stack[object_idx] {
+                            let method_name = self.get_heap().get_string(method_name_sym)?;
+                            let (method_arity, method_code) = {
+                                let struct_def = self.get_heap().get_struct_def(key)?;
+                                match struct_def.get_method(method_name) {
+                                    Some(WalrusFunction::Vm(func)) => {
+                                        (func.arity, Rc::clone(&func.code))
+                                    }
+                                    Some(_) => {
+                                        return Err(WalrusError::StructMethodMustBeVmFunction {
+                                            span,
+                                            src: self.source_ref.source().into(),
+                                            filename: self.source_ref.filename().into(),
+                                        });
+                                    }
+                                    None => {
+                                        return Err(WalrusError::MethodNotFound {
+                                            type_name: struct_def.name().to_string(),
+                                            method: method_name.to_string(),
+                                            span,
+                                            src: self.source_ref.source().into(),
+                                            filename: self.source_ref.filename().into(),
+                                        });
+                                    }
+                                }
+                            };
+
+                            if arg_count != method_arity {
+                                return Err(WalrusError::InvalidArgCount {
+                                    name: method_name.to_string(),
+                                    expected: method_arity,
+                                    got: arg_count,
+                                    span,
+                                    src: self.source_ref.source().into(),
+                                    filename: self.source_ref.filename().into(),
+                                });
+                            }
+
+                            let new_frame = CallFrame {
+                                return_ip: self.ip,
+                                frame_pointer: self.locals.len(),
+                                stack_pointer: object_idx,
+                                instructions: method_code,
+                                function_name: String::new(),
+                            };
+
+                            self.call_stack.push(new_frame);
+
+                            let args_start = object_idx + 1;
+                            self.locals.extend(self.stack.drain(args_start..));
+                            self.stack.truncate(object_idx);
+
+                            self.ip = 0;
+                            continue; // Function frame takes control
+                        }
+                    }
+
                     // Pop arguments
-                    let args = self.pop_n(arg_count as usize, opcode, span)?;
+                    let args = self.pop_n(arg_count, opcode, span)?;
 
                     // Pop the object
                     let object = self.pop(opcode, span)?;
 
-                    // Get source info for error messages
-                    let src = self.source_ref.source().to_string();
-                    let filename = self.source_ref.filename().to_string();
+                    // Borrow source info for errors (allocate only when constructing errors)
+                    let src = self.source_ref.source();
+                    let filename = self.source_ref.filename();
 
                     // Dispatch based on object type
                     let result = match object {
@@ -2169,8 +2277,8 @@ impl<'a> VM<'a> {
                             method_name_sym,
                             args,
                             span,
-                            &src,
-                            &filename,
+                            src,
+                            filename,
                         )?,
                         Value::String(key) => methods::dispatch_string_method(
                             self.get_heap_mut(),
@@ -2178,8 +2286,8 @@ impl<'a> VM<'a> {
                             method_name_sym,
                             args,
                             span,
-                            &src,
-                            &filename,
+                            src,
+                            filename,
                         )?,
                         Value::Dict(key) => {
                             // First, check if this dict contains a native function with this name
@@ -2206,8 +2314,8 @@ impl<'a> VM<'a> {
                                 method_name_sym,
                                 args,
                                 span,
-                                &src,
-                                &filename,
+                                src,
+                                filename,
                             )?
                         }
                         Value::StructDef(key) => {
@@ -2246,7 +2354,7 @@ impl<'a> VM<'a> {
                                     frame_pointer: self.locals.len(),
                                     stack_pointer: self.stack.len(),
                                     instructions: Rc::clone(&func.code),
-                                    function_name: format!("fn<{}>", func.name),
+                                    function_name: String::new(),
                                 };
 
                                 self.call_stack.push(new_frame);
@@ -2279,7 +2387,9 @@ impl<'a> VM<'a> {
                 }
             }
 
-            self.stack_trace();
+            if debug_logging_enabled {
+                self.stack_trace();
+            }
         }
         // Note: This is unreachable because the loop only exits via return statements
         // (either from Return opcode, errors, or end of main frame)
@@ -2475,10 +2585,6 @@ impl<'a> VM<'a> {
     }
 
     fn stack_trace(&self) {
-        if !log_enabled!(log::Level::Debug) {
-            return;
-        }
-
         for (i, frame) in self.stack.iter().enumerate() {
             debug!("| {} | {}: {}", self.function_name(), i, frame);
         }
@@ -2494,18 +2600,21 @@ impl<'a> VM<'a> {
             .call_stack
             .iter()
             .map(|f| debugger::DebugCallFrame {
-                function_name: f.function_name.clone(),
+                function_name: if f.function_name.is_empty() {
+                    "<fn>".to_string()
+                } else {
+                    f.function_name.clone()
+                },
                 return_ip: f.return_ip,
                 frame_pointer: f.frame_pointer,
             })
             .collect();
 
-        let globals = self.globals.borrow();
         let ctx = debugger::DebugContext {
             ip: self.ip,
             stack: &self.stack,
             locals: &self.locals,
-            globals: &globals,
+            globals: &self.globals,
             call_stack: &call_stack,
             debug_info: instructions.debug_info.as_ref(),
             instructions: &instructions.instructions,
