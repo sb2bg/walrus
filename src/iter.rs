@@ -1,10 +1,9 @@
-use std::collections::VecDeque;
 use std::fmt::Debug;
 use std::ops::Range;
 
 use rustc_hash::FxHashMap;
 
-use crate::arenas::{HeapValue, ValueHolder};
+use crate::arenas::{DictKey, HeapValue, ListKey, StringKey, TupleKey, ValueHolder};
 use crate::range::RangeValue;
 use crate::value::Value;
 
@@ -33,61 +32,137 @@ impl ValueIterator for RangeIter {
 
 #[derive(Debug, Clone)]
 pub struct StrIter {
-    chars: VecDeque<char>,
+    string: StringKey,
+    byte_index: usize,
 }
 
 impl StrIter {
-    pub fn new(string: &str) -> Self {
+    pub fn new(string: StringKey) -> Self {
         Self {
-            chars: string.chars().collect(),
+            string,
+            byte_index: 0,
         }
+    }
+
+    pub fn source_value(&self) -> Value {
+        Value::String(self.string)
     }
 }
 
 impl ValueIterator for StrIter {
     fn next(&mut self, arena: &mut ValueHolder) -> Option<Value> {
-        self.chars
-            .pop_front()
-            .map(|c| arena.push(HeapValue::String(&c.to_string())))
+        let (ch, next_byte_index) = {
+            let s = arena.get_string(self.string).ok()?;
+            if self.byte_index >= s.len() {
+                return None;
+            }
+
+            let ch = s[self.byte_index..].chars().next()?;
+            (ch, self.byte_index + ch.len_utf8())
+        };
+
+        self.byte_index = next_byte_index;
+
+        // Avoid per-character String allocation by encoding into a stack buffer.
+        let mut buf = [0u8; 4];
+        let ch_str = ch.encode_utf8(&mut buf);
+        Some(arena.push(HeapValue::String(ch_str)))
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct DictIter {
-    dict: Vec<(Value, Value)>,
+    dict: DictKey,
+    keys: Vec<Value>,
+    index: usize,
 }
 
 impl DictIter {
-    pub fn new(dict: &FxHashMap<Value, Value>) -> Self {
+    pub fn new(dict_key: DictKey, dict: &FxHashMap<Value, Value>) -> Self {
         Self {
-            dict: dict.iter().map(|(k, v)| (*k, *v)).collect(),
+            dict: dict_key,
+            keys: dict.keys().copied().collect(),
+            index: 0,
         }
+    }
+
+    pub fn source_value(&self) -> Value {
+        Value::Dict(self.dict)
     }
 }
 
 impl ValueIterator for DictIter {
     fn next(&mut self, arena: &mut ValueHolder) -> Option<Value> {
-        self.dict
-            .pop()
-            .map(|(k, v)| arena.push(HeapValue::Tuple(&[k, v])))
+        while self.index < self.keys.len() {
+            let key = self.keys[self.index];
+            self.index += 1;
+
+            let value = {
+                let dict = arena.get_dict(self.dict).ok()?;
+                dict.get(&key).copied()
+            };
+
+            if let Some(value) = value {
+                return Some(arena.push(HeapValue::Tuple(&[key, value])));
+            }
+        }
+
+        None
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum CollectionSource {
+    List(ListKey),
+    Tuple(TupleKey),
 }
 
 #[derive(Debug, Clone)]
 pub struct CollectionIter {
-    collection: VecDeque<Value>,
+    source: CollectionSource,
+    index: usize,
 }
 
 impl CollectionIter {
-    pub fn new(collection: &[Value]) -> Self {
+    pub fn from_list(list: ListKey) -> Self {
         Self {
-            collection: collection.iter().copied().collect(),
+            source: CollectionSource::List(list),
+            index: 0,
+        }
+    }
+
+    pub fn from_tuple(tuple: TupleKey) -> Self {
+        Self {
+            source: CollectionSource::Tuple(tuple),
+            index: 0,
+        }
+    }
+
+    pub fn source_value(&self) -> Value {
+        match self.source {
+            CollectionSource::List(key) => Value::List(key),
+            CollectionSource::Tuple(key) => Value::Tuple(key),
         }
     }
 }
 
 impl ValueIterator for CollectionIter {
-    fn next(&mut self, _: &mut ValueHolder) -> Option<Value> {
-        self.collection.pop_front()
+    fn next(&mut self, arena: &mut ValueHolder) -> Option<Value> {
+        let value = match self.source {
+            CollectionSource::List(key) => {
+                let list = arena.get_list(key).ok()?;
+                list.get(self.index).copied()
+            }
+            CollectionSource::Tuple(key) => {
+                let tuple = arena.get_tuple(key).ok()?;
+                tuple.get(self.index).copied()
+            }
+        };
+
+        if value.is_some() {
+            self.index += 1;
+        }
+
+        value
     }
 }

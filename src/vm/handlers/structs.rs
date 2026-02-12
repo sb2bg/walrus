@@ -105,8 +105,8 @@ impl<'a> VM<'a> {
         span: Span,
     ) -> WalrusResult<MethodCallResult> {
         let method_name_val = self.pop(Opcode::CallMethod(arg_count), span)?;
-        let method_name = match method_name_val {
-            Value::String(sym) => self.get_heap().get_string(sym)?.to_string(),
+        let method_name_sym = match method_name_val {
+            Value::String(sym) => sym,
             other => {
                 return Err(WalrusError::TypeMismatch {
                     expected: "string".to_string(),
@@ -129,7 +129,7 @@ impl<'a> VM<'a> {
                 let r = methods::dispatch_list_method(
                     self.get_heap_mut(),
                     key,
-                    &method_name,
+                    method_name_sym,
                     args,
                     span,
                     &src,
@@ -142,7 +142,7 @@ impl<'a> VM<'a> {
                 let r = methods::dispatch_string_method(
                     self.get_heap_mut(),
                     key,
-                    &method_name,
+                    method_name_sym,
                     args,
                     span,
                     &src,
@@ -152,7 +152,7 @@ impl<'a> VM<'a> {
                 return Ok(MethodCallResult::Pushed);
             }
             Value::Dict(key) => {
-                let method_key = self.get_heap_mut().push(HeapValue::String(&method_name));
+                let method_key = Value::String(method_name_sym);
                 let dict = self.get_heap().get_dict(key)?;
 
                 if let Some(func_val) = dict.get(&method_key).copied() {
@@ -169,7 +169,7 @@ impl<'a> VM<'a> {
                 let r = methods::dispatch_dict_method(
                     self.get_heap_mut(),
                     key,
-                    &method_name,
+                    method_name_sym,
                     args,
                     span,
                     &src,
@@ -179,14 +179,15 @@ impl<'a> VM<'a> {
                 return Ok(MethodCallResult::Pushed);
             }
             Value::StructDef(key) => {
+                let method_name = self.get_heap().get_string(method_name_sym)?;
                 let method = {
                     let struct_def = self.get_heap().get_struct_def(key)?;
-                    if let Some(method) = struct_def.get_method(&method_name) {
+                    if let Some(method) = struct_def.get_method(method_name) {
                         method.clone()
                     } else {
                         return Err(WalrusError::MethodNotFound {
                             type_name: struct_def.name().to_string(),
-                            method: method_name.clone(),
+                            method: method_name.to_string(),
                             span,
                             src: self.source_ref.source().into(),
                             filename: self.source_ref.filename().into(),
@@ -232,7 +233,7 @@ impl<'a> VM<'a> {
             }
             other => {
                 return Err(WalrusError::InvalidMethodReceiver {
-                    method: method_name,
+                    method: self.get_heap().get_string(method_name_sym)?.to_string(),
                     type_name: other.get_type().to_string(),
                     span,
                     src: self.source_ref.source().into(),

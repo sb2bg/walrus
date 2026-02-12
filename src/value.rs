@@ -19,6 +19,17 @@ pub enum ValueIter {
     Str(StrIter),
 }
 
+impl ValueIter {
+    pub fn referenced_value(&self) -> Option<Value> {
+        match self {
+            ValueIter::Range(_) => None,
+            ValueIter::Collection(iter) => Some(iter.source_value()),
+            ValueIter::Dict(iter) => Some(iter.source_value()),
+            ValueIter::Str(iter) => Some(iter.source_value()),
+        }
+    }
+}
+
 impl ValueIterator for ValueIter {
     fn next(&mut self, arena: &mut ValueHolder) -> Option<Value> {
         match self {

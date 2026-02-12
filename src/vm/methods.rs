@@ -50,12 +50,14 @@ fn check_arity(
 pub fn dispatch_list_method(
     heap: &mut ValueHolder,
     key: ListKey,
-    method: &str,
+    method_sym: StringKey,
     args: Vec<Value>,
     span: Span,
     src: &str,
     filename: &str,
 ) -> WalrusResult<Value> {
+    let method = heap.get_string(method_sym)?;
+
     match method {
         "push" => {
             check_arity("push", 1, args.len(), span, src, filename)?;
@@ -167,12 +169,14 @@ pub fn dispatch_list_method(
 pub fn dispatch_string_method(
     heap: &mut ValueHolder,
     key: StringKey,
-    method: &str,
+    method_sym: StringKey,
     args: Vec<Value>,
     span: Span,
     src: &str,
     filename: &str,
 ) -> WalrusResult<Value> {
+    let method = heap.get_string(method_sym)?;
+
     match method {
         "len" => {
             check_arity("len", 0, args.len(), span, src, filename)?;
@@ -314,12 +318,14 @@ pub fn dispatch_string_method(
 pub fn dispatch_dict_method(
     heap: &mut ValueHolder,
     key: DictKey,
-    method: &str,
+    method_sym: StringKey,
     args: Vec<Value>,
     span: Span,
     src: &str,
     filename: &str,
 ) -> WalrusResult<Value> {
+    let method = heap.get_string(method_sym)?;
+
     match method {
         "len" => {
             check_arity("len", 0, args.len(), span, src, filename)?;

@@ -213,7 +213,17 @@ impl ValueHolder {
                     }
                 }
             }
-            // Functions, iterators, struct defs, and primitives don't contain traceable values
+            Value::Iter(key) => {
+                let referenced = self
+                    .iterators
+                    .get(key)
+                    .and_then(|iter| iter.referenced_value());
+
+                if let Some(value) = referenced {
+                    self.mark(value);
+                }
+            }
+            // Functions, struct defs, and primitives don't contain traceable values
             _ => {}
         }
     }
@@ -472,19 +482,19 @@ impl ValueHolder {
     pub fn value_to_iter(&mut self, value: Value) -> WalrusResult<Value> {
         let key = match value {
             Value::List(list) => {
-                let iter = CollectionIter::new(self.get_list(list)?);
+                let iter = CollectionIter::from_list(list);
                 self.push(HeapValue::Iter(ValueIter::Collection(iter)))
             }
             Value::Tuple(tuple) => {
-                let iter = CollectionIter::new(self.get_tuple(tuple)?);
+                let iter = CollectionIter::from_tuple(tuple);
                 self.push(HeapValue::Iter(ValueIter::Collection(iter)))
             }
             Value::Dict(dict) => {
-                let iter = DictIter::new(self.get_dict(dict)?);
+                let iter = DictIter::new(dict, self.get_dict(dict)?);
                 self.push(HeapValue::Iter(ValueIter::Dict(iter)))
             }
             Value::String(string) => {
-                let iter = StrIter::new(self.get_string(string)?);
+                let iter = StrIter::new(string);
                 self.push(HeapValue::Iter(ValueIter::Str(iter)))
             }
             Value::Range(range) => {

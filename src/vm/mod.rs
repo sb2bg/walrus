@@ -500,7 +500,7 @@ impl<'a> VM<'a> {
         loop {
             // Poll GC periodically instead of every instruction.
             self.gc_poll_counter = self.gc_poll_counter.wrapping_add(1);
-            if self.gc_poll_counter & 0x3F == 0 {
+            if self.gc_poll_counter & 0xFF == 0 {
                 self.maybe_collect_garbage();
             }
 
@@ -627,21 +627,23 @@ impl<'a> VM<'a> {
                     let loop_header_ip = self.ip - 1;
                     let exit_ip = jump_target as usize;
 
-                    // Profile for hotspot detection
-                    self.profile_loop_iteration(loop_header_ip, exit_ip);
+                    if self.profiling_enabled {
+                        // Profile for hotspot detection
+                        self.profile_loop_iteration(loop_header_ip, exit_ip);
 
-                    // Try JIT execution if available
-                    #[cfg(feature = "jit")]
-                    if let Some(jit_exit) =
-                        self.try_jit_range_loop(loop_header_ip, local_idx, jump_target)
-                    {
-                        self.ip = jit_exit;
-                        continue;
+                        // Try JIT execution if available
+                        #[cfg(feature = "jit")]
+                        if let Some(jit_exit) =
+                            self.try_jit_range_loop(loop_header_ip, local_idx, jump_target)
+                        {
+                            self.ip = jit_exit;
+                            continue;
+                        }
+
+                        // Try to compile hot loops
+                        #[cfg(feature = "jit")]
+                        self.try_compile_hot_range_loop(loop_header_ip, exit_ip);
                     }
-
-                    // Try to compile hot loops
-                    #[cfg(feature = "jit")]
-                    self.try_compile_hot_range_loop(loop_header_ip, exit_ip);
 
                     // Standard interpreted execution
                     let fp = self.frame_pointer();
@@ -870,35 +872,48 @@ impl<'a> VM<'a> {
                         }
                     }
 
-                    let iter = self.pop(opcode, span)?;
+                    let iter = self.stack.last().copied().ok_or_else(|| WalrusError::StackUnderflow {
+                        op: opcode,
+                        span,
+                        src: self.source_ref.source().to_string(),
+                        filename: self.source_ref.filename().to_string(),
+                    })?;
 
-                    match iter {
-                        Value::Iter(key) => unsafe {
-                            let mut ptr = NonNull::from(self.get_heap_mut());
-                            let iter = ptr.as_mut().get_mut_iter(key)?;
+                    let Value::Iter(key) = iter else {
+                        return Err(WalrusError::NotIterable {
+                            type_name: iter.get_type().to_string(),
+                            span,
+                            src: self.source_ref.source().into(),
+                            filename: self.source_ref.filename().into(),
+                        });
+                    };
 
-                            if let Some(value) = iter.next(self.get_heap_mut()) {
-                                // fixme: if another value gets pushed on the stack, this cause a non iterable error
-                                self.push(Value::Iter(key));
-                                self.push(value);
-                            } else {
-                                self.ip = offset as usize;
-                            }
-                        },
-                        value => {
-                            return Err(WalrusError::NotIterable {
-                                type_name: value.get_type().to_string(),
-                                span,
-                                src: self.source_ref.source().into(),
-                                filename: self.source_ref.filename().into(),
-                            });
+                    unsafe {
+                        let mut ptr = NonNull::from(self.get_heap_mut());
+                        let iter = ptr.as_mut().get_mut_iter(key)?;
+
+                        if let Some(value) = iter.next(self.get_heap_mut()) {
+                            // Keep iterator on stack and push only the next item.
+                            self.push(value);
+                        } else {
+                            // Iterator exhausted: pop it and jump to loop exit.
+                            self.pop_unchecked();
+                            self.ip = offset as usize;
                         }
                     }
                 }
                 Opcode::Call(args) => {
                     let arg_count = args as usize;
                     let func = self.pop(opcode, span)?;
-                    let args = self.pop_n(arg_count, opcode, span)?;
+
+                    if self.stack.len() < arg_count {
+                        return Err(WalrusError::StackUnderflow {
+                            op: opcode,
+                            span,
+                            src: self.source_ref.source().to_string(),
+                            filename: self.source_ref.filename().to_string(),
+                        });
+                    }
 
                     // JIT PROFILING: Track function calls and argument types
                     if self.profiling_enabled {
@@ -914,7 +929,8 @@ impl<'a> VM<'a> {
                                         debug!("Hot function detected: {}", name);
                                     }
                                     // Track argument types
-                                    for (i, arg) in args.iter().enumerate() {
+                                    let args_start = self.stack.len() - arg_count;
+                                    for (i, arg) in self.stack[args_start..].iter().enumerate() {
                                         let arg_type = WalrusType::from_value(arg);
                                         self.type_profile.observe(self.ip - 1 + i, arg_type);
                                     }
@@ -928,7 +944,40 @@ impl<'a> VM<'a> {
                             let func = self.get_heap().get_function(key)?;
 
                             match func {
+                                WalrusFunction::Vm(func) => {
+                                    if arg_count != func.arity {
+                                        return Err(WalrusError::InvalidArgCount {
+                                            name: func.name.clone(),
+                                            expected: func.arity,
+                                            got: arg_count,
+                                            span,
+                                            src: self.source_ref.source().into(),
+                                            filename: self.source_ref.filename().into(),
+                                        });
+                                    }
+
+                                    // Create a new call frame instead of a child VM
+                                    let new_frame = CallFrame {
+                                        return_ip: self.ip,                  // Where to return after this function
+                                        frame_pointer: self.locals.len(), // New frame starts at current locals end
+                                        stack_pointer: self.stack.len() - arg_count, // Operand stack position for cleanup on return
+                                        instructions: Rc::clone(&func.code), // Share the instruction set via Rc
+                                        function_name: format!("fn<{}>", func.name),
+                                    };
+
+                                    // Push the new frame
+                                    self.call_stack.push(new_frame);
+
+                                    // Move arguments directly from operand stack to locals.
+                                    let args_start = self.stack.len() - arg_count;
+                                    self.locals.extend(self.stack.drain(args_start..));
+
+                                    // Start execution at the beginning of the new function
+                                    self.ip = 0;
+                                }
                                 WalrusFunction::Rust(func) => {
+                                    let func = func.clone();
+                                    let args = self.pop_n(arg_count, opcode, span)?;
                                     if args.len() != func.args {
                                         return Err(WalrusError::InvalidArgCount {
                                             name: func.name.clone(),
@@ -943,40 +992,10 @@ impl<'a> VM<'a> {
                                     self.push(result);
                                 }
                                 WalrusFunction::Native(native_fn) => {
-                                    let result = self.call_native(*native_fn, args, span)?;
+                                    let native_fn = *native_fn;
+                                    let args = self.pop_n(arg_count, opcode, span)?;
+                                    let result = self.call_native(native_fn, args, span)?;
                                     self.push(result);
-                                }
-                                WalrusFunction::Vm(func) => {
-                                    if args.len() != func.arity {
-                                        return Err(WalrusError::InvalidArgCount {
-                                            name: func.name.clone(),
-                                            expected: func.arity,
-                                            got: args.len(),
-                                            span,
-                                            src: self.source_ref.source().into(),
-                                            filename: self.source_ref.filename().into(),
-                                        });
-                                    }
-
-                                    // Create a new call frame instead of a child VM
-                                    let new_frame = CallFrame {
-                                        return_ip: self.ip,                  // Where to return after this function
-                                        frame_pointer: self.locals.len(), // New frame starts at current locals end
-                                        stack_pointer: self.stack.len(), // Operand stack position for cleanup on return
-                                        instructions: Rc::clone(&func.code), // Share the instruction set via Rc
-                                        function_name: format!("fn<{}>", func.name),
-                                    };
-
-                                    // Push the new frame
-                                    self.call_stack.push(new_frame);
-
-                                    // Push arguments as locals for the new frame
-                                    for arg in args {
-                                        self.locals.push(arg);
-                                    }
-
-                                    // Start execution at the beginning of the new function
-                                    self.ip = 0;
                                 }
                                 _ => {
                                     // In theory, this should never happen because the compiler
@@ -990,6 +1009,8 @@ impl<'a> VM<'a> {
                             }
                         }
                         _ => {
+                            // Preserve stack semantics: consume arguments for this failed call.
+                            self.pop_n(arg_count, opcode, span)?;
                             println!("func: {:?}", func);
                             return Err(WalrusError::NotCallable {
                                 value: func.get_type().to_string(),
@@ -1005,7 +1026,15 @@ impl<'a> VM<'a> {
                     // This prevents stack overflow for tail-recursive functions.
                     let arg_count = args as usize;
                     let func = self.pop(opcode, span)?;
-                    let args = self.pop_n(arg_count, opcode, span)?;
+
+                    if self.stack.len() < arg_count {
+                        return Err(WalrusError::StackUnderflow {
+                            op: opcode,
+                            span,
+                            src: self.source_ref.source().to_string(),
+                            filename: self.source_ref.filename().to_string(),
+                        });
+                    }
 
                     match func {
                         Value::Function(key) => {
@@ -1013,6 +1042,8 @@ impl<'a> VM<'a> {
 
                             match func {
                                 WalrusFunction::Rust(func) => {
+                                    let func = func.clone();
+                                    let args = self.pop_n(arg_count, opcode, span)?;
                                     // Rust functions don't use call frames, so just call and return
                                     if args.len() != func.args {
                                         return Err(WalrusError::InvalidArgCount {
@@ -1042,7 +1073,9 @@ impl<'a> VM<'a> {
                                     self.push(result);
                                 }
                                 WalrusFunction::Native(native_fn) => {
-                                    let result = self.call_native(*native_fn, args, span)?;
+                                    let native_fn = *native_fn;
+                                    let args = self.pop_n(arg_count, opcode, span)?;
+                                    let result = self.call_native(native_fn, args, span)?;
 
                                     // For a tail call, we need to return this result
                                     let frame = self
@@ -1059,11 +1092,11 @@ impl<'a> VM<'a> {
                                     self.push(result);
                                 }
                                 WalrusFunction::Vm(func) => {
-                                    if args.len() != func.arity {
+                                    if arg_count != func.arity {
                                         return Err(WalrusError::InvalidArgCount {
                                             name: func.name.clone(),
                                             expected: func.arity,
-                                            got: args.len(),
+                                            got: arg_count,
                                             span,
                                             src: self.source_ref.source().into(),
                                             filename: self.source_ref.filename().into(),
@@ -1080,10 +1113,9 @@ impl<'a> VM<'a> {
                                     // Truncate locals to our frame pointer (clear current frame's locals)
                                     self.locals.truncate(frame_pointer);
 
-                                    // Push the new arguments
-                                    for arg in args {
-                                        self.locals.push(arg);
-                                    }
+                                    // Move the new arguments from operand stack to locals.
+                                    let args_start = self.stack.len() - arg_count;
+                                    self.locals.extend(self.stack.drain(args_start..));
 
                                     // Update the current frame in place (reuse it)
                                     // Keep the same return_ip and frame_pointer, just update instructions and name
@@ -1105,6 +1137,8 @@ impl<'a> VM<'a> {
                             }
                         }
                         _ => {
+                            // Preserve stack semantics: consume arguments for this failed call.
+                            self.pop_n(arg_count, opcode, span)?;
                             return Err(WalrusError::NotCallable {
                                 value: func.get_type().to_string(),
                                 span,
@@ -2051,16 +2085,15 @@ impl<'a> VM<'a> {
                     match (member_name_value, object_value) {
                         // Struct method access
                         (Value::String(method_name_sym), Value::StructDef(struct_def_key)) => {
-                            let method_name =
-                                self.get_heap().get_string(method_name_sym)?.to_string();
+                            let method_name = self.get_heap().get_string(method_name_sym)?;
                             let method_clone = {
                                 let struct_def = self.get_heap().get_struct_def(struct_def_key)?;
-                                if let Some(method) = struct_def.get_method(&method_name) {
+                                if let Some(method) = struct_def.get_method(method_name) {
                                     method.clone()
                                 } else {
                                     return Err(WalrusError::MethodNotFound {
                                         type_name: struct_def.name().to_string(),
-                                        method: method_name.clone(),
+                                        method: method_name.to_string(),
                                         span,
                                         src: self.source_ref.source().into(),
                                         filename: self.source_ref.filename().into(),
@@ -2105,8 +2138,8 @@ impl<'a> VM<'a> {
                     // Stack layout: [object, arg1, arg2, ..., argN, method_name]
                     // Pop method name first
                     let method_name_val = self.pop(opcode, span)?;
-                    let method_name = match method_name_val {
-                        Value::String(sym) => self.get_heap().get_string(sym)?.to_string(),
+                    let method_name_sym = match method_name_val {
+                        Value::String(sym) => sym,
                         other => {
                             return Err(WalrusError::TypeMismatch {
                                 expected: "string".to_string(),
@@ -2133,7 +2166,7 @@ impl<'a> VM<'a> {
                         Value::List(key) => methods::dispatch_list_method(
                             self.get_heap_mut(),
                             key,
-                            &method_name,
+                            method_name_sym,
                             args,
                             span,
                             &src,
@@ -2142,7 +2175,7 @@ impl<'a> VM<'a> {
                         Value::String(key) => methods::dispatch_string_method(
                             self.get_heap_mut(),
                             key,
-                            &method_name,
+                            method_name_sym,
                             args,
                             span,
                             &src,
@@ -2150,8 +2183,7 @@ impl<'a> VM<'a> {
                         )?,
                         Value::Dict(key) => {
                             // First, check if this dict contains a native function with this name
-                            let method_key =
-                                self.get_heap_mut().push(HeapValue::String(&method_name));
+                            let method_key = Value::String(method_name_sym);
 
                             let dict = self.get_heap().get_dict(key)?;
 
@@ -2171,7 +2203,7 @@ impl<'a> VM<'a> {
                             methods::dispatch_dict_method(
                                 self.get_heap_mut(),
                                 key,
-                                &method_name,
+                                method_name_sym,
                                 args,
                                 span,
                                 &src,
@@ -2180,14 +2212,15 @@ impl<'a> VM<'a> {
                         }
                         Value::StructDef(key) => {
                             // For struct definitions, look up the method and call it
+                            let method_name = self.get_heap().get_string(method_name_sym)?;
                             let method = {
                                 let struct_def = self.get_heap().get_struct_def(key)?;
-                                if let Some(method) = struct_def.get_method(&method_name) {
+                                if let Some(method) = struct_def.get_method(method_name) {
                                     method.clone()
                                 } else {
                                     return Err(WalrusError::MethodNotFound {
                                         type_name: struct_def.name().to_string(),
-                                        method: method_name.clone(),
+                                        method: method_name.to_string(),
                                         span,
                                         src: self.source_ref.source().into(),
                                         filename: self.source_ref.filename().into(),
@@ -2234,7 +2267,7 @@ impl<'a> VM<'a> {
                         }
                         _ => {
                             return Err(WalrusError::InvalidMethodReceiver {
-                                method: method_name,
+                                method: self.get_heap().get_string(method_name_sym)?.to_string(),
                                 type_name: object.get_type().to_string(),
                                 span,
                                 src: self.source_ref.source().into(),
@@ -2428,14 +2461,17 @@ impl<'a> VM<'a> {
     }
 
     fn pop_n(&mut self, n: usize, op: Opcode, span: Span) -> WalrusResult<Vec<Value>> {
-        let mut values = Vec::with_capacity(n);
-
-        for _ in 0..n {
-            values.push(self.pop(op, span)?);
+        if self.stack.len() < n {
+            return Err(WalrusError::StackUnderflow {
+                op,
+                span,
+                src: self.source_ref.source().to_string(),
+                filename: self.source_ref.filename().to_string(),
+            });
         }
 
-        values.reverse();
-        Ok(values)
+        let split_at = self.stack.len() - n;
+        Ok(self.stack.split_off(split_at))
     }
 
     fn stack_trace(&self) {

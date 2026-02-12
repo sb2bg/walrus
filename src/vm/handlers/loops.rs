@@ -41,27 +41,35 @@ impl<'a> VM<'a> {
             }
         }
 
-        let iter = self.pop(Opcode::IterNext(offset), span)?;
+        let iter = self
+            .stack
+            .last()
+            .copied()
+            .ok_or_else(|| WalrusError::StackUnderflow {
+                op: Opcode::IterNext(offset),
+                span,
+                src: self.source_ref.source().to_string(),
+                filename: self.source_ref.filename().to_string(),
+            })?;
 
-        match iter {
-            Value::Iter(key) => unsafe {
-                let mut ptr = NonNull::from(self.get_heap_mut());
-                let iter = ptr.as_mut().get_mut_iter(key)?;
+        let Value::Iter(key) = iter else {
+            return Err(WalrusError::NotIterable {
+                type_name: iter.get_type().to_string(),
+                span,
+                src: self.source_ref.source().into(),
+                filename: self.source_ref.filename().into(),
+            });
+        };
 
-                if let Some(value) = iter.next(self.get_heap_mut()) {
-                    self.push(Value::Iter(key));
-                    self.push(value);
-                } else {
-                    self.ip = offset as usize;
-                }
-            },
-            value => {
-                return Err(WalrusError::NotIterable {
-                    type_name: value.get_type().to_string(),
-                    span,
-                    src: self.source_ref.source().into(),
-                    filename: self.source_ref.filename().into(),
-                });
+        unsafe {
+            let mut ptr = NonNull::from(self.get_heap_mut());
+            let iter = ptr.as_mut().get_mut_iter(key)?;
+
+            if let Some(value) = iter.next(self.get_heap_mut()) {
+                self.push(value);
+            } else {
+                self.pop_unchecked();
+                self.ip = offset as usize;
             }
         }
         Ok(())
@@ -91,19 +99,21 @@ impl<'a> VM<'a> {
         let loop_header_ip = self.ip - 1;
         let exit_ip = jump_target as usize;
 
-        // Profile for hotspot detection
-        self.profile_loop_iteration(loop_header_ip, exit_ip);
+        if self.profiling_enabled {
+            // Profile for hotspot detection
+            self.profile_loop_iteration(loop_header_ip, exit_ip);
 
-        // Try JIT execution if available
-        #[cfg(feature = "jit")]
-        if let Some(jit_exit) = self.try_jit_range_loop(loop_header_ip, local_idx, jump_target) {
-            self.ip = jit_exit;
-            return Ok(true); // Signal to continue in outer loop
+            // Try JIT execution if available
+            #[cfg(feature = "jit")]
+            if let Some(jit_exit) = self.try_jit_range_loop(loop_header_ip, local_idx, jump_target) {
+                self.ip = jit_exit;
+                return Ok(true); // Signal to continue in outer loop
+            }
+
+            // Try to compile hot loops
+            #[cfg(feature = "jit")]
+            self.try_compile_hot_range_loop(loop_header_ip, exit_ip);
         }
-
-        // Try to compile hot loops
-        #[cfg(feature = "jit")]
-        self.try_compile_hot_range_loop(loop_header_ip, exit_ip);
 
         // Standard interpreted execution
         let fp = self.frame_pointer();
