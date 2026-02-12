@@ -95,6 +95,7 @@ pub struct VM<'a> {
     locals: Vec<Value>,         // Shared across all call frames
     call_stack: Vec<CallFrame>, // Stack of call frames
     ip: usize,                  // Current instruction pointer
+    gc_poll_counter: u32,       // Throttle GC checks to avoid per-instruction overhead
     globals: Rc<RefCell<Vec<Value>>>,
     source_ref: SourceRef<'a>,
     // Debugger state
@@ -144,19 +145,20 @@ impl<'a> VM<'a> {
             locals: Vec::new(),
             call_stack: vec![main_frame],
             ip: 0,
+            gc_poll_counter: 0,
             globals: Rc::new(RefCell::new(Vec::new())),
             source_ref,
             debugger: None,
             debug_mode: false,
-            // JIT profiling enabled by default
+            // Profiling is opt-in (enabled by Program when requested)
             hotspot_detector,
             type_profile: TypeProfile::new(),
-            profiling_enabled: true,
+            profiling_enabled: false,
             // JIT compiler (Phase 2)
             #[cfg(feature = "jit")]
             jit_compiler: crate::jit::JitCompiler::new().ok(),
             #[cfg(feature = "jit")]
-            jit_enabled: true,
+            jit_enabled: false,
         }
     }
 
@@ -496,14 +498,14 @@ impl<'a> VM<'a> {
 
     fn run_inner(&mut self) -> WalrusResult<Value> {
         loop {
-            // Check if garbage collection is needed
-            self.maybe_collect_garbage();
-
-            // Get current frame's instruction set
-            let instructions = Rc::clone(&self.current_frame().instructions);
+            // Poll GC periodically instead of every instruction.
+            self.gc_poll_counter = self.gc_poll_counter.wrapping_add(1);
+            if self.gc_poll_counter & 0x3F == 0 {
+                self.maybe_collect_garbage();
+            }
 
             // Check if we've reached the end of the current frame's instructions
-            if self.ip >= instructions.instructions.len() {
+            if self.ip >= self.current_frame().instructions.instructions.len() {
                 // If we're in the main frame, we're done
                 if self.call_stack.len() == 1 {
                     return Err(WalrusError::UnknownError {
@@ -516,7 +518,10 @@ impl<'a> VM<'a> {
                 });
             }
 
-            instructions.disassemble_single(self.ip, self.function_name());
+            if log_enabled!(log::Level::Debug) {
+                let instructions = self.current_frame().instructions.as_ref();
+                instructions.disassemble_single(self.ip, self.function_name());
+            }
 
             // Check if debugger should pause
             if self.debug_mode {
@@ -524,7 +529,8 @@ impl<'a> VM<'a> {
                     let call_depth = self.call_stack.len();
                     if dbg.should_break(self.ip, call_depth) || dbg.should_prompt {
                         dbg.trigger_prompt();
-                        match self.run_debugger_prompt(&instructions)? {
+                        let instructions = Rc::clone(&self.current_frame().instructions);
+                        match self.run_debugger_prompt(instructions.as_ref())? {
                             debugger::DebuggerCommand::Quit => {
                                 return Err(WalrusError::UnknownError {
                                     message: "Debugger quit".to_string(),
@@ -536,7 +542,7 @@ impl<'a> VM<'a> {
                 }
             }
 
-            let instruction = instructions.get(self.ip);
+            let instruction = self.current_frame().instructions.get(self.ip);
             let opcode = instruction.opcode();
             let span = instruction.span();
 
@@ -544,13 +550,13 @@ impl<'a> VM<'a> {
 
             match opcode {
                 Opcode::LoadConst(index) => {
-                    self.push(instructions.get_constant(index));
+                    self.push(self.current_frame().instructions.get_constant(index));
                 }
                 Opcode::LoadConst0 => {
-                    self.push(instructions.get_constant(0));
+                    self.push(self.current_frame().instructions.get_constant(0));
                 }
                 Opcode::LoadConst1 => {
-                    self.push(instructions.get_constant(1));
+                    self.push(self.current_frame().instructions.get_constant(1));
                 }
                 Opcode::Load(index) => {
                     let fp = self.frame_pointer();
@@ -2297,8 +2303,8 @@ impl<'a> VM<'a> {
     fn try_jit_range_loop(
         &mut self,
         loop_header_ip: usize,
-        local_idx: u16,
-        jump_target: u16,
+        local_idx: u32,
+        jump_target: u32,
     ) -> Option<usize> {
         if !self.jit_enabled {
             return None;
@@ -2445,7 +2451,7 @@ impl<'a> VM<'a> {
     /// Run the debugger prompt and return the command
     fn run_debugger_prompt(
         &mut self,
-        instructions: &Rc<InstructionSet>,
+        instructions: &InstructionSet,
     ) -> WalrusResult<debugger::DebuggerCommand> {
         // Build call stack info for debugger
         let call_stack: Vec<debugger::DebugCallFrame> = self

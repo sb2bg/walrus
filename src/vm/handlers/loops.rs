@@ -96,7 +96,7 @@ impl<'a> VM<'a> {
 
         // Try JIT execution if available
         #[cfg(feature = "jit")]
-        if let Some(jit_exit) = self.try_jit_range_loop(loop_header_ip, local_idx as u16, jump_target as u16) {
+        if let Some(jit_exit) = self.try_jit_range_loop(loop_header_ip, local_idx, jump_target) {
             self.ip = jit_exit;
             return Ok(true); // Signal to continue in outer loop
         }

@@ -117,22 +117,26 @@ impl Program {
             emitter.build_debug_info();
         }
 
-        let mut vm = if self.jit_opts.disable_profiling {
-            VM::new_without_profiling(source_ref, emitter.instruction_set())
-        } else {
-            VM::new(source_ref, emitter.instruction_set())
-        };
+        let mut vm = VM::new(source_ref, emitter.instruction_set());
+
+        // Profiling is only useful when JIT is enabled (with jit feature) or stats are requested.
+        #[cfg(feature = "jit")]
+        let jit_requested = self.jit_opts.enable_jit;
+        #[cfg(not(feature = "jit"))]
+        let jit_requested = false;
+
+        let profiling_enabled =
+            !self.jit_opts.disable_profiling && (jit_requested || self.jit_opts.show_stats);
+        vm.set_profiling(profiling_enabled);
 
         // Enable debugger if requested
         if self.jit_opts.enable_debugger {
             vm.enable_debugger();
         }
         
-        // Enable JIT compilation if requested
+        // JIT is opt-in from the CLI.
         #[cfg(feature = "jit")]
-        if self.jit_opts.enable_jit {
-            vm.set_jit_enabled(true);
-        }
+        vm.set_jit_enabled(self.jit_opts.enable_jit);
         
         let result = vm.run()?;
 
