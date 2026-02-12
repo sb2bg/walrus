@@ -1,6 +1,7 @@
 use rustc_hash::FxHashMap;
 use std::fmt::{Display, Formatter};
 
+use crate::arenas::StructDefKey;
 use crate::function::WalrusFunction;
 use crate::value::Value;
 
@@ -46,19 +47,25 @@ impl Display for StructDefinition {
 #[derive(Debug, Clone)]
 pub struct StructInstance {
     struct_name: String,
+    struct_def: StructDefKey,
     fields: FxHashMap<String, Value>,
 }
 
 impl StructInstance {
-    pub fn new(struct_name: String) -> Self {
+    pub fn new(struct_name: String, struct_def: StructDefKey) -> Self {
         Self {
             struct_name,
+            struct_def,
             fields: FxHashMap::default(),
         }
     }
 
     pub fn struct_name(&self) -> &str {
         &self.struct_name
+    }
+
+    pub fn struct_def(&self) -> StructDefKey {
+        self.struct_def
     }
 
     pub fn set_field(&mut self, name: String, value: Value) {

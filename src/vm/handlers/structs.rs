@@ -28,7 +28,7 @@ impl<'a> VM<'a> {
             let struct_def = self.get_heap().get_struct_def(struct_def_key)?;
             let struct_name = struct_def.name().to_string();
 
-            let instance = crate::structs::StructInstance::new(struct_name);
+            let instance = crate::structs::StructInstance::new(struct_name, struct_def_key);
             let instance_value = self.get_heap_mut().push(HeapValue::StructInst(instance));
 
             self.push(instance_value);
@@ -213,6 +213,7 @@ impl<'a> VM<'a> {
                         stack_pointer: self.stack.len(),
                         instructions: Rc::clone(&func.code),
                         function_name: format!("fn<{}>", func.name),
+                        return_override: None,
                     };
 
                     self.call_stack.push(new_frame);

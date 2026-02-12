@@ -1,8 +1,6 @@
 struct Counter {
-    fn new : {
-        let instance = MakeStruct(Counter);
-        instance.value = 0;
-        return instance;
+    fn init : self {
+        self.value = 0;
     }
     
     fn increment : self {
@@ -21,7 +19,7 @@ struct Counter {
 }
 
 println("Creating counter instance...");
-let counter = Counter.new();
+let counter = Counter();
 println("Counter created");
 
 println("Initial value:");

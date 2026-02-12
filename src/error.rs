@@ -513,7 +513,7 @@ pub enum WalrusError {
     },
 
     #[error(
-        "Member access requires object type 'struct' or 'dict' and member name type 'string', found object '{object_type}' and member '{member_type}' at {}",
+        "Member access requires object type 'struct', 'struct instance', or 'dict' and member name type 'string', found object '{object_type}' and member '{member_type}' at {}",
         get_line(src, filename, *span)
     )]
     InvalidMemberAccessTarget {

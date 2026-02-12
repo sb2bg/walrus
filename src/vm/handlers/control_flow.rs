@@ -123,6 +123,7 @@ impl<'a> VM<'a> {
                             stack_pointer: self.stack.len(),
                             instructions: Rc::clone(&func.code),
                             function_name: format!("fn<{}>", func.name),
+                            return_override: None,
                         };
 
                         self.call_stack.push(new_frame);
@@ -233,6 +234,7 @@ impl<'a> VM<'a> {
                         if let Some(current_frame) = self.call_stack.last_mut() {
                             current_frame.instructions = new_instructions;
                             current_frame.function_name = new_name;
+                            current_frame.return_override = None;
                         }
 
                         self.ip = 0;

@@ -237,6 +237,11 @@ Assign: NodeKind = {
     <n: StrSp<IdentStr>> "**=" <e: SpExpr> => NodeKind::Reassign(n, e, Opcode::Power),
     <n: StrSp<IdentStr>> "or=" <e: SpExpr> => NodeKind::Reassign(n, e, Opcode::Or),
     <n: StrSp<IdentStr>> "and=" <e: SpExpr> => NodeKind::Reassign(n, e, Opcode::And),
+    <o: Sp<Postfix>> "." <m: StrSp<IdentStr>> "=" <e: SpExpr> => {
+        let span = m.span();
+        let member_key = Node::new(NodeKind::String(m.into_value()), span);
+        NodeKind::IndexAssign(o, Box::new(member_key), e)
+    },
     <n: Sp<Postfix>> "[" <i: SpExpr> "]" "=" <e: SpExpr> => NodeKind::IndexAssign(n, i, e),
 };
 

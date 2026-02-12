@@ -207,7 +207,9 @@ impl ValueHolder {
             }
             Value::StructInst(key) => {
                 if let Some(inst) = self.struct_instances.get(key) {
+                    let struct_def = inst.struct_def();
                     let fields: Vec<Value> = inst.fields().values().copied().collect();
+                    self.mark(Value::StructDef(struct_def));
                     for field in fields {
                         self.mark(field);
                     }

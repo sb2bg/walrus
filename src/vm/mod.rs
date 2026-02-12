@@ -48,6 +48,9 @@ struct CallFrame {
     instructions: Rc<InstructionSet>,
     /// Function name for debugging and stack traces
     function_name: String,
+    /// Optional value to return instead of the callee's explicit return value.
+    /// Used by struct constructors so `init` can return the new instance.
+    return_override: Option<Value>,
 }
 
 /// The Walrus Virtual Machine executes compiled bytecode.
@@ -136,6 +139,7 @@ impl<'a> VM<'a> {
             stack_pointer: 0,
             instructions: Rc::new(is),
             function_name: "<main>".to_string(),
+            return_override: None,
         };
 
         Self {
@@ -1007,6 +1011,7 @@ impl<'a> VM<'a> {
                                         stack_pointer: self.stack.len() - arg_count, // Operand stack position for cleanup on return
                                         instructions: Rc::clone(&func.code), // Share the instruction set via Rc
                                         function_name: String::new(),
+                                        return_override: None,
                                     };
 
                                     // Push the new frame
@@ -1049,6 +1054,83 @@ impl<'a> VM<'a> {
                                         src: self.source_ref.source().into(),
                                         filename: self.source_ref.filename().into(),
                                     });
+                                }
+                            }
+                        }
+                        Value::StructDef(struct_def_key) => {
+                            let (struct_name, init_method) = {
+                                let struct_def = self.get_heap().get_struct_def(struct_def_key)?;
+                                (
+                                    struct_def.name().to_string(),
+                                    struct_def.get_method("init").cloned(),
+                                )
+                            };
+
+                            match init_method {
+                                Some(WalrusFunction::Vm(init_func)) => {
+                                    let expected_without_self = init_func.arity.saturating_sub(1);
+                                    if arg_count != expected_without_self {
+                                        return Err(WalrusError::InvalidArgCount {
+                                            name: format!("{}::init", struct_name),
+                                            expected: expected_without_self,
+                                            got: arg_count,
+                                            span,
+                                            src: self.source_ref.source().into(),
+                                            filename: self.source_ref.filename().into(),
+                                        });
+                                    }
+
+                                    let instance = crate::structs::StructInstance::new(
+                                        struct_name.clone(),
+                                        struct_def_key,
+                                    );
+                                    let instance_value =
+                                        self.get_heap_mut().push(HeapValue::StructInst(instance));
+
+                                    let new_frame = CallFrame {
+                                        return_ip: self.ip,
+                                        frame_pointer: self.locals.len(),
+                                        stack_pointer: self.stack.len() - arg_count,
+                                        instructions: Rc::clone(&init_func.code),
+                                        function_name: format!("{}::init", struct_name),
+                                        return_override: Some(instance_value),
+                                    };
+
+                                    self.call_stack.push(new_frame);
+
+                                    self.locals.push(instance_value);
+                                    let args_start = self.stack.len() - arg_count;
+                                    self.locals.extend(self.stack.drain(args_start..));
+                                    self.ip = 0;
+                                }
+                                Some(_) => {
+                                    return Err(WalrusError::StructMethodMustBeVmFunction {
+                                        span,
+                                        src: self.source_ref.source().into(),
+                                        filename: self.source_ref.filename().into(),
+                                    });
+                                }
+                                None => {
+                                    if arg_count != 0 {
+                                        // Preserve stack semantics: consume arguments for this failed call.
+                                        self.pop_n(arg_count, opcode, span)?;
+                                        return Err(WalrusError::InvalidArgCount {
+                                            name: struct_name,
+                                            expected: 0,
+                                            got: arg_count,
+                                            span,
+                                            src: self.source_ref.source().into(),
+                                            filename: self.source_ref.filename().into(),
+                                        });
+                                    }
+
+                                    let instance = crate::structs::StructInstance::new(
+                                        struct_name,
+                                        struct_def_key,
+                                    );
+                                    let instance_value =
+                                        self.get_heap_mut().push(HeapValue::StructInst(instance));
+                                    self.push(instance_value);
                                 }
                             }
                         }
@@ -1166,6 +1248,7 @@ impl<'a> VM<'a> {
                                     if let Some(current_frame) = self.call_stack.last_mut() {
                                         current_frame.instructions = new_instructions;
                                         current_frame.function_name = new_name;
+                                        current_frame.return_override = None;
                                     }
 
                                     // Reset IP to start of the new function
@@ -1177,6 +1260,95 @@ impl<'a> VM<'a> {
                                         src: self.source_ref.source().into(),
                                         filename: self.source_ref.filename().into(),
                                     });
+                                }
+                            }
+                        }
+                        Value::StructDef(struct_def_key) => {
+                            let (struct_name, init_method) = {
+                                let struct_def = self.get_heap().get_struct_def(struct_def_key)?;
+                                (
+                                    struct_def.name().to_string(),
+                                    struct_def.get_method("init").cloned(),
+                                )
+                            };
+
+                            match init_method {
+                                Some(WalrusFunction::Vm(init_func)) => {
+                                    let expected_without_self = init_func.arity.saturating_sub(1);
+                                    if arg_count != expected_without_self {
+                                        return Err(WalrusError::InvalidArgCount {
+                                            name: format!("{}::init", struct_name),
+                                            expected: expected_without_self,
+                                            got: arg_count,
+                                            span,
+                                            src: self.source_ref.source().into(),
+                                            filename: self.source_ref.filename().into(),
+                                        });
+                                    }
+
+                                    let instance = crate::structs::StructInstance::new(
+                                        struct_name.clone(),
+                                        struct_def_key,
+                                    );
+                                    let instance_value =
+                                        self.get_heap_mut().push(HeapValue::StructInst(instance));
+
+                                    let new_instructions = Rc::clone(&init_func.code);
+                                    let frame_pointer = self.frame_pointer();
+                                    self.locals.truncate(frame_pointer);
+                                    self.locals.push(instance_value);
+
+                                    let args_start = self.stack.len() - arg_count;
+                                    self.locals.extend(self.stack.drain(args_start..));
+
+                                    if let Some(current_frame) = self.call_stack.last_mut() {
+                                        current_frame.instructions = new_instructions;
+                                        current_frame.function_name = format!("{}::init", struct_name);
+                                        current_frame.return_override = Some(instance_value);
+                                    }
+
+                                    self.ip = 0;
+                                }
+                                Some(_) => {
+                                    return Err(WalrusError::StructMethodMustBeVmFunction {
+                                        span,
+                                        src: self.source_ref.source().into(),
+                                        filename: self.source_ref.filename().into(),
+                                    });
+                                }
+                                None => {
+                                    if arg_count != 0 {
+                                        // Preserve stack semantics: consume arguments for this failed call.
+                                        self.pop_n(arg_count, opcode, span)?;
+                                        return Err(WalrusError::InvalidArgCount {
+                                            name: struct_name,
+                                            expected: 0,
+                                            got: arg_count,
+                                            span,
+                                            src: self.source_ref.source().into(),
+                                            filename: self.source_ref.filename().into(),
+                                        });
+                                    }
+
+                                    let instance = crate::structs::StructInstance::new(
+                                        struct_name,
+                                        struct_def_key,
+                                    );
+                                    let result =
+                                        self.get_heap_mut().push(HeapValue::StructInst(instance));
+
+                                    let frame = self
+                                        .call_stack
+                                        .pop()
+                                        .expect("Call stack should never be empty on tail call");
+
+                                    if self.call_stack.is_empty() {
+                                        return Ok(result);
+                                    }
+
+                                    self.locals.truncate(frame.frame_pointer);
+                                    self.ip = frame.return_ip;
+                                    self.push(result);
                                 }
                             }
                         }
@@ -1881,6 +2053,12 @@ impl<'a> VM<'a> {
                             dict.insert(key, value);
                             self.push(Value::Void);
                         }
+                        (Value::StructInst(inst_key), Value::String(member_key)) => {
+                            let member_name = self.get_heap().get_string(member_key)?.to_string();
+                            let inst = self.get_heap_mut().get_mut_struct_inst(inst_key)?;
+                            inst.set_field(member_name, value);
+                            self.push(Value::Void);
+                        }
                         _ => {
                             return Err(WalrusError::InvalidIndexType {
                                 non_indexable: object.get_type().to_string(),
@@ -2075,13 +2253,17 @@ impl<'a> VM<'a> {
                     }
                 }
                 Opcode::Return => {
-                    let return_value = self.pop(opcode, span)?;
+                    let mut return_value = self.pop(opcode, span)?;
 
                     // Pop the current call frame
                     let frame = self
                         .call_stack
                         .pop()
                         .expect("Call stack should never be empty on return");
+
+                    if let Some(override_value) = frame.return_override {
+                        return_value = override_value;
+                    }
 
                     // If this was the last frame (main), return the value
                     if self.call_stack.is_empty() {
@@ -2132,7 +2314,8 @@ impl<'a> VM<'a> {
                         let struct_name = struct_def.name().to_string();
 
                         // Create a new struct instance
-                        let instance = crate::structs::StructInstance::new(struct_name);
+                        let instance =
+                            crate::structs::StructInstance::new(struct_name, struct_def_key);
                         let instance_value =
                             self.get_heap_mut().push(HeapValue::StructInst(instance));
 
@@ -2175,6 +2358,46 @@ impl<'a> VM<'a> {
                             let func_value =
                                 self.get_heap_mut().push(HeapValue::Function(method_clone));
                             self.push(func_value);
+                        }
+                        // Struct instance member access: field first, then method lookup
+                        (Value::String(member_name_sym), Value::StructInst(struct_inst_key)) => {
+                            enum ResolvedInstanceMember {
+                                Field(Value),
+                                Method(WalrusFunction),
+                            }
+
+                            let member_name =
+                                self.get_heap().get_string(member_name_sym)?.to_string();
+                            let resolved = {
+                                let heap = self.get_heap();
+                                let inst = heap.get_struct_inst(struct_inst_key)?;
+
+                                if let Some(value) = inst.get_field(&member_name).copied() {
+                                    ResolvedInstanceMember::Field(value)
+                                } else {
+                                    let struct_def = heap.get_struct_def(inst.struct_def())?;
+                                    if let Some(method) = struct_def.get_method(&member_name) {
+                                        ResolvedInstanceMember::Method(method.clone())
+                                    } else {
+                                        return Err(WalrusError::MemberNotFound {
+                                            type_name: inst.struct_name().to_string(),
+                                            member: member_name,
+                                            span,
+                                            src: self.source_ref.source().into(),
+                                            filename: self.source_ref.filename().into(),
+                                        });
+                                    }
+                                }
+                            };
+
+                            match resolved {
+                                ResolvedInstanceMember::Field(value) => self.push(value),
+                                ResolvedInstanceMember::Method(method) => {
+                                    let func_value =
+                                        self.get_heap_mut().push(HeapValue::Function(method));
+                                    self.push(func_value);
+                                }
+                            }
                         }
                         // Dict/Module member access (for imported modules)
                         (Value::String(member_name_sym), Value::Dict(dict_key)) => {
@@ -2227,60 +2450,133 @@ impl<'a> VM<'a> {
                     // avoid creating an args Vec and move arguments directly into locals.
                     if self.stack.len() >= arg_count + 1 {
                         let object_idx = self.stack.len() - arg_count - 1;
-                        if let Value::StructDef(key) = self.stack[object_idx] {
-                            let method_name = self.get_heap().get_string(method_name_sym)?;
-                            let (method_arity, method_code) = {
-                                let struct_def = self.get_heap().get_struct_def(key)?;
-                                match struct_def.get_method(method_name) {
-                                    Some(WalrusFunction::Vm(func)) => {
-                                        (func.arity, Rc::clone(&func.code))
+                        match self.stack[object_idx] {
+                            Value::StructDef(key) => {
+                                let method_name =
+                                    self.get_heap().get_string(method_name_sym)?.to_string();
+                                let (method_arity, method_code) = {
+                                    let struct_def = self.get_heap().get_struct_def(key)?;
+                                    match struct_def.get_method(&method_name) {
+                                        Some(WalrusFunction::Vm(func)) => {
+                                            (func.arity, Rc::clone(&func.code))
+                                        }
+                                        Some(_) => {
+                                            return Err(
+                                                WalrusError::StructMethodMustBeVmFunction {
+                                                    span,
+                                                    src: self.source_ref.source().into(),
+                                                    filename: self.source_ref.filename().into(),
+                                                },
+                                            );
+                                        }
+                                        None => {
+                                            return Err(WalrusError::MethodNotFound {
+                                                type_name: struct_def.name().to_string(),
+                                                method: method_name,
+                                                span,
+                                                src: self.source_ref.source().into(),
+                                                filename: self.source_ref.filename().into(),
+                                            });
+                                        }
                                     }
-                                    Some(_) => {
-                                        return Err(WalrusError::StructMethodMustBeVmFunction {
-                                            span,
-                                            src: self.source_ref.source().into(),
-                                            filename: self.source_ref.filename().into(),
-                                        });
-                                    }
-                                    None => {
-                                        return Err(WalrusError::MethodNotFound {
-                                            type_name: struct_def.name().to_string(),
-                                            method: method_name.to_string(),
-                                            span,
-                                            src: self.source_ref.source().into(),
-                                            filename: self.source_ref.filename().into(),
-                                        });
-                                    }
+                                };
+
+                                if arg_count != method_arity {
+                                    return Err(WalrusError::InvalidArgCount {
+                                        name: method_name,
+                                        expected: method_arity,
+                                        got: arg_count,
+                                        span,
+                                        src: self.source_ref.source().into(),
+                                        filename: self.source_ref.filename().into(),
+                                    });
                                 }
-                            };
 
-                            if arg_count != method_arity {
-                                return Err(WalrusError::InvalidArgCount {
-                                    name: method_name.to_string(),
-                                    expected: method_arity,
-                                    got: arg_count,
-                                    span,
-                                    src: self.source_ref.source().into(),
-                                    filename: self.source_ref.filename().into(),
-                                });
+                                let new_frame = CallFrame {
+                                    return_ip: self.ip,
+                                    frame_pointer: self.locals.len(),
+                                    stack_pointer: object_idx,
+                                    instructions: method_code,
+                                    function_name: String::new(),
+                                    return_override: None,
+                                };
+
+                                self.call_stack.push(new_frame);
+
+                                let args_start = object_idx + 1;
+                                self.locals.extend(self.stack.drain(args_start..));
+                                self.stack.truncate(object_idx);
+
+                                self.ip = 0;
+                                continue; // Function frame takes control
                             }
+                            Value::StructInst(inst_key) => {
+                                let method_name =
+                                    self.get_heap().get_string(method_name_sym)?.to_string();
+                                let (method_arity, method_code, type_name) = {
+                                    let heap = self.get_heap();
+                                    let inst = heap.get_struct_inst(inst_key)?;
+                                    let struct_def = heap.get_struct_def(inst.struct_def())?;
 
-                            let new_frame = CallFrame {
-                                return_ip: self.ip,
-                                frame_pointer: self.locals.len(),
-                                stack_pointer: object_idx,
-                                instructions: method_code,
-                                function_name: String::new(),
-                            };
+                                    match struct_def.get_method(&method_name) {
+                                        Some(WalrusFunction::Vm(func)) => (
+                                            func.arity,
+                                            Rc::clone(&func.code),
+                                            struct_def.name().to_string(),
+                                        ),
+                                        Some(_) => {
+                                            return Err(
+                                                WalrusError::StructMethodMustBeVmFunction {
+                                                    span,
+                                                    src: self.source_ref.source().into(),
+                                                    filename: self.source_ref.filename().into(),
+                                                },
+                                            );
+                                        }
+                                        None => {
+                                            return Err(WalrusError::MethodNotFound {
+                                                type_name: struct_def.name().to_string(),
+                                                method: method_name,
+                                                span,
+                                                src: self.source_ref.source().into(),
+                                                filename: self.source_ref.filename().into(),
+                                            });
+                                        }
+                                    }
+                                };
 
-                            self.call_stack.push(new_frame);
+                                let expected_without_self = method_arity.saturating_sub(1);
+                                if arg_count != expected_without_self {
+                                    return Err(WalrusError::InvalidArgCount {
+                                        name: format!("{}::{}", type_name, method_name),
+                                        expected: expected_without_self,
+                                        got: arg_count,
+                                        span,
+                                        src: self.source_ref.source().into(),
+                                        filename: self.source_ref.filename().into(),
+                                    });
+                                }
 
-                            let args_start = object_idx + 1;
-                            self.locals.extend(self.stack.drain(args_start..));
-                            self.stack.truncate(object_idx);
+                                let new_frame = CallFrame {
+                                    return_ip: self.ip,
+                                    frame_pointer: self.locals.len(),
+                                    stack_pointer: object_idx,
+                                    instructions: method_code,
+                                    function_name: String::new(),
+                                    return_override: None,
+                                };
 
-                            self.ip = 0;
-                            continue; // Function frame takes control
+                                self.call_stack.push(new_frame);
+
+                                self.locals.push(Value::StructInst(inst_key));
+                                let args_start = object_idx + 1;
+                                self.locals.extend(self.stack.drain(args_start..));
+                                self.stack.truncate(object_idx);
+
+                                self.ip = 0;
+                                continue; // Function frame takes control
+                            }
+                            _ => {}
                         }
                     }
 
@@ -2380,10 +2676,75 @@ impl<'a> VM<'a> {
                                     stack_pointer: self.stack.len(),
                                     instructions: Rc::clone(&func.code),
                                     function_name: String::new(),
+                                    return_override: None,
                                 };
 
                                 self.call_stack.push(new_frame);
 
+                                for arg in args {
+                                    self.locals.push(arg);
+                                }
+
+                                self.ip = 0;
+                                continue; // Skip pushing result, function handles its own return
+                            } else {
+                                return Err(WalrusError::StructMethodMustBeVmFunction {
+                                    span,
+                                    src: self.source_ref.source().into(),
+                                    filename: self.source_ref.filename().into(),
+                                });
+                            }
+                        }
+                        Value::StructInst(inst_key) => {
+                            // For struct instances, look up method on the underlying struct
+                            // and inject the instance as implicit `self`.
+                            let method_name =
+                                self.get_heap().get_string(method_name_sym)?.to_string();
+                            let (method, type_name) = {
+                                let heap = self.get_heap();
+                                let inst = heap.get_struct_inst(inst_key)?;
+                                let struct_def = heap.get_struct_def(inst.struct_def())?;
+
+                                let method =
+                                    if let Some(method) = struct_def.get_method(&method_name) {
+                                        method.clone()
+                                    } else {
+                                        return Err(WalrusError::MethodNotFound {
+                                            type_name: struct_def.name().to_string(),
+                                            method: method_name.clone(),
+                                            span,
+                                            src: self.source_ref.source().into(),
+                                            filename: self.source_ref.filename().into(),
+                                        });
+                                    };
+
+                                (method, struct_def.name().to_string())
+                            };
+
+                            if let WalrusFunction::Vm(func) = method {
+                                let expected_without_self = func.arity.saturating_sub(1);
+                                if args.len() != expected_without_self {
+                                    return Err(WalrusError::InvalidArgCount {
+                                        name: format!("{}::{}", type_name, method_name),
+                                        expected: expected_without_self,
+                                        got: args.len(),
+                                        span,
+                                        src: self.source_ref.source().into(),
+                                        filename: self.source_ref.filename().into(),
+                                    });
+                                }
+
+                                let new_frame = CallFrame {
+                                    return_ip: self.ip,
+                                    frame_pointer: self.locals.len(),
+                                    stack_pointer: self.stack.len(),
+                                    instructions: Rc::clone(&func.code),
+                                    function_name: String::new(),
+                                    return_override: None,
+                                };
+
+                                self.call_stack.push(new_frame);
+                                self.locals.push(Value::StructInst(inst_key));
                                 for arg in args {
                                     self.locals.push(arg);
                                 }
