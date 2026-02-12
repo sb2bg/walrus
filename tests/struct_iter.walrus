@@ -1,0 +1,35 @@
+struct Bag {
+    fn init : self {
+        self.apples = 1;
+        self.oranges = 2;
+        self.pears = 3;
+    }
+
+    fn iter : self {
+        return [self.apples, self.oranges, self.pears];
+    }
+}
+
+let bag = Bag();
+
+let count = 0;
+let sum = 0;
+
+for entry in bag {
+    count += 1;
+    sum += entry;
+}
+
+println(f"count={count}");
+println(f"sum={sum}");
+
+let count2 = 0;
+let sum2 = 0;
+
+for entry in bag.iter() {
+    count2 += 1;
+    sum2 += entry;
+}
+
+println(f"count2={count2}");
+println(f"sum2={sum2}");

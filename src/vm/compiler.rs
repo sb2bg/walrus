@@ -490,6 +490,10 @@ impl<'a> BytecodeEmitter<'a> {
 
                     self.instructions
                         .push(Instruction::new(Opcode::GetIter, span));
+                    // Normalize custom iterator return values. For built-in iterables this is a no-op
+                    // because GetIter on an iterator value returns the iterator itself.
+                    self.instructions
+                        .push(Instruction::new(Opcode::GetIter, span));
 
                     let jump = self.instructions.len();
 

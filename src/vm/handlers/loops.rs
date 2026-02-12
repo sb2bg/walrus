@@ -16,6 +16,24 @@ impl<'a> VM<'a> {
     #[inline(always)]
     pub(crate) fn handle_get_iter(&mut self, span: Span) -> WalrusResult<()> {
         let value = self.pop(Opcode::GetIter, span)?;
+
+        if !matches!(
+            value,
+            Value::List(_)
+                | Value::Tuple(_)
+                | Value::Dict(_)
+                | Value::String(_)
+                | Value::Range(_)
+                | Value::Iter(_)
+        ) {
+            return Err(WalrusError::NotIterable {
+                type_name: value.get_type().to_string(),
+                span,
+                src: self.source_ref.source().into(),
+                filename: self.source_ref.filename().into(),
+            });
+        }
+
         let iter = self.get_heap_mut().value_to_iter(value)?;
         self.push(iter);
         Ok(())
