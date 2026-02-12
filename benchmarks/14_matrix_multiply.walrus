@@ -10,10 +10,10 @@ fn create_matrix : size, seed {
         let j = 0;
         while j < size {
             current = (current * 1103515245 + 12345) % 2147483648;
-            row = row + [current % 100];
+            row.push(current % 100);
             j = j + 1;
         }
-        matrix = matrix + [row];
+        matrix.push(row);
         i = i + 1;
     }
     return matrix;
@@ -26,10 +26,10 @@ fn matrix_multiply : a, b, size {
         let row = [];
         let j = 0;
         while j < size {
-            row = row + [0];
+            row.push(0);
             j = j + 1;
         }
-        result = result + [row];
+        result.push(row);
         i = i + 1;
     }
     

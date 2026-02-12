@@ -24,7 +24,7 @@ fn generate_random_list : n, seed {
     let current = seed;
     for i in 0..n {
         current = (current * 1103515245 + 12345) % 2147483648;
-        result = result + [current % 10000];
+        result.push(current % 10000);
     }
     return result;
 }

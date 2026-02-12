@@ -246,7 +246,7 @@ for i in 0..n {
 
 // Complex operations (method calls, string ops, etc.)
 for i in 0..n {
-    list = list + [i];  // Complex heap operations
+    list.push(i);  // Method calls / heap operations
 }
 ```
 
@@ -490,11 +490,11 @@ fn quicksort : arr {
 
         for x in arr {
                 if x < pivot {
-                        less = less + [x];
+                        less.push(x);
                 } else if x == pivot {
-                        equal = equal + [x];
+                        equal.push(x);
                 } else {
-                        greater = greater + [x];
+                        greater.push(x);
                 }
         }
 

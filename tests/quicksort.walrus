@@ -10,11 +10,11 @@ fn quicksort : arr {
 
     for x in arr {
         if x < pivot {
-            less = less + [x];
+            less.push(x);
         } else if x == pivot {
-            equal = equal + [x];
+            equal.push(x);
         } else {
-            greater = greater + [x];
+            greater.push(x);
         }
     }
 

@@ -339,7 +339,7 @@ fn get_primes : max {
     let primes = [];
     for i in 2..max {
         if is_prime(i) {
-            primes = primes + [i];
+            primes.push(i);
         }
     }
     return primes;
@@ -364,11 +364,11 @@ fn quicksort : arr {
     
     for x in arr {
         if x < pivot {
-            less = less + [x];
+            less.push(x);
         } else if x == pivot {
-            equal = equal + [x];
+            equal.push(x);
         } else {
-            greater = greater + [x];
+            greater.push(x);
         }
     }
     
@@ -416,7 +416,7 @@ fn cube_func : x {
 fn generate_sequence : n, func {
     let result = [];
     for i in 0..n {
-        result = result + [func(i)];
+        result.push(func(i));
     }
     return result;
 }
