@@ -1,35 +1,61 @@
-struct Bag {
-    fn init : self {
-        self.apples = 1;
-        self.oranges = 2;
-        self.pears = 3;
+struct Counter {
+    fn init : self, limit {
+        self.limit = limit;
+        self.current = 0;
     }
 
     fn iter : self {
-        return [self.apples, self.oranges, self.pears];
+        // Python-style: return iterator object (self) and reset state.
+        self.current = 0;
+        return self;
+    }
+
+    fn next : self {
+        if self.current >= self.limit {
+            return void;
+        }
+
+        self.current = self.current + 1;
+        return self.current;
     }
 }
 
-let bag = Bag();
-
+let counter = Counter(3);
 let count = 0;
 let sum = 0;
 
-for entry in bag {
+for value in counter {
     count += 1;
-    sum += entry;
+    sum += value;
 }
 
 println(f"count={count}");
 println(f"sum={sum}");
 
+// Second pass should still work because iter() resets current.
 let count2 = 0;
-let sum2 = 0;
-
-for entry in bag.iter() {
+for value in counter {
     count2 += 1;
-    sum2 += entry;
+}
+println(f"count2={count2}");
+
+struct NextOnly {
+    fn init : self {
+        self.value = 0;
+    }
+
+    fn next : self {
+        if self.value >= 2 {
+            return void;
+        }
+        self.value = self.value + 1;
+        return self.value;
+    }
 }
 
-println(f"count2={count2}");
-println(f"sum2={sum2}");
+let next_only = NextOnly();
+let next_only_count = 0;
+for value in next_only {
+    next_only_count += 1;
+}
+println(f"next_only_count={next_only_count}");

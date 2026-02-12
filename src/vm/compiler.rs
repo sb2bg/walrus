@@ -485,20 +485,54 @@ impl<'a> BytecodeEmitter<'a> {
                     // Remove the 3 locals from symbol table
                     self.instructions.pop_locals(3);
                 } else {
-                    // Generic iterator path (lists, strings, dicts, etc.)
+                    // Generic iterator protocol path:
+                    //   1. Get iterator via GetIter
+                    //   2. Call iterator.next() each iteration
+                    //   3. Stop when next() returns void
                     self.emit(*iter)?;
 
                     self.instructions
                         .push(Instruction::new(Opcode::GetIter, span));
-                    // Normalize custom iterator return values. For built-in iterables this is a no-op
-                    // because GetIter on an iterator value returns the iterator itself.
-                    self.instructions
-                        .push(Instruction::new(Opcode::GetIter, span));
+
+                    // Method name constant for iterator.next()
+                    let next_method = self.instructions.get_heap_mut().push(HeapValue::String("next"));
+                    let next_method_const = self.instructions.push_constant(next_method);
+                    let next_method_opcode = match next_method_const {
+                        0 => Opcode::LoadConst0,
+                        1 => Opcode::LoadConst1,
+                        _ => Opcode::LoadConst(next_method_const),
+                    };
 
                     let jump = self.instructions.len();
 
+                    // Keep one iterator copy on stack, call next() on the duplicate.
+                    self.instructions.push(Instruction::new(Opcode::Dup, span));
                     self.instructions
-                        .push(Instruction::new(Opcode::IterNext(0), span));
+                        .push(Instruction::new(next_method_opcode, span));
+                    self.instructions
+                        .push(Instruction::new(Opcode::CallMethod(0), span));
+
+                    // If result == void, iteration is finished.
+                    self.instructions.push(Instruction::new(Opcode::Dup, span));
+                    self.instructions
+                        .push(Instruction::new(Opcode::Void, span));
+                    self.instructions
+                        .push(Instruction::new(Opcode::Equal, span));
+                    let continue_jump_addr = self.instructions.len();
+                    self.instructions
+                        .push(Instruction::new(Opcode::JumpIfFalse(0), span));
+                    // Done path: remove (void result, iterator) and exit loop.
+                    self.instructions.push(Instruction::new(Opcode::Pop, span));
+                    self.instructions.push(Instruction::new(Opcode::Pop, span));
+                    let done_jump_addr = self.instructions.len();
+                    self.instructions
+                        .push(Instruction::new(Opcode::Jump(0), span));
+
+                    let continue_ip = self.instructions.len();
+                    self.instructions.set(
+                        continue_jump_addr,
+                        Instruction::new(Opcode::JumpIfFalse(continue_ip as u32), span),
+                    );
 
                     self.inc_depth();
 
@@ -532,10 +566,8 @@ impl<'a> BytecodeEmitter<'a> {
                         .push(Instruction::new(Opcode::Jump(jump as u32), span));
 
                     let exit_ip = self.instructions.len();
-                    self.instructions.set(
-                        jump,
-                        Instruction::new(Opcode::IterNext(exit_ip as u32), span),
-                    );
+                    self.instructions
+                        .set(done_jump_addr, Instruction::new(Opcode::Jump(exit_ip as u32), span));
 
                     // JIT: Register the iterator-based for loop for hot-spot detection
                     self.instructions

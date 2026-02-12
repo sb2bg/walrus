@@ -896,59 +896,59 @@ impl<'a> VM<'a> {
                     let value = self.pop(opcode, span)?;
                     match value {
                         Value::StructInst(inst_key) => {
-                            let (struct_name, iter_method) = {
+                            let (struct_name, iter_method, has_next) = {
                                 let heap = self.get_heap();
                                 let inst = heap.get_struct_inst(inst_key)?;
                                 let struct_def = heap.get_struct_def(inst.struct_def())?;
                                 (
                                     struct_def.name().to_string(),
                                     struct_def.get_method("iter").cloned(),
+                                    struct_def.get_method("next").is_some(),
                                 )
                             };
 
-                            match iter_method {
-                                Some(WalrusFunction::Vm(func)) => {
-                                    let expected_without_self = func.arity.saturating_sub(1);
-                                    if expected_without_self != 0 {
-                                        return Err(WalrusError::InvalidArgCount {
-                                            name: format!("{}::iter", struct_name),
-                                            expected: expected_without_self,
-                                            got: 0,
-                                            span,
-                                            src: self.source_ref.source().into(),
-                                            filename: self.source_ref.filename().into(),
-                                        });
-                                    }
-
-                                    let new_frame = CallFrame {
-                                        return_ip: self.ip,
-                                        frame_pointer: self.locals.len(),
-                                        stack_pointer: self.stack.len(),
-                                        instructions: Rc::clone(&func.code),
-                                        function_name: format!("{}::iter", struct_name),
-                                        return_override: None,
-                                    };
-
-                                    self.call_stack.push(new_frame);
-                                    self.locals.push(Value::StructInst(inst_key));
-                                    self.ip = 0;
-                                    continue;
-                                }
-                                Some(_) => {
-                                    return Err(WalrusError::StructMethodMustBeVmFunction {
+                            if let Some(WalrusFunction::Vm(func)) = iter_method {
+                                let expected_without_self = func.arity.saturating_sub(1);
+                                if expected_without_self != 0 {
+                                    return Err(WalrusError::InvalidArgCount {
+                                        name: format!("{}::iter", struct_name),
+                                        expected: expected_without_self,
+                                        got: 0,
                                         span,
                                         src: self.source_ref.source().into(),
                                         filename: self.source_ref.filename().into(),
                                     });
                                 }
-                                None => {
-                                    return Err(WalrusError::NotIterable {
-                                        type_name: struct_name,
-                                        span,
-                                        src: self.source_ref.source().into(),
-                                        filename: self.source_ref.filename().into(),
-                                    });
-                                }
+
+                                let new_frame = CallFrame {
+                                    return_ip: self.ip,
+                                    frame_pointer: self.locals.len(),
+                                    stack_pointer: self.stack.len(),
+                                    instructions: Rc::clone(&func.code),
+                                    function_name: format!("{}::iter", struct_name),
+                                    return_override: None,
+                                };
+
+                                self.call_stack.push(new_frame);
+                                self.locals.push(Value::StructInst(inst_key));
+                                self.ip = 0;
+                                continue;
+                            } else if iter_method.is_some() {
+                                return Err(WalrusError::StructMethodMustBeVmFunction {
+                                    span,
+                                    src: self.source_ref.source().into(),
+                                    filename: self.source_ref.filename().into(),
+                                });
+                            } else if has_next {
+                                // Iterator object: no separate iter() needed.
+                                self.push(Value::StructInst(inst_key));
+                            } else {
+                                return Err(WalrusError::NotIterable {
+                                    type_name: struct_name,
+                                    span,
+                                    src: self.source_ref.source().into(),
+                                    filename: self.source_ref.filename().into(),
+                                });
                             }
                         }
                         _ => {
@@ -2716,6 +2716,39 @@ impl<'a> VM<'a> {
                                 src,
                                 filename,
                             )?
+                        }
+                        Value::Iter(iter_key) => {
+                            let method_name =
+                                self.get_heap().get_string(method_name_sym)?.to_string();
+                            match method_name.as_str() {
+                                "next" => {
+                                    if !args.is_empty() {
+                                        return Err(WalrusError::InvalidArgCount {
+                                            name: "next".to_string(),
+                                            expected: 0,
+                                            got: args.len(),
+                                            span,
+                                            src: self.source_ref.source().into(),
+                                            filename: self.source_ref.filename().into(),
+                                        });
+                                    }
+
+                                    unsafe {
+                                        let mut ptr = NonNull::from(self.get_heap_mut());
+                                        let iter = ptr.as_mut().get_mut_iter(iter_key)?;
+                                        iter.next(self.get_heap_mut()).unwrap_or(Value::Void)
+                                    }
+                                }
+                                _ => {
+                                    return Err(WalrusError::MethodNotFound {
+                                        type_name: "iter".to_string(),
+                                        method: method_name,
+                                        span,
+                                        src: self.source_ref.source().into(),
+                                        filename: self.source_ref.filename().into(),
+                                    });
+                                }
+                            }
                         }
                         Value::StructDef(key) => {
                             // For struct definitions, look up the method and call it
