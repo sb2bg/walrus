@@ -10,6 +10,7 @@ use crate::value::Value;
 use crate::vm::instruction_set::InstructionSet;
 use crate::vm::opcode::{Instruction, Opcode};
 use crate::vm::optimize;
+use rustc_hash::FxHashSet;
 
 // Builtin function metadata
 struct BuiltinInfo {
@@ -81,13 +82,14 @@ pub struct BytecodeEmitter<'a> {
     depth: usize,                   // 0 = global scope, >0 = local scope
     loop_stack: Vec<LoopContext>,   // Track nested loops for break/continue
     current_struct: Option<String>, // Name of struct currently being compiled (for method access)
+    current_struct_methods: Option<FxHashSet<String>>, // Known method names for current struct
 }
 
 struct LoopContext {
-    start: usize,               // Address of loop start (for continue)
-    breaks: Vec<usize>,         // Addresses of break jumps to patch
-    has_stack_iterator: bool,    // True if loop has an iterator on the operand stack (iterator-based for loops only)
-    locals_at_start: usize,     // Number of locals at loop body start (for continue cleanup)
+    start: usize,             // Address of loop start (for continue)
+    breaks: Vec<usize>,       // Addresses of break jumps to patch
+    has_stack_iterator: bool, // True if loop has an iterator on the operand stack (iterator-based for loops only)
+    locals_at_start: usize,   // Number of locals at loop body start (for continue cleanup)
 }
 
 impl<'a> BytecodeEmitter<'a> {
@@ -98,6 +100,7 @@ impl<'a> BytecodeEmitter<'a> {
             depth: 0, // Start at global scope
             loop_stack: Vec::new(),
             current_struct: None,
+            current_struct_methods: None,
         }
     }
 
@@ -108,6 +111,7 @@ impl<'a> BytecodeEmitter<'a> {
             depth: 1,               // Functions start at local scope depth 1
             loop_stack: Vec::new(), // Functions get their own loop stack
             current_struct: self.current_struct.clone(),
+            current_struct_methods: self.current_struct_methods.clone(),
         }
     }
 
@@ -377,7 +381,8 @@ impl<'a> BytecodeEmitter<'a> {
                 );
 
                 // JIT: Register the while loop for hot-spot detection
-                self.instructions.register_loop(start, back_edge, exit_ip, false);
+                self.instructions
+                    .register_loop(start, back_edge, exit_ip, false);
 
                 // Pop loop context and patch break jumps
                 if let Some(loop_ctx) = self.loop_stack.pop() {
@@ -461,7 +466,8 @@ impl<'a> BytecodeEmitter<'a> {
 
                     // JIT: Register the range-based for loop for hot-spot detection
                     // The header is at 'jump' where ForRangeNext is
-                    self.instructions.register_loop(jump, back_edge, end_pos, true);
+                    self.instructions
+                        .register_loop(jump, back_edge, end_pos, true);
 
                     // Pop the 3 range locals at the end
                     self.instructions
@@ -528,7 +534,8 @@ impl<'a> BytecodeEmitter<'a> {
                     );
 
                     // JIT: Register the iterator-based for loop for hot-spot detection
-                    self.instructions.register_loop(jump, back_edge, exit_ip, false);
+                    self.instructions
+                        .register_loop(jump, back_edge, exit_ip, false);
 
                     // Patch break jumps
                     if let Some(loop_ctx) = loop_ctx {
@@ -578,7 +585,8 @@ impl<'a> BytecodeEmitter<'a> {
 
                 // JIT: Register the function for hot-spot detection
                 // Note: We register it in the parent instruction set since that's where calls happen
-                self.instructions.register_function(name.clone(), 0, arg_len);
+                self.instructions
+                    .register_function(name.clone(), 0, arg_len);
 
                 // Create the function heap value
                 let func =
@@ -696,9 +704,22 @@ impl<'a> BytecodeEmitter<'a> {
                     };
                     self.instructions.push(Instruction::new(opcode, span));
                 } else if let Some(ref struct_name) = self.current_struct {
-                    // If we're inside a struct method and the identifier isn't found,
-                    // try to resolve it as a method of the current struct
-                    // This will load the struct and then get the method
+                    // In struct methods, bare identifiers may reference methods on the current
+                    // struct. Only resolve names we know are methods; otherwise report the
+                    // clearer undefined-variable error.
+                    let is_known_method = self
+                        .current_struct_methods
+                        .as_ref()
+                        .map_or(false, |methods| methods.contains(&name));
+
+                    if !is_known_method {
+                        return Err(WalrusError::UndefinedVariable {
+                            name,
+                            span,
+                            src: self.source_ref.source().to_string(),
+                            filename: self.source_ref.filename().to_string(),
+                        });
+                    }
 
                     // Load the struct definition
                     if let Some(struct_index) = self.instructions.resolve_global_index(struct_name)
@@ -976,6 +997,15 @@ impl<'a> BytecodeEmitter<'a> {
 
                 // Create a new struct definition
                 let mut struct_def = crate::structs::StructDefinition::new(name.clone());
+                let method_names: FxHashSet<String> = members
+                    .iter()
+                    .filter_map(|member| match member.kind() {
+                        NodeKind::StructFunctionDefinition(method_name, _, _) => {
+                            Some(method_name.clone())
+                        }
+                        _ => None,
+                    })
+                    .collect();
 
                 // Process struct members (methods)
                 for member in members {
@@ -985,6 +1015,7 @@ impl<'a> BytecodeEmitter<'a> {
                             // Create a child emitter for the method with struct context
                             let mut emitter = self.new_child();
                             emitter.current_struct = Some(name.clone());
+                            emitter.current_struct_methods = Some(method_names.clone());
                             let arg_len = args.len();
 
                             // Define method parameters as locals
