@@ -1548,8 +1548,8 @@ impl<'a> VM<'a> {
                     }
                 }
                 Opcode::Greater => {
-                    let b = self.pop(opcode, span)?;
-                    let a = self.pop(opcode, span)?;
+                    let b = self.pop_unchecked();
+                    let a = self.pop_unchecked();
 
                     match (a, b) {
                         (Value::Int(a), Value::Int(b)) => {
@@ -1628,32 +1628,43 @@ impl<'a> VM<'a> {
                     }
                 }
                 Opcode::Index => {
-                    let b = self.pop(opcode, span)?;
-                    let a = self.pop(opcode, span)?;
+                    let b = self.pop_unchecked();
+                    let a = self.pop_unchecked();
+
+                    // Fast path for the hottest case in numeric code: list[int]
+                    if let (Value::List(list_key), Value::Int(idx)) = (a, b) {
+                        let list = self.get_heap().get_list(list_key)?;
+                        if idx >= 0 {
+                            let idx_usize = idx as usize;
+                            if idx_usize < list.len() {
+                                // SAFETY: bounds checked above
+                                self.push(unsafe { *list.get_unchecked(idx_usize) });
+                                continue;
+                            }
+                        }
+
+                        let mut normalized = idx;
+                        let original = idx;
+                        if normalized < 0 {
+                            normalized += list.len() as i64;
+                        }
+
+                        if normalized < 0 || normalized >= list.len() as i64 {
+                            return Err(WalrusError::IndexOutOfBounds {
+                                index: original,
+                                len: list.len(),
+                                span,
+                                src: self.source_ref.source().to_string(),
+                                filename: self.source_ref.filename().to_string(),
+                            });
+                        }
+
+                        self.push(list[normalized as usize]);
+                        continue;
+                    }
 
                     match (a, b) {
-                        (Value::List(a), Value::Int(b)) => {
-                            let a = self.get_heap().get_list(a)?;
-                            let mut b = b;
-                            let original = b;
-
-                            // todo: merge code with other index ops
-                            if b < 0 {
-                                b += a.len() as i64;
-                            }
-
-                            if b < 0 || b >= a.len() as i64 {
-                                return Err(WalrusError::IndexOutOfBounds {
-                                    index: original,
-                                    len: a.len(),
-                                    span,
-                                    src: self.source_ref.source().to_string(),
-                                    filename: self.source_ref.filename().to_string(),
-                                });
-                            }
-
-                            self.push(a[b as usize]);
-                        }
+                        (Value::List(_), Value::Int(_)) => unreachable!(),
                         (Value::String(a), Value::Int(b)) => {
                             let a = self.get_heap().get_string(a)?;
                             let char_len = a.chars().count();
@@ -1823,34 +1834,48 @@ impl<'a> VM<'a> {
                 }
                 Opcode::StoreIndex => {
                     // Stack: [object, index, value]
-                    let value = self.pop(opcode, span)?;
-                    let index = self.pop(opcode, span)?;
-                    let object = self.pop(opcode, span)?;
+                    let value = self.pop_unchecked();
+                    let index = self.pop_unchecked();
+                    let object = self.pop_unchecked();
+
+                    // Fast path for hottest assignment case: list[int] = value
+                    if let (Value::List(list_key), Value::Int(idx)) = (object, index) {
+                        let list = self.get_heap_mut().get_mut_list(list_key)?;
+                        if idx >= 0 {
+                            let idx_usize = idx as usize;
+                            if idx_usize < list.len() {
+                                // SAFETY: bounds checked above
+                                unsafe {
+                                    *list.get_unchecked_mut(idx_usize) = value;
+                                }
+                                self.push(Value::Void);
+                                continue;
+                            }
+                        }
+
+                        let mut normalized = idx;
+                        let original = idx;
+                        if normalized < 0 {
+                            normalized += list.len() as i64;
+                        }
+
+                        if normalized < 0 || normalized >= list.len() as i64 {
+                            return Err(WalrusError::IndexOutOfBounds {
+                                index: original,
+                                len: list.len(),
+                                span,
+                                src: self.source_ref.source().to_string(),
+                                filename: self.source_ref.filename().to_string(),
+                            });
+                        }
+
+                        list[normalized as usize] = value;
+                        self.push(Value::Void);
+                        continue;
+                    }
 
                     match (object, index) {
-                        (Value::List(list_key), Value::Int(idx)) => {
-                            let list = self.get_heap_mut().get_mut_list(list_key)?;
-                            let mut idx = idx;
-                            let original = idx;
-
-                            // Handle negative indices
-                            if idx < 0 {
-                                idx += list.len() as i64;
-                            }
-
-                            if idx < 0 || idx >= list.len() as i64 {
-                                return Err(WalrusError::IndexOutOfBounds {
-                                    index: original,
-                                    len: list.len(),
-                                    span,
-                                    src: self.source_ref.source().to_string(),
-                                    filename: self.source_ref.filename().to_string(),
-                                });
-                            }
-
-                            list[idx as usize] = value;
-                            self.push(Value::Void);
-                        }
+                        (Value::List(_), Value::Int(_)) => unreachable!(),
                         (Value::Dict(dict_key), key) => {
                             let dict = self.get_heap_mut().get_mut_dict(dict_key)?;
                             dict.insert(key, value);
