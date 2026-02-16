@@ -1,11 +1,11 @@
 //! Stack manipulation handlers: LoadConst, Load, Store, Pop, Dup, Swap
 
-use crate::WalrusResult;
 use crate::error::WalrusError;
 use crate::span::Span;
 use crate::value::Value;
 use crate::vm::opcode::Opcode;
 use crate::vm::VM;
+use crate::WalrusResult;
 
 impl<'a> VM<'a> {
     #[inline(always)]
