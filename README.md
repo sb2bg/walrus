@@ -324,6 +324,29 @@ cargo run -- -d file.walrus
 cargo run -- --help
 ```
 
+### VS Code (LSP + Syntax Highlighting)
+
+Walrus now includes a language server and a VS Code extension scaffold in `vscode/walrus`.
+
+```bash
+# Build the language server
+cargo build --release --bin walrus-lsp
+
+# Install extension dependencies
+cd vscode/walrus
+npm install
+```
+
+Then open `vscode/walrus` in VS Code and press `F5` to launch an Extension Development Host.
+Open any `.walrus` file to get:
+
+- Parse diagnostics
+- Hover docs for keywords/builtins
+- Completion for keywords/builtins
+- Document symbols
+- Go-to-definition (same-file symbols)
+- Syntax highlighting
+
 ## Quick Start
 
 ### Hello World

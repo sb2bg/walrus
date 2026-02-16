@@ -1,0 +1,188 @@
+{
+  "name": "Walrus",
+  "scopeName": "source.walrus",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#numbers" },
+    { "include": "#keywords" },
+    { "include": "#builtins" },
+    { "include": "#function-definitions" },
+    { "include": "#type-definitions" },
+    { "include": "#constants" },
+    { "include": "#operators" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.double-slash.walrus",
+          "match": "//.*$"
+        },
+        {
+          "name": "comment.block.walrus",
+          "begin": "/\\*",
+          "end": "\\*/"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.walrus",
+          "begin": "f\"",
+          "beginCaptures": {
+            "0": { "name": "punctuation.definition.string.begin.walrus" }
+          },
+          "end": "\"",
+          "endCaptures": {
+            "0": { "name": "punctuation.definition.string.end.walrus" }
+          },
+          "patterns": [
+            { "include": "#escapes" },
+            {
+              "name": "meta.interpolation.walrus",
+              "begin": "\\{",
+              "beginCaptures": {
+                "0": { "name": "punctuation.section.interpolation.begin.walrus" }
+              },
+              "end": "\\}",
+              "endCaptures": {
+                "0": { "name": "punctuation.section.interpolation.end.walrus" }
+              },
+              "patterns": [
+                { "include": "#keywords" },
+                { "include": "#builtins" },
+                { "include": "#numbers" },
+                { "include": "#constants" },
+                {
+                  "name": "variable.other.readwrite.walrus",
+                  "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b"
+                },
+                { "include": "#operators" }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.double.walrus",
+          "begin": "\"",
+          "beginCaptures": {
+            "0": { "name": "punctuation.definition.string.begin.walrus" }
+          },
+          "end": "\"",
+          "endCaptures": {
+            "0": { "name": "punctuation.definition.string.end.walrus" }
+          },
+          "patterns": [{ "include": "#escapes" }]
+        }
+      ]
+    },
+    "escapes": {
+      "patterns": [
+        {
+          "name": "constant.character.escape.walrus",
+          "match": "\\\\(?:[ntr\"\\\\{}]|u\\{[0-9A-Fa-f]+\\})"
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.float.walrus",
+          "match": "\\b\\d+\\.\\d+\\b"
+        },
+        {
+          "name": "constant.numeric.hex.walrus",
+          "match": "\\b0x[0-9A-Fa-f]+\\b"
+        },
+        {
+          "name": "constant.numeric.octal.walrus",
+          "match": "\\b0o[0-7]+\\b"
+        },
+        {
+          "name": "constant.numeric.binary.walrus",
+          "match": "\\b0b[01]+\\b"
+        },
+        {
+          "name": "constant.numeric.integer.walrus",
+          "match": "\\b\\d+\\b"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.walrus",
+          "match": "\\b(?:if|else|while|for|in|return|break|continue|try|catch|throw|defer)\\b"
+        },
+        {
+          "name": "keyword.declaration.walrus",
+          "match": "\\b(?:let|fn|struct|import|as|extern)\\b"
+        },
+        {
+          "name": "keyword.operator.logical.walrus",
+          "match": "\\b(?:and|or|not)\\b"
+        },
+        {
+          "name": "keyword.other.walrus",
+          "match": "\\b(?:start|end|free)\\b"
+        }
+      ]
+    },
+    "builtins": {
+      "patterns": [
+        {
+          "name": "support.function.builtin.walrus",
+          "match": "\\b(?:len|str|type|input|print|println|__gc__|__heap_stats__|__gc_threshold__)\\b"
+        }
+      ]
+    },
+    "function-definitions": {
+      "patterns": [
+        {
+          "name": "entity.name.function.walrus",
+          "match": "\\bfn\\s+([A-Za-z_][A-Za-z0-9_]*)\\b",
+          "captures": {
+            "1": { "name": "entity.name.function.walrus" }
+          }
+        }
+      ]
+    },
+    "type-definitions": {
+      "patterns": [
+        {
+          "name": "entity.name.type.walrus",
+          "match": "\\bstruct\\s+([A-Za-z_][A-Za-z0-9_]*)\\b",
+          "captures": {
+            "1": { "name": "entity.name.type.walrus" }
+          }
+        }
+      ]
+    },
+    "constants": {
+      "patterns": [
+        {
+          "name": "constant.language.boolean.walrus",
+          "match": "\\b(?:true|false)\\b"
+        },
+        {
+          "name": "constant.language.walrus",
+          "match": "\\bvoid\\b"
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.walrus",
+          "match": "(?:\\*\\*=|\\*\\*|\\+=|-=|\\*=|/=|%=|==|!=|<=|>=|=|<|>|\\+|-|\\*|/|%|\\.\\.)"
+        },
+        {
+          "name": "punctuation.separator.walrus",
+          "match": "[,:;.]"
+        }
+      ]
+    }
+  }
+}

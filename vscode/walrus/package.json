@@ -1,0 +1,63 @@
+{
+  "name": "walrus-language-support",
+  "displayName": "Walrus Language Support",
+  "description": "Syntax highlighting and language server integration for Walrus.",
+  "version": "0.1.0",
+  "publisher": "sb2bg",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "activationEvents": [
+    "onLanguage:walrus"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "walrus",
+        "aliases": [
+          "Walrus",
+          "walrus"
+        ],
+        "extensions": [
+          ".walrus"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "walrus",
+        "scopeName": "source.walrus",
+        "path": "./syntaxes/walrus.tmLanguage.json"
+      }
+    ],
+    "configuration": {
+      "title": "Walrus",
+      "properties": {
+        "walrus.languageServer.path": {
+          "type": "string",
+          "default": "walrus-lsp",
+          "description": "Path to the walrus language server executable."
+        },
+        "walrus.languageServer.args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Additional arguments passed to walrus-lsp."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "prepare": "echo \"No build step required\""
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  }
+}
