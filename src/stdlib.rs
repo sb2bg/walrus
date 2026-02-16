@@ -13,11 +13,11 @@ use std::path::Path;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
-use crate::WalrusResult;
 use crate::error::WalrusError;
 use crate::function::NativeFunction;
 use crate::span::Span;
 use crate::value::Value;
+use crate::WalrusResult;
 
 // File handle table - maps integer handles to open files
 thread_local! {
@@ -69,69 +69,7 @@ impl FileTable {
 
 /// Get the list of native functions for a module
 pub fn get_module_functions(module: &str) -> Option<Vec<NativeFunction>> {
-    match module {
-        "std/io" => Some(vec![
-            NativeFunction::FileOpen,
-            NativeFunction::FileRead,
-            NativeFunction::FileReadLine,
-            NativeFunction::FileWrite,
-            NativeFunction::FileClose,
-            NativeFunction::FileExists,
-            NativeFunction::ReadFile,
-            NativeFunction::WriteFile,
-        ]),
-        "std/sys" => Some(vec![
-            NativeFunction::EnvGet,
-            NativeFunction::Args,
-            NativeFunction::Cwd,
-            NativeFunction::Exit,
-        ]),
-        "std/math" => Some(vec![
-            NativeFunction::MathPi,
-            NativeFunction::MathE,
-            NativeFunction::MathTau,
-            NativeFunction::MathInf,
-            NativeFunction::MathNaN,
-            NativeFunction::MathAbs,
-            NativeFunction::MathSign,
-            NativeFunction::MathMin,
-            NativeFunction::MathMax,
-            NativeFunction::MathClamp,
-            NativeFunction::MathFloor,
-            NativeFunction::MathCeil,
-            NativeFunction::MathRound,
-            NativeFunction::MathTrunc,
-            NativeFunction::MathFract,
-            NativeFunction::MathSqrt,
-            NativeFunction::MathCbrt,
-            NativeFunction::MathPow,
-            NativeFunction::MathHypot,
-            NativeFunction::MathSin,
-            NativeFunction::MathCos,
-            NativeFunction::MathTan,
-            NativeFunction::MathAsin,
-            NativeFunction::MathAcos,
-            NativeFunction::MathAtan,
-            NativeFunction::MathAtan2,
-            NativeFunction::MathExp,
-            NativeFunction::MathLn,
-            NativeFunction::MathLog2,
-            NativeFunction::MathLog10,
-            NativeFunction::MathLog,
-            NativeFunction::MathLerp,
-            NativeFunction::MathDegrees,
-            NativeFunction::MathRadians,
-            NativeFunction::MathIsFinite,
-            NativeFunction::MathIsNaN,
-            NativeFunction::MathIsInf,
-            NativeFunction::MathSeed,
-            NativeFunction::MathRandFloat,
-            NativeFunction::MathRandBool,
-            NativeFunction::MathRandInt,
-            NativeFunction::MathRandRange,
-        ]),
-        _ => None,
-    }
+    crate::native_registry::module_functions(module)
 }
 
 /// Open a file and return a handle

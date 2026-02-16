@@ -153,121 +153,23 @@ pub enum NativeFunction {
 
 impl NativeFunction {
     pub fn name(&self) -> &'static str {
-        match self {
-            NativeFunction::FileOpen => "file_open",
-            NativeFunction::FileRead => "file_read",
-            NativeFunction::FileReadLine => "file_read_line",
-            NativeFunction::FileWrite => "file_write",
-            NativeFunction::FileClose => "file_close",
-            NativeFunction::FileExists => "file_exists",
-            NativeFunction::ReadFile => "read_file",
-            NativeFunction::WriteFile => "write_file",
-            NativeFunction::EnvGet => "env_get",
-            NativeFunction::Args => "args",
-            NativeFunction::Cwd => "cwd",
-            NativeFunction::Exit => "exit",
-            NativeFunction::MathPi => "pi",
-            NativeFunction::MathE => "e",
-            NativeFunction::MathTau => "tau",
-            NativeFunction::MathInf => "inf",
-            NativeFunction::MathNaN => "nan",
-            NativeFunction::MathAbs => "abs",
-            NativeFunction::MathSign => "sign",
-            NativeFunction::MathMin => "min",
-            NativeFunction::MathMax => "max",
-            NativeFunction::MathClamp => "clamp",
-            NativeFunction::MathFloor => "floor",
-            NativeFunction::MathCeil => "ceil",
-            NativeFunction::MathRound => "round",
-            NativeFunction::MathTrunc => "trunc",
-            NativeFunction::MathFract => "fract",
-            NativeFunction::MathSqrt => "sqrt",
-            NativeFunction::MathCbrt => "cbrt",
-            NativeFunction::MathPow => "pow",
-            NativeFunction::MathHypot => "hypot",
-            NativeFunction::MathSin => "sin",
-            NativeFunction::MathCos => "cos",
-            NativeFunction::MathTan => "tan",
-            NativeFunction::MathAsin => "asin",
-            NativeFunction::MathAcos => "acos",
-            NativeFunction::MathAtan => "atan",
-            NativeFunction::MathAtan2 => "atan2",
-            NativeFunction::MathExp => "exp",
-            NativeFunction::MathLn => "ln",
-            NativeFunction::MathLog2 => "log2",
-            NativeFunction::MathLog10 => "log10",
-            NativeFunction::MathLog => "log",
-            NativeFunction::MathLerp => "lerp",
-            NativeFunction::MathDegrees => "degrees",
-            NativeFunction::MathRadians => "radians",
-            NativeFunction::MathIsFinite => "is_finite",
-            NativeFunction::MathIsNaN => "is_nan",
-            NativeFunction::MathIsInf => "is_inf",
-            NativeFunction::MathSeed => "seed",
-            NativeFunction::MathRandFloat => "rand_float",
-            NativeFunction::MathRandBool => "rand_bool",
-            NativeFunction::MathRandInt => "rand_int",
-            NativeFunction::MathRandRange => "rand_range",
-        }
+        crate::native_registry::native_spec(*self).name
     }
 
     pub fn arity(&self) -> usize {
-        match self {
-            NativeFunction::FileOpen => 2,
-            NativeFunction::FileRead => 1,
-            NativeFunction::FileReadLine => 1,
-            NativeFunction::FileWrite => 2,
-            NativeFunction::FileClose => 1,
-            NativeFunction::FileExists => 1,
-            NativeFunction::ReadFile => 1,
-            NativeFunction::WriteFile => 2,
-            NativeFunction::EnvGet => 1,
-            NativeFunction::Args => 0,
-            NativeFunction::Cwd => 0,
-            NativeFunction::Exit => 1,
-            NativeFunction::MathPi => 0,
-            NativeFunction::MathE => 0,
-            NativeFunction::MathTau => 0,
-            NativeFunction::MathInf => 0,
-            NativeFunction::MathNaN => 0,
-            NativeFunction::MathAbs => 1,
-            NativeFunction::MathSign => 1,
-            NativeFunction::MathMin => 2,
-            NativeFunction::MathMax => 2,
-            NativeFunction::MathClamp => 3,
-            NativeFunction::MathFloor => 1,
-            NativeFunction::MathCeil => 1,
-            NativeFunction::MathRound => 1,
-            NativeFunction::MathTrunc => 1,
-            NativeFunction::MathFract => 1,
-            NativeFunction::MathSqrt => 1,
-            NativeFunction::MathCbrt => 1,
-            NativeFunction::MathPow => 2,
-            NativeFunction::MathHypot => 2,
-            NativeFunction::MathSin => 1,
-            NativeFunction::MathCos => 1,
-            NativeFunction::MathTan => 1,
-            NativeFunction::MathAsin => 1,
-            NativeFunction::MathAcos => 1,
-            NativeFunction::MathAtan => 1,
-            NativeFunction::MathAtan2 => 2,
-            NativeFunction::MathExp => 1,
-            NativeFunction::MathLn => 1,
-            NativeFunction::MathLog2 => 1,
-            NativeFunction::MathLog10 => 1,
-            NativeFunction::MathLog => 2,
-            NativeFunction::MathLerp => 3,
-            NativeFunction::MathDegrees => 1,
-            NativeFunction::MathRadians => 1,
-            NativeFunction::MathIsFinite => 1,
-            NativeFunction::MathIsNaN => 1,
-            NativeFunction::MathIsInf => 1,
-            NativeFunction::MathSeed => 1,
-            NativeFunction::MathRandFloat => 0,
-            NativeFunction::MathRandBool => 0,
-            NativeFunction::MathRandInt => 2,
-            NativeFunction::MathRandRange => 2,
-        }
+        crate::native_registry::native_spec(*self).arity
+    }
+
+    pub fn module(&self) -> &'static str {
+        crate::native_registry::native_spec(*self).module
+    }
+
+    pub fn params(&self) -> &'static [&'static str] {
+        crate::native_registry::native_spec(*self).params
+    }
+
+    pub fn docs(&self) -> &'static str {
+        crate::native_registry::native_spec(*self).docs
     }
 }
 
