@@ -10,6 +10,9 @@ use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::Path;
 
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
+
 use crate::WalrusResult;
 use crate::error::WalrusError;
 use crate::function::NativeFunction;
@@ -19,6 +22,7 @@ use crate::value::Value;
 // File handle table - maps integer handles to open files
 thread_local! {
     static FILE_TABLE: RefCell<FileTable> = RefCell::new(FileTable::new());
+    static RNG_STATE: RefCell<StdRng> = RefCell::new(new_rng());
 }
 
 struct FileEntry {
@@ -30,6 +34,13 @@ struct FileEntry {
 struct FileTable {
     files: HashMap<i64, FileEntry>,
     next_handle: i64,
+}
+
+fn new_rng() -> StdRng {
+    let mut seeder = rand::thread_rng();
+    let mut seed = [0u8; 32];
+    seeder.fill(&mut seed);
+    StdRng::from_seed(seed)
 }
 
 impl FileTable {
@@ -74,6 +85,50 @@ pub fn get_module_functions(module: &str) -> Option<Vec<NativeFunction>> {
             NativeFunction::Args,
             NativeFunction::Cwd,
             NativeFunction::Exit,
+        ]),
+        "std/math" => Some(vec![
+            NativeFunction::MathPi,
+            NativeFunction::MathE,
+            NativeFunction::MathTau,
+            NativeFunction::MathInf,
+            NativeFunction::MathNaN,
+            NativeFunction::MathAbs,
+            NativeFunction::MathSign,
+            NativeFunction::MathMin,
+            NativeFunction::MathMax,
+            NativeFunction::MathClamp,
+            NativeFunction::MathFloor,
+            NativeFunction::MathCeil,
+            NativeFunction::MathRound,
+            NativeFunction::MathTrunc,
+            NativeFunction::MathFract,
+            NativeFunction::MathSqrt,
+            NativeFunction::MathCbrt,
+            NativeFunction::MathPow,
+            NativeFunction::MathHypot,
+            NativeFunction::MathSin,
+            NativeFunction::MathCos,
+            NativeFunction::MathTan,
+            NativeFunction::MathAsin,
+            NativeFunction::MathAcos,
+            NativeFunction::MathAtan,
+            NativeFunction::MathAtan2,
+            NativeFunction::MathExp,
+            NativeFunction::MathLn,
+            NativeFunction::MathLog2,
+            NativeFunction::MathLog10,
+            NativeFunction::MathLog,
+            NativeFunction::MathLerp,
+            NativeFunction::MathDegrees,
+            NativeFunction::MathRadians,
+            NativeFunction::MathIsFinite,
+            NativeFunction::MathIsNaN,
+            NativeFunction::MathIsInf,
+            NativeFunction::MathSeed,
+            NativeFunction::MathRandFloat,
+            NativeFunction::MathRandBool,
+            NativeFunction::MathRandInt,
+            NativeFunction::MathRandRange,
         ]),
         _ => None,
     }
@@ -237,6 +292,50 @@ pub fn write_file(path: &str, content: &str, _span: Span) -> WalrusResult<()> {
             reason: e.to_string(),
         }),
     }
+}
+
+pub fn math_seed(seed: i64) {
+    RNG_STATE.with(|rng| {
+        *rng.borrow_mut() = StdRng::seed_from_u64(seed as u64);
+    });
+}
+
+pub fn math_rand_float() -> f64 {
+    RNG_STATE.with(|rng| rng.borrow_mut().gen_range(0.0..1.0))
+}
+
+pub fn math_rand_bool() -> bool {
+    RNG_STATE.with(|rng| rng.borrow_mut().gen_bool(0.5))
+}
+
+pub fn math_rand_int(min: i64, max: i64, _span: Span) -> WalrusResult<i64> {
+    if min > max {
+        return Err(WalrusError::GenericError {
+            message: format!("math.rand_int: invalid range [{min}, {max}]"),
+        });
+    }
+
+    Ok(RNG_STATE.with(|rng| rng.borrow_mut().gen_range(min..=max)))
+}
+
+pub fn math_rand_range(min: f64, max: f64, _span: Span) -> WalrusResult<f64> {
+    if !min.is_finite() || !max.is_finite() {
+        return Err(WalrusError::GenericError {
+            message: "math.rand_range: range bounds must be finite numbers".to_string(),
+        });
+    }
+
+    if min > max {
+        return Err(WalrusError::GenericError {
+            message: format!("math.rand_range: invalid range [{min}, {max}]"),
+        });
+    }
+
+    if (min - max).abs() < f64::EPSILON {
+        return Ok(min);
+    }
+
+    Ok(RNG_STATE.with(|rng| rng.borrow_mut().gen_range(min..max)))
 }
 
 /// Get environment variable

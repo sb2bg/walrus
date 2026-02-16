@@ -1,0 +1,118 @@
+import "std/math";
+import "std/sys";
+
+let pi = math.pi();
+if not (pi >= 3.14 and pi <= 3.15) {
+    println("std/math test failed: math.pi");
+    sys.exit(1);
+}
+if not math.is_finite(pi) {
+    println("std/math test failed: math.is_finite(pi)");
+    sys.exit(1);
+}
+if not (math.abs(-5) == 5) {
+    println("std/math test failed: math.abs(int)");
+    sys.exit(1);
+}
+if not (math.abs(-3.5) == 3.5) {
+    println("std/math test failed: math.abs(float)");
+    sys.exit(1);
+}
+if not (math.sign(-3) == -1 and math.sign(0) == 0 and math.sign(7) == 1) {
+    println("std/math test failed: math.sign");
+    sys.exit(1);
+}
+if not (math.min(3, 7) == 3) {
+    println("std/math test failed: math.min");
+    sys.exit(1);
+}
+if not (math.max(3, 7) == 7) {
+    println("std/math test failed: math.max");
+    sys.exit(1);
+}
+if not (math.clamp(15, 0, 10) == 10) {
+    println("std/math test failed: math.clamp");
+    sys.exit(1);
+}
+if not (math.sqrt(9) == 3) {
+    println("std/math test failed: math.sqrt");
+    sys.exit(1);
+}
+
+let c = math.cbrt(27);
+if not (c >= 2.9999 and c <= 3.0001) {
+    println("std/math test failed: math.cbrt");
+    sys.exit(1);
+}
+
+let ln_e = math.ln(math.e());
+if not (ln_e >= 0.9999 and ln_e <= 1.0001) {
+    println("std/math test failed: math.ln/math.e");
+    sys.exit(1);
+}
+
+let log2_8 = math.log2(8);
+if not (log2_8 >= 2.9999 and log2_8 <= 3.0001) {
+    println("std/math test failed: math.log2");
+    sys.exit(1);
+}
+
+let hyp = math.hypot(3, 4);
+if not (hyp >= 4.9999 and hyp <= 5.0001) {
+    println("std/math test failed: math.hypot");
+    sys.exit(1);
+}
+if not (math.fract(3.25) == 0.25) {
+    println("std/math test failed: math.fract");
+    sys.exit(1);
+}
+if not (math.lerp(10, 20, 0.5) == 15) {
+    println("std/math test failed: math.lerp");
+    sys.exit(1);
+}
+
+let nan = math.nan();
+if not math.is_nan(nan) {
+    println("std/math test failed: math.nan/math.is_nan");
+    sys.exit(1);
+}
+if math.is_finite(nan) {
+    println("std/math test failed: math.is_finite(nan)");
+    sys.exit(1);
+}
+if not math.is_inf(math.inf()) {
+    println("std/math test failed: math.is_inf(math.inf)");
+    sys.exit(1);
+}
+
+math.seed(12345);
+let r1 = math.rand_int(1, 1000);
+math.seed(12345);
+let r2 = math.rand_int(1, 1000);
+if r1 != r2 {
+    println("std/math test failed: math.seed deterministic rand_int");
+    sys.exit(1);
+}
+
+let rf = math.rand_float();
+if not (rf >= 0.0 and rf < 1.0) {
+    println("std/math test failed: math.rand_float range");
+    sys.exit(1);
+}
+
+math.seed(77);
+let b1 = math.rand_bool();
+math.seed(77);
+let b2 = math.rand_bool();
+if b1 != b2 {
+    println("std/math test failed: math.rand_bool deterministic");
+    sys.exit(1);
+}
+
+let rr = math.rand_range(5.0, 6.0);
+if not (rr >= 5.0 and rr < 6.0) {
+    println("std/math test failed: math.rand_range range");
+    sys.exit(1);
+}
+
+println("std/math ok");

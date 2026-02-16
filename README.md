@@ -72,6 +72,7 @@ Walrus provides a standard library through an import system. Modules are importe
 ```walrus
 import "std/io";
 import "std/sys" as system;
+import "std/math";
 ```
 
 #### `std/io` - File I/O Operations
@@ -148,6 +149,72 @@ if len(args) < 2 {
     println("Usage: walrus script.walrus <args>");
     sys.exit(1);
 }
+```
+
+#### `std/math` - Math and Random Utilities
+
+| Function                 | Description                                                |
+| ------------------------ | ---------------------------------------------------------- |
+| `math.pi()`              | Returns π                                                  |
+| `math.e()`               | Returns Euler's number e                                   |
+| `math.tau()`             | Returns τ (2π)                                             |
+| `math.inf()`             | Returns positive infinity                                  |
+| `math.nan()`             | Returns NaN                                                |
+| `math.abs(x)`            | Absolute value                                             |
+| `math.sign(x)`           | Sign of `x` as -1, 0, or 1                                 |
+| `math.min(a, b)`         | Smaller of two numbers                                     |
+| `math.max(a, b)`         | Larger of two numbers                                      |
+| `math.clamp(x, lo, hi)`  | Clamp value to a range                                     |
+| `math.floor(x)`          | Floor                                                      |
+| `math.ceil(x)`           | Ceiling                                                    |
+| `math.round(x)`          | Round to nearest integer value                             |
+| `math.trunc(x)`          | Truncate fractional part                                   |
+| `math.fract(x)`          | Fractional part                                            |
+| `math.sqrt(x)`           | Square root (`x` must be >= 0)                             |
+| `math.cbrt(x)`           | Cube root                                                  |
+| `math.pow(x, y)`         | `x` raised to `y`                                          |
+| `math.hypot(x, y)`       | Euclidean norm `sqrt(x*x + y*y)`                           |
+| `math.sin(x)`            | Sine (radians)                                             |
+| `math.cos(x)`            | Cosine (radians)                                           |
+| `math.tan(x)`            | Tangent (radians)                                          |
+| `math.asin(x)`           | Inverse sine (`x` in [-1, 1])                              |
+| `math.acos(x)`           | Inverse cosine (`x` in [-1, 1])                            |
+| `math.atan(x)`           | Inverse tangent                                            |
+| `math.atan2(y, x)`       | Inverse tangent with quadrant awareness                    |
+| `math.exp(x)`            | e^x                                                        |
+| `math.ln(x)`             | Natural log (`x` > 0)                                      |
+| `math.log2(x)`           | Base-2 log (`x` > 0)                                       |
+| `math.log10(x)`          | Base-10 log (`x` > 0)                                      |
+| `math.log(x, base)`      | Logarithm with custom base (`x` > 0, `base` > 0, `base` != 1) |
+| `math.lerp(a, b, t)`     | Linear interpolation between `a` and `b`                   |
+| `math.degrees(r)`        | Convert radians to degrees                                 |
+| `math.radians(d)`        | Convert degrees to radians                                 |
+| `math.is_finite(x)`      | Returns true if finite                                     |
+| `math.is_nan(x)`         | Returns true if NaN                                        |
+| `math.is_inf(x)`         | Returns true if infinite                                   |
+| `math.seed(n)`           | Seed RNG for deterministic random sequences                |
+| `math.rand_float()`      | Random float in [0.0, 1.0)                                 |
+| `math.rand_bool()`       | Random boolean (50/50)                                     |
+| `math.rand_int(a, b)`    | Random integer in [a, b] (inclusive)                       |
+| `math.rand_range(a, b)`  | Random float in [a, b)                                     |
+
+**Example: Math + Random**
+
+```walrus
+import "std/math";
+
+println(math.pi());
+println(math.sqrt(49));
+println(math.pow(2, 10));
+println(math.lerp(10, 20, 0.25)); // 12.5
+
+math.seed(1337);
+let id = math.rand_int(1000, 9999);
+println(f"ID: {id}");
+println(math.rand_bool());
+
+let angle = math.radians(45);
+println(math.sin(angle));
 ```
 
 ### Developer Experience
