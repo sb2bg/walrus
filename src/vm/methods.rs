@@ -17,11 +17,11 @@
 
 use rustc_hash::FxHashMap;
 
-use crate::WalrusResult;
 use crate::arenas::{DictKey, HeapValue, ListKey, StringKey, ValueHolder};
 use crate::error::WalrusError;
 use crate::span::Span;
 use crate::value::Value;
+use crate::WalrusResult;
 
 /// Check that the correct number of arguments were passed to a method.
 fn check_arity(

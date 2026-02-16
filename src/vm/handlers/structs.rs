@@ -2,7 +2,6 @@
 
 use std::rc::Rc;
 
-use crate::WalrusResult;
 use crate::arenas::HeapValue;
 use crate::error::WalrusError;
 use crate::function::WalrusFunction;
@@ -10,6 +9,7 @@ use crate::span::Span;
 use crate::value::Value;
 use crate::vm::opcode::Opcode;
 use crate::vm::{methods, CallFrame, VM};
+use crate::WalrusResult;
 
 /// Result of CallMethod - whether to continue normally or skip push
 pub enum MethodCallResult {

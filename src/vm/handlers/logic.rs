@@ -1,10 +1,10 @@
 //! Logic operation handlers: And, Or, Not
 
-use crate::WalrusResult;
 use crate::span::Span;
 use crate::value::Value;
 use crate::vm::opcode::Opcode;
 use crate::vm::VM;
+use crate::WalrusResult;
 
 impl<'a> VM<'a> {
     #[inline(always)]

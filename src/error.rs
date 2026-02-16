@@ -3,10 +3,10 @@ use std::str::FromStr;
 
 use float_ord::FloatOrd;
 use git_version::git_version;
-use lalrpop_util::ParseError;
 use lalrpop_util::lexer::Token;
+use lalrpop_util::ParseError;
 use line_span::{find_line_end, find_line_start};
-use snailquote::{UnescapeError, unescape};
+use snailquote::{unescape, UnescapeError};
 use thiserror::Error;
 
 use crate::ast::NodeKind;
@@ -227,9 +227,7 @@ pub enum WalrusError {
     #[error("Circular import detected: module '{module}' is already being imported")]
     CircularImport { module: String },
 
-    #[error(
-        "Invalid argument combination: '{first_arg}' cannot be used with '{second_arg}'"
-    )]
+    #[error("Invalid argument combination: '{first_arg}' cannot be used with '{second_arg}'")]
     InvalidArgumentCombination {
         first_arg: String,
         second_arg: String,
@@ -625,10 +623,7 @@ pub enum WalrusError {
     },
 
     #[error("{error}{stack_trace}")]
-    RuntimeErrorWithStackTrace {
-        error: String,
-        stack_trace: String,
-    },
+    RuntimeErrorWithStackTrace { error: String, stack_trace: String },
 }
 
 pub fn parser_err_mapper(
@@ -676,13 +671,15 @@ pub fn parser_err_mapper(
                     line: get_line(source, filename, span),
                 }
             }
-            RecoveredParseError::InvalidFStringExpression(expr, span) => WalrusError::FStringParseError {
-                expr,
-                error: "invalid expression syntax".to_string(),
-                span,
-                src: source.to_string(),
-                filename: filename.to_string(),
-            },
+            RecoveredParseError::InvalidFStringExpression(expr, span) => {
+                WalrusError::FStringParseError {
+                    expr,
+                    error: "invalid expression syntax".to_string(),
+                    span,
+                    src: source.to_string(),
+                    filename: filename.to_string(),
+                }
+            }
         },
     }
 }

@@ -1,4 +1,3 @@
-use crate::WalrusResult;
 use crate::arenas::HeapValue;
 use crate::ast::FStringPart;
 use crate::ast::{Node, NodeKind};
@@ -10,6 +9,7 @@ use crate::value::Value;
 use crate::vm::instruction_set::InstructionSet;
 use crate::vm::opcode::{Instruction, Opcode};
 use crate::vm::optimize;
+use crate::WalrusResult;
 use rustc_hash::FxHashSet;
 
 // Builtin function metadata
@@ -495,7 +495,10 @@ impl<'a> BytecodeEmitter<'a> {
                         .push(Instruction::new(Opcode::GetIter, span));
 
                     // Method name constant for iterator.next()
-                    let next_method = self.instructions.get_heap_mut().push(HeapValue::String("next"));
+                    let next_method = self
+                        .instructions
+                        .get_heap_mut()
+                        .push(HeapValue::String("next"));
                     let next_method_const = self.instructions.push_constant(next_method);
                     let next_method_opcode = match next_method_const {
                         0 => Opcode::LoadConst0,
@@ -514,8 +517,7 @@ impl<'a> BytecodeEmitter<'a> {
 
                     // If result == void, iteration is finished.
                     self.instructions.push(Instruction::new(Opcode::Dup, span));
-                    self.instructions
-                        .push(Instruction::new(Opcode::Void, span));
+                    self.instructions.push(Instruction::new(Opcode::Void, span));
                     self.instructions
                         .push(Instruction::new(Opcode::Equal, span));
                     let continue_jump_addr = self.instructions.len();
@@ -566,8 +568,10 @@ impl<'a> BytecodeEmitter<'a> {
                         .push(Instruction::new(Opcode::Jump(jump as u32), span));
 
                     let exit_ip = self.instructions.len();
-                    self.instructions
-                        .set(done_jump_addr, Instruction::new(Opcode::Jump(exit_ip as u32), span));
+                    self.instructions.set(
+                        done_jump_addr,
+                        Instruction::new(Opcode::Jump(exit_ip as u32), span),
+                    );
 
                     // JIT: Register the iterator-based for loop for hot-spot detection
                     self.instructions

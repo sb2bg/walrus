@@ -187,7 +187,9 @@ fn collect_free_vars_recursive(
             // Anonymous functions capture their environment, but we don't recurse
             // because they'll capture variables when they're created
         }
-        NodeKind::Statements(nodes) | NodeKind::UnscopedStatements(nodes) | NodeKind::Program(nodes) => {
+        NodeKind::Statements(nodes)
+        | NodeKind::UnscopedStatements(nodes)
+        | NodeKind::Program(nodes) => {
             for child in nodes {
                 collect_free_vars_recursive(child, defined, free_vars);
             }
@@ -276,10 +278,18 @@ fn collect_free_vars_recursive(
             collect_free_vars_recursive(catch_block, &mut inner_defined, free_vars);
         }
         // These don't contain variable references
-        NodeKind::Int(_) | NodeKind::Float(_) | NodeKind::String(_) | NodeKind::Bool(_)
-        | NodeKind::Break | NodeKind::Continue | NodeKind::Void
-        | NodeKind::PackageImport(_, _) | NodeKind::ModuleImport(_, _)
-        | NodeKind::ExternFunctionDefinition(_, _) | NodeKind::StructDefinition(_, _)
-        | NodeKind::StructFunctionDefinition(_, _, _) | NodeKind::Block(_) => {}
+        NodeKind::Int(_)
+        | NodeKind::Float(_)
+        | NodeKind::String(_)
+        | NodeKind::Bool(_)
+        | NodeKind::Break
+        | NodeKind::Continue
+        | NodeKind::Void
+        | NodeKind::PackageImport(_, _)
+        | NodeKind::ModuleImport(_, _)
+        | NodeKind::ExternFunctionDefinition(_, _)
+        | NodeKind::StructDefinition(_, _)
+        | NodeKind::StructFunctionDefinition(_, _, _)
+        | NodeKind::Block(_) => {}
     }
 }

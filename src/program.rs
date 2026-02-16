@@ -1,19 +1,19 @@
 use std::cell::RefCell;
 use std::collections::HashSet;
 use std::fs;
-use std::io::{BufRead, Write, stdout};
+use std::io::{stdout, BufRead, Write};
 use std::path::PathBuf;
 
 use log::debug;
 
 use crate::ast::Node;
-use crate::error::{WalrusError, parser_err_mapper};
+use crate::error::{parser_err_mapper, WalrusError};
 use crate::grammar::ProgramParser;
 use crate::interpreter::{Interpreter, InterpreterResult};
 use crate::source_ref::{OwnedSourceRef, SourceRef};
 use crate::value::Value;
-use crate::vm::VM;
 use crate::vm::compiler::BytecodeEmitter;
+use crate::vm::VM;
 
 // Thread-local set to track modules currently being loaded (for circular import detection)
 thread_local! {
@@ -133,24 +133,24 @@ impl Program {
         if self.jit_opts.enable_debugger {
             vm.enable_debugger();
         }
-        
+
         // JIT is opt-in from the CLI.
         #[cfg(feature = "jit")]
         vm.set_jit_enabled(self.jit_opts.enable_jit);
-        
+
         let result = vm.run()?;
 
         // Show JIT profiling stats if requested
         if self.jit_opts.show_stats {
             let stats = vm.hotspot_stats();
             eprintln!("\n{}", stats);
-            
+
             // Show type profile summary
             let profile = vm.type_profile();
             if !profile.is_empty() {
                 eprintln!("Type Profile: {} locations observed", profile.len());
             }
-            
+
             // Show JIT compilation stats
             #[cfg(feature = "jit")]
             if let Some(jit_stats) = vm.jit_stats() {
@@ -213,9 +213,7 @@ impl Program {
 
     pub fn load_module(&self, module_name: &str) -> InterpreterResult {
         // Check if module is already being loaded (circular import)
-        let is_loading = LOADING_MODULES.with(|modules| {
-            modules.borrow().contains(module_name)
-        });
+        let is_loading = LOADING_MODULES.with(|modules| modules.borrow().contains(module_name));
 
         if is_loading {
             return Err(WalrusError::CircularImport {

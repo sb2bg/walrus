@@ -7,7 +7,6 @@ use rustc_hash::FxHashMap;
 
 use instruction_set::InstructionSet;
 
-use crate::WalrusResult;
 use crate::arenas::HeapValue;
 use crate::error::WalrusError;
 use crate::function::WalrusFunction;
@@ -18,6 +17,7 @@ use crate::source_ref::SourceRef;
 use crate::span::Span;
 use crate::value::Value;
 use crate::vm::opcode::Opcode;
+use crate::WalrusResult;
 
 pub mod compiler;
 pub mod debugger;
@@ -221,7 +221,11 @@ impl<'a> VM<'a> {
     #[inline(always)]
     fn function_name(&self) -> &str {
         let name = &self.current_frame().function_name;
-        if name.is_empty() { "<fn>" } else { name }
+        if name.is_empty() {
+            "<fn>"
+        } else {
+            name
+        }
     }
 
     /// Helper to access heap - uses thread-local ARENA
@@ -232,7 +236,7 @@ impl<'a> VM<'a> {
     /// - We only access the arena within VM methods (no escaping references)
     /// - No concurrent borrows occur within VM execution
     #[inline]
-    fn get_heap(&self) -> &crate::arenas::ValueHolder {
+    pub(crate) fn get_heap(&self) -> &crate::arenas::ValueHolder {
         unsafe { &*crate::arenas::get_arena_ptr() }
     }
 
@@ -241,8 +245,13 @@ impl<'a> VM<'a> {
     /// # Safety
     /// See get_heap() for safety rationale.
     #[inline]
-    fn get_heap_mut(&mut self) -> &mut crate::arenas::ValueHolder {
+    pub(crate) fn get_heap_mut(&mut self) -> &mut crate::arenas::ValueHolder {
         unsafe { &mut *crate::arenas::get_arena_ptr() }
+    }
+
+    #[inline(always)]
+    pub(crate) fn source_ref(&self) -> SourceRef<'a> {
+        self.source_ref
     }
 
     /// Collect all root values that the GC needs to trace from
@@ -346,411 +355,11 @@ impl<'a> VM<'a> {
         args: Vec<Value>,
         span: Span,
     ) -> WalrusResult<Value> {
-        use crate::function::NativeFunction;
-
-        // Check arity
-        if args.len() != native_fn.arity() {
-            return Err(WalrusError::InvalidArgCount {
-                name: native_fn.name().to_string(),
-                expected: native_fn.arity(),
-                got: args.len(),
-                span,
-                src: self.source_ref.source().into(),
-                filename: self.source_ref.filename().into(),
-            });
-        }
-
-        match native_fn {
-            NativeFunction::FileOpen => {
-                let path = self.value_to_string(args[0], span)?;
-                let mode = self.value_to_string(args[1], span)?;
-                crate::stdlib::file_open(&path, &mode, span)
-            }
-            NativeFunction::FileRead => {
-                let handle = self.value_to_int(args[0], span)?;
-                let content = crate::stdlib::file_read(handle, span)?;
-                let value = self.get_heap_mut().push(HeapValue::String(&content));
-                Ok(value)
-            }
-            NativeFunction::FileReadLine => {
-                let handle = self.value_to_int(args[0], span)?;
-                match crate::stdlib::file_read_line(handle, span)? {
-                    Some(line) => {
-                        let value = self.get_heap_mut().push(HeapValue::String(&line));
-                        Ok(value)
-                    }
-                    None => Ok(Value::Void),
-                }
-            }
-            NativeFunction::FileWrite => {
-                let handle = self.value_to_int(args[0], span)?;
-                let content = self.value_to_string(args[1], span)?;
-                let bytes = crate::stdlib::file_write(handle, &content, span)?;
-                Ok(Value::Int(bytes))
-            }
-            NativeFunction::FileClose => {
-                let handle = self.value_to_int(args[0], span)?;
-                crate::stdlib::file_close(handle, span)?;
-                Ok(Value::Void)
-            }
-            NativeFunction::FileExists => {
-                let path = self.value_to_string(args[0], span)?;
-                Ok(Value::Bool(crate::stdlib::file_exists(&path)))
-            }
-            NativeFunction::ReadFile => {
-                let path = self.value_to_string(args[0], span)?;
-                let content = crate::stdlib::read_file(&path, span)?;
-                let value = self.get_heap_mut().push(HeapValue::String(&content));
-                Ok(value)
-            }
-            NativeFunction::WriteFile => {
-                let path = self.value_to_string(args[0], span)?;
-                let content = self.value_to_string(args[1], span)?;
-                crate::stdlib::write_file(&path, &content, span)?;
-                Ok(Value::Void)
-            }
-            NativeFunction::EnvGet => {
-                let name = self.value_to_string(args[0], span)?;
-                match crate::stdlib::env_get(&name) {
-                    Some(value) => {
-                        let v = self.get_heap_mut().push(HeapValue::String(&value));
-                        Ok(v)
-                    }
-                    None => Ok(Value::Void),
-                }
-            }
-            NativeFunction::Args => {
-                let args = crate::stdlib::args();
-                let mut list = Vec::with_capacity(args.len());
-                for arg in args {
-                    let s = self.get_heap_mut().push(HeapValue::String(&arg));
-                    list.push(s);
-                }
-                let list_val = self.get_heap_mut().push(HeapValue::List(list));
-                Ok(list_val)
-            }
-            NativeFunction::Cwd => match crate::stdlib::cwd() {
-                Some(path) => {
-                    let v = self.get_heap_mut().push(HeapValue::String(&path));
-                    Ok(v)
-                }
-                None => Ok(Value::Void),
-            },
-            NativeFunction::MathPi => Ok(Value::Float(FloatOrd(std::f64::consts::PI))),
-            NativeFunction::MathE => Ok(Value::Float(FloatOrd(std::f64::consts::E))),
-            NativeFunction::MathTau => Ok(Value::Float(FloatOrd(std::f64::consts::TAU))),
-            NativeFunction::MathInf => Ok(Value::Float(FloatOrd(f64::INFINITY))),
-            NativeFunction::MathNaN => Ok(Value::Float(FloatOrd(f64::NAN))),
-            NativeFunction::MathAbs => match args[0] {
-                Value::Int(n) => {
-                    let abs = n.checked_abs().ok_or_else(|| WalrusError::GenericError {
-                        message: "math.abs: overflow for i64::MIN".to_string(),
-                    })?;
-                    Ok(Value::Int(abs))
-                }
-                Value::Float(FloatOrd(n)) => Ok(Value::Float(FloatOrd(n.abs()))),
-                other => Err(WalrusError::TypeMismatch {
-                    expected: "number".to_string(),
-                    found: other.get_type().to_string(),
-                    span,
-                    src: self.source_ref.source().into(),
-                    filename: self.source_ref.filename().into(),
-                }),
-            },
-            NativeFunction::MathSign => match args[0] {
-                Value::Int(n) => Ok(Value::Int(n.signum())),
-                Value::Float(FloatOrd(n)) => {
-                    if n.is_nan() {
-                        return Err(WalrusError::GenericError {
-                            message: "math.sign: cannot determine sign of NaN".to_string(),
-                        });
-                    }
-                    let sign = if n > 0.0 {
-                        1
-                    } else if n < 0.0 {
-                        -1
-                    } else {
-                        0
-                    };
-                    Ok(Value::Int(sign))
-                }
-                other => Err(WalrusError::TypeMismatch {
-                    expected: "number".to_string(),
-                    found: other.get_type().to_string(),
-                    span,
-                    src: self.source_ref.source().into(),
-                    filename: self.source_ref.filename().into(),
-                }),
-            },
-            NativeFunction::MathMin => match (args[0], args[1]) {
-                (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a.min(b))),
-                (a, b) => {
-                    let a = self.value_to_number(a, span)?;
-                    let b = self.value_to_number(b, span)?;
-                    Ok(Value::Float(FloatOrd(a.min(b))))
-                }
-            },
-            NativeFunction::MathMax => match (args[0], args[1]) {
-                (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a.max(b))),
-                (a, b) => {
-                    let a = self.value_to_number(a, span)?;
-                    let b = self.value_to_number(b, span)?;
-                    Ok(Value::Float(FloatOrd(a.max(b))))
-                }
-            },
-            NativeFunction::MathClamp => match (args[0], args[1], args[2]) {
-                (Value::Int(v), Value::Int(min), Value::Int(max)) => {
-                    if min > max {
-                        return Err(WalrusError::GenericError {
-                            message: format!(
-                                "math.clamp: min ({min}) cannot be greater than max ({max})"
-                            ),
-                        });
-                    }
-                    Ok(Value::Int(v.clamp(min, max)))
-                }
-                (v, min, max) => {
-                    let v = self.value_to_number(v, span)?;
-                    let min = self.value_to_number(min, span)?;
-                    let max = self.value_to_number(max, span)?;
-                    if v.is_nan() || min.is_nan() || max.is_nan() {
-                        return Err(WalrusError::GenericError {
-                            message: "math.clamp: NaN is not supported".to_string(),
-                        });
-                    }
-                    if min > max {
-                        return Err(WalrusError::GenericError {
-                            message: format!(
-                                "math.clamp: min ({min}) cannot be greater than max ({max})"
-                            ),
-                        });
-                    }
-                    let clamped = if v < min {
-                        min
-                    } else if v > max {
-                        max
-                    } else {
-                        v
-                    };
-                    Ok(Value::Float(FloatOrd(clamped)))
-                }
-            },
-            NativeFunction::MathFloor => match args[0] {
-                Value::Int(n) => Ok(Value::Int(n)),
-                value => Ok(Value::Float(FloatOrd(
-                    self.value_to_number(value, span)?.floor(),
-                ))),
-            },
-            NativeFunction::MathCeil => match args[0] {
-                Value::Int(n) => Ok(Value::Int(n)),
-                value => Ok(Value::Float(FloatOrd(
-                    self.value_to_number(value, span)?.ceil(),
-                ))),
-            },
-            NativeFunction::MathRound => match args[0] {
-                Value::Int(n) => Ok(Value::Int(n)),
-                value => Ok(Value::Float(FloatOrd(
-                    self.value_to_number(value, span)?.round(),
-                ))),
-            },
-            NativeFunction::MathTrunc => match args[0] {
-                Value::Int(n) => Ok(Value::Int(n)),
-                value => Ok(Value::Float(FloatOrd(
-                    self.value_to_number(value, span)?.trunc(),
-                ))),
-            },
-            NativeFunction::MathFract => {
-                let value = self.value_to_number(args[0], span)?;
-                Ok(Value::Float(FloatOrd(value.fract())))
-            }
-            NativeFunction::MathSqrt => {
-                let value = self.value_to_number(args[0], span)?;
-                if value < 0.0 {
-                    return Err(WalrusError::GenericError {
-                        message: format!("math.sqrt: domain error for value {value}"),
-                    });
-                }
-                Ok(Value::Float(FloatOrd(value.sqrt())))
-            }
-            NativeFunction::MathCbrt => {
-                let value = self.value_to_number(args[0], span)?;
-                Ok(Value::Float(FloatOrd(value.cbrt())))
-            }
-            NativeFunction::MathPow => {
-                let base = self.value_to_number(args[0], span)?;
-                let exponent = self.value_to_number(args[1], span)?;
-                let result = base.powf(exponent);
-                if !result.is_finite() {
-                    return Err(WalrusError::GenericError {
-                        message: "math.pow: result is not finite".to_string(),
-                    });
-                }
-                Ok(Value::Float(FloatOrd(result)))
-            }
-            NativeFunction::MathHypot => {
-                let x = self.value_to_number(args[0], span)?;
-                let y = self.value_to_number(args[1], span)?;
-                let result = x.hypot(y);
-                if !result.is_finite() {
-                    return Err(WalrusError::GenericError {
-                        message: "math.hypot: result is not finite".to_string(),
-                    });
-                }
-                Ok(Value::Float(FloatOrd(result)))
-            }
-            NativeFunction::MathSin => {
-                let value = self.value_to_number(args[0], span)?;
-                Ok(Value::Float(FloatOrd(value.sin())))
-            }
-            NativeFunction::MathCos => {
-                let value = self.value_to_number(args[0], span)?;
-                Ok(Value::Float(FloatOrd(value.cos())))
-            }
-            NativeFunction::MathTan => {
-                let value = self.value_to_number(args[0], span)?;
-                Ok(Value::Float(FloatOrd(value.tan())))
-            }
-            NativeFunction::MathAsin => {
-                let value = self.value_to_number(args[0], span)?;
-                if !(-1.0..=1.0).contains(&value) {
-                    return Err(WalrusError::GenericError {
-                        message: format!("math.asin: domain error for value {value}"),
-                    });
-                }
-                Ok(Value::Float(FloatOrd(value.asin())))
-            }
-            NativeFunction::MathAcos => {
-                let value = self.value_to_number(args[0], span)?;
-                if !(-1.0..=1.0).contains(&value) {
-                    return Err(WalrusError::GenericError {
-                        message: format!("math.acos: domain error for value {value}"),
-                    });
-                }
-                Ok(Value::Float(FloatOrd(value.acos())))
-            }
-            NativeFunction::MathAtan => {
-                let value = self.value_to_number(args[0], span)?;
-                Ok(Value::Float(FloatOrd(value.atan())))
-            }
-            NativeFunction::MathAtan2 => {
-                let y = self.value_to_number(args[0], span)?;
-                let x = self.value_to_number(args[1], span)?;
-                Ok(Value::Float(FloatOrd(y.atan2(x))))
-            }
-            NativeFunction::MathExp => {
-                let value = self.value_to_number(args[0], span)?;
-                let result = value.exp();
-                if !result.is_finite() {
-                    return Err(WalrusError::GenericError {
-                        message: "math.exp: result is not finite".to_string(),
-                    });
-                }
-                Ok(Value::Float(FloatOrd(result)))
-            }
-            NativeFunction::MathLn => {
-                let value = self.value_to_number(args[0], span)?;
-                if value <= 0.0 {
-                    return Err(WalrusError::GenericError {
-                        message: format!("math.ln: domain error for value {value}"),
-                    });
-                }
-                Ok(Value::Float(FloatOrd(value.ln())))
-            }
-            NativeFunction::MathLog2 => {
-                let value = self.value_to_number(args[0], span)?;
-                if value <= 0.0 {
-                    return Err(WalrusError::GenericError {
-                        message: format!("math.log2: domain error for value {value}"),
-                    });
-                }
-                Ok(Value::Float(FloatOrd(value.log2())))
-            }
-            NativeFunction::MathLog10 => {
-                let value = self.value_to_number(args[0], span)?;
-                if value <= 0.0 {
-                    return Err(WalrusError::GenericError {
-                        message: format!("math.log10: domain error for value {value}"),
-                    });
-                }
-                Ok(Value::Float(FloatOrd(value.log10())))
-            }
-            NativeFunction::MathLog => {
-                let value = self.value_to_number(args[0], span)?;
-                let base = self.value_to_number(args[1], span)?;
-                if value <= 0.0 {
-                    return Err(WalrusError::GenericError {
-                        message: format!("math.log: domain error for value {value}"),
-                    });
-                }
-                if base <= 0.0 || (base - 1.0).abs() < f64::EPSILON {
-                    return Err(WalrusError::GenericError {
-                        message: format!("math.log: invalid base {base}"),
-                    });
-                }
-                Ok(Value::Float(FloatOrd(value.log(base))))
-            }
-            NativeFunction::MathLerp => {
-                let a = self.value_to_number(args[0], span)?;
-                let b = self.value_to_number(args[1], span)?;
-                let t = self.value_to_number(args[2], span)?;
-                let result = a + (b - a) * t;
-                if !result.is_finite() {
-                    return Err(WalrusError::GenericError {
-                        message: "math.lerp: result is not finite".to_string(),
-                    });
-                }
-                Ok(Value::Float(FloatOrd(result)))
-            }
-            NativeFunction::MathDegrees => {
-                let value = self.value_to_number(args[0], span)?;
-                Ok(Value::Float(FloatOrd(value.to_degrees())))
-            }
-            NativeFunction::MathRadians => {
-                let value = self.value_to_number(args[0], span)?;
-                Ok(Value::Float(FloatOrd(value.to_radians())))
-            }
-            NativeFunction::MathIsFinite => {
-                let value = self.value_to_number(args[0], span)?;
-                Ok(Value::Bool(value.is_finite()))
-            }
-            NativeFunction::MathIsNaN => {
-                let value = self.value_to_number(args[0], span)?;
-                Ok(Value::Bool(value.is_nan()))
-            }
-            NativeFunction::MathIsInf => {
-                let value = self.value_to_number(args[0], span)?;
-                Ok(Value::Bool(value.is_infinite()))
-            }
-            NativeFunction::MathSeed => {
-                let seed = self.value_to_int(args[0], span)?;
-                crate::stdlib::math_seed(seed);
-                Ok(Value::Void)
-            }
-            NativeFunction::MathRandFloat => {
-                Ok(Value::Float(FloatOrd(crate::stdlib::math_rand_float())))
-            }
-            NativeFunction::MathRandBool => Ok(Value::Bool(crate::stdlib::math_rand_bool())),
-            NativeFunction::MathRandInt => {
-                let min = self.value_to_int(args[0], span)?;
-                let max = self.value_to_int(args[1], span)?;
-                Ok(Value::Int(crate::stdlib::math_rand_int(min, max, span)?))
-            }
-            NativeFunction::MathRandRange => {
-                let min = self.value_to_number(args[0], span)?;
-                let max = self.value_to_number(args[1], span)?;
-                Ok(Value::Float(FloatOrd(crate::stdlib::math_rand_range(
-                    min, max, span,
-                )?)))
-            }
-            NativeFunction::Exit => {
-                let code = self.value_to_int(args[0], span)?;
-                std::process::exit(code as i32);
-            }
-        }
+        crate::native_registry::dispatch_native(self, native_fn, args, span)
     }
 
     /// Helper to extract string from Value
-    fn value_to_string(&self, value: Value, span: Span) -> WalrusResult<String> {
+    pub(crate) fn value_to_string(&self, value: Value, span: Span) -> WalrusResult<String> {
         match value {
             Value::String(key) => Ok(self.get_heap().get_string(key)?.to_string()),
             _ => Err(WalrusError::TypeMismatch {
@@ -764,7 +373,7 @@ impl<'a> VM<'a> {
     }
 
     /// Helper to extract int from Value
-    fn value_to_int(&self, value: Value, span: Span) -> WalrusResult<i64> {
+    pub(crate) fn value_to_int(&self, value: Value, span: Span) -> WalrusResult<i64> {
         match value {
             Value::Int(n) => Ok(n),
             _ => Err(WalrusError::TypeMismatch {
@@ -778,7 +387,7 @@ impl<'a> VM<'a> {
     }
 
     /// Helper to extract numeric values (int or float) as f64
-    fn value_to_number(&self, value: Value, span: Span) -> WalrusResult<f64> {
+    pub(crate) fn value_to_number(&self, value: Value, span: Span) -> WalrusResult<f64> {
         match value {
             Value::Int(n) => Ok(n as f64),
             Value::Float(FloatOrd(f)) => Ok(f),

@@ -300,7 +300,10 @@ pub fn debug_prompt(debugger: &mut Debugger, ctx: &DebugContext) -> DebuggerComm
                 print_help();
             }
             _ => {
-                println!("Unknown command: {}. Type 'help' for available commands.", cmd);
+                println!(
+                    "Unknown command: {}. Type 'help' for available commands.",
+                    cmd
+                );
             }
         }
     }
@@ -317,9 +320,7 @@ pub enum DebuggerCommand {
 }
 
 fn print_location(ctx: &DebugContext) {
-    let line = ctx
-        .debug_info
-        .and_then(|di| di.line_table.get_line(ctx.ip));
+    let line = ctx.debug_info.and_then(|di| di.line_table.get_line(ctx.ip));
 
     if ctx.ip < ctx.instructions.len() {
         let instr = &ctx.instructions[ctx.ip];

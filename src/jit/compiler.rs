@@ -18,7 +18,7 @@
 use std::mem;
 
 use cranelift_codegen::ir::condcodes::IntCC;
-use cranelift_codegen::ir::{AbiParam, InstBuilder, types};
+use cranelift_codegen::ir::{types, AbiParam, InstBuilder};
 use cranelift_codegen::settings::{self, Configurable};
 use cranelift_codegen::{self as codegen};
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};

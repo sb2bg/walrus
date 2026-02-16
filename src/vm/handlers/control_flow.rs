@@ -4,7 +4,6 @@ use std::rc::Rc;
 
 use log::debug;
 
-use crate::WalrusResult;
 use crate::error::WalrusError;
 use crate::function::WalrusFunction;
 use crate::jit::WalrusType;
@@ -12,6 +11,7 @@ use crate::span::Span;
 use crate::value::Value;
 use crate::vm::opcode::Opcode;
 use crate::vm::{CallFrame, VM};
+use crate::WalrusResult;
 
 /// Result of a call handler - either continue execution or return a value
 pub enum CallResult {
@@ -28,11 +28,8 @@ impl<'a> VM<'a> {
 
             // Register while loop dynamically
             if !self.hotspot_detector.is_loop_header(loop_header_ip) {
-                self.hotspot_detector.register_loop(
-                    loop_header_ip,
-                    self.ip - 1,
-                    self.ip,
-                );
+                self.hotspot_detector
+                    .register_loop(loop_header_ip, self.ip - 1, self.ip);
             }
 
             if self.hotspot_detector.record_loop_iteration(loop_header_ip) {

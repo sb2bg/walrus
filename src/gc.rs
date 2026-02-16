@@ -14,7 +14,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use rustc_hash::FxHashSet;
 
-use crate::arenas::{DictKey, FuncKey, IterKey, ListKey, StringKey, StructDefKey, StructInstKey, TupleKey};
+use crate::arenas::{
+    DictKey, FuncKey, IterKey, ListKey, StringKey, StructDefKey, StructInstKey, TupleKey,
+};
 use crate::value::Value;
 
 /// Default allocation count threshold before GC is triggered
@@ -183,11 +185,9 @@ impl GcState {
             Value::StructInst(key) => self.marked_struct_insts.insert(key),
             Value::String(key) => self.marked_strings.insert(key),
             // Primitives don't need marking (stored inline, not on heap)
-            Value::Int(_)
-            | Value::Float(_)
-            | Value::Bool(_)
-            | Value::Range(_)
-            | Value::Void => false,
+            Value::Int(_) | Value::Float(_) | Value::Bool(_) | Value::Range(_) | Value::Void => {
+                false
+            }
         }
     }
 

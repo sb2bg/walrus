@@ -2,7 +2,6 @@
 
 use rustc_hash::FxHashMap;
 
-use crate::WalrusResult;
 use crate::arenas::HeapValue;
 use crate::error::WalrusError;
 use crate::function::WalrusFunction;
@@ -10,6 +9,7 @@ use crate::span::Span;
 use crate::value::Value;
 use crate::vm::opcode::Opcode;
 use crate::vm::VM;
+use crate::WalrusResult;
 
 impl<'a> VM<'a> {
     #[inline(always)]
@@ -180,9 +180,9 @@ impl<'a> VM<'a> {
                         let key = self
                             .get_heap_mut()
                             .push(HeapValue::String(native_fn.name()));
-                        let func = self.get_heap_mut().push(HeapValue::Function(
-                            WalrusFunction::Native(native_fn),
-                        ));
+                        let func = self
+                            .get_heap_mut()
+                            .push(HeapValue::Function(WalrusFunction::Native(native_fn)));
                         dict.insert(key, func);
                     }
                     let module = self.get_heap_mut().push(HeapValue::Dict(dict));

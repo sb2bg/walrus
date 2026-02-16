@@ -3,7 +3,7 @@ use std::{backtrace, panic};
 
 use clap::Parser as ClapParser;
 use lalrpop_util::lalrpop_mod;
-use log::{LevelFilter, trace};
+use log::{trace, LevelFilter};
 use simplelog::SimpleLogger;
 
 use crate::error::WalrusError;
@@ -18,6 +18,7 @@ mod gc;
 mod interpreter;
 mod iter;
 pub mod jit;
+mod native_registry;
 mod program;
 mod range;
 mod scope;

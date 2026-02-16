@@ -4,12 +4,13 @@ use std::hash::Hash;
 
 use float_ord::FloatOrd;
 
-use crate::WalrusResult;
 use crate::arenas::{
-    DictKey, FuncKey, IterKey, ListKey, Resolve, StringKey, StructDefKey, StructInstKey, TupleKey, ValueHolder,
+    DictKey, FuncKey, IterKey, ListKey, Resolve, StringKey, StructDefKey, StructInstKey, TupleKey,
+    ValueHolder,
 };
 use crate::iter::{CollectionIter, DictIter, RangeIter, StrIter, ValueIterator};
 use crate::range::RangeValue;
+use crate::WalrusResult;
 
 #[derive(Debug, Clone)]
 pub enum ValueIter {
@@ -160,15 +161,11 @@ impl Value {
             Value::Iter(_) => "iter".to_string(),
             Value::StructDef(s) => {
                 use crate::arenas::with_arena;
-                with_arena(|arena| {
-                    arena.get_struct_def(s).map(|def| def.to_string())
-                })?
+                with_arena(|arena| arena.get_struct_def(s).map(|def| def.to_string()))?
             }
             Value::StructInst(s) => {
                 use crate::arenas::with_arena;
-                with_arena(|arena| {
-                    arena.get_struct_inst(s).map(|inst| inst.to_string())
-                })?
+                with_arena(|arena| arena.get_struct_inst(s).map(|inst| inst.to_string()))?
             }
             Value::Void => "void".to_string(),
         })

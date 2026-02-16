@@ -4,13 +4,13 @@ use std::ptr::NonNull;
 
 use log::debug;
 
-use crate::WalrusResult;
 use crate::error::WalrusError;
 use crate::iter::ValueIterator;
 use crate::span::Span;
 use crate::value::Value;
 use crate::vm::opcode::Opcode;
 use crate::vm::VM;
+use crate::WalrusResult;
 
 impl<'a> VM<'a> {
     #[inline(always)]
@@ -123,7 +123,8 @@ impl<'a> VM<'a> {
 
             // Try JIT execution if available
             #[cfg(feature = "jit")]
-            if let Some(jit_exit) = self.try_jit_range_loop(loop_header_ip, local_idx, jump_target) {
+            if let Some(jit_exit) = self.try_jit_range_loop(loop_header_ip, local_idx, jump_target)
+            {
                 self.ip = jit_exit;
                 return Ok(true); // Signal to continue in outer loop
             }

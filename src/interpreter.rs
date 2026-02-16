@@ -5,7 +5,6 @@ use log::debug;
 use rustc_hash::FxHashMap;
 use uuid::Uuid;
 
-use crate::WalrusResult;
 use crate::arenas::{Free, HeapValue, Resolve};
 use crate::ast::{Node, NodeKind};
 use crate::error::WalrusError;
@@ -17,6 +16,7 @@ use crate::source_ref::SourceRef;
 use crate::span::{Span, Spanned};
 use crate::value::Value;
 use crate::vm::opcode::Opcode;
+use crate::WalrusResult;
 
 pub struct Interpreter<'a> {
     scope: Scope,
@@ -833,25 +833,23 @@ impl<'a> Interpreter<'a> {
                 use crate::arenas::with_arena_mut;
 
                 match index {
-                    Value::Int(n) => {
-                        with_arena_mut(|arena| {
-                            let list = arena.get_mut_list(l)?;
-                            let idx = if n < 0 { n + list.len() as i64 } else { n };
+                    Value::Int(n) => with_arena_mut(|arena| {
+                        let list = arena.get_mut_list(l)?;
+                        let idx = if n < 0 { n + list.len() as i64 } else { n };
 
-                            if idx < 0 || idx as usize >= list.len() {
-                                return Err(WalrusError::IndexOutOfBounds {
-                                    index: n,
-                                    len: list.len(),
-                                    span: index_span,
-                                    src: self.source_ref.source().into(),
-                                    filename: self.source_ref.filename().into(),
-                                });
-                            }
+                        if idx < 0 || idx as usize >= list.len() {
+                            return Err(WalrusError::IndexOutOfBounds {
+                                index: n,
+                                len: list.len(),
+                                span: index_span,
+                                src: self.source_ref.source().into(),
+                                filename: self.source_ref.filename().into(),
+                            });
+                        }
 
-                            list[idx as usize] = new_value;
-                            Ok(Value::Void)
-                        })
-                    }
+                        list[idx as usize] = new_value;
+                        Ok(Value::Void)
+                    }),
                     _ => Err(WalrusError::InvalidIndexType {
                         non_indexable: value.get_type().to_string(),
                         index_type: index.get_type().to_string(),
