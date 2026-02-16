@@ -341,10 +341,14 @@ Then open `vscode/walrus` in VS Code and press `F5` to launch an Extension Devel
 Open any `.walrus` file to get:
 
 - Parse diagnostics
-- Hover docs for keywords/builtins
-- Completion for keywords/builtins
-- Document symbols
-- Go-to-definition (same-file symbols)
+- Rich hover for symbols, keywords, and builtins
+- Scoped completion (locals, functions, structs, modules, builtins, keywords)
+- Signature help for function and builtin calls
+- Document symbols (nested outline)
+- Go-to-definition
+- Find references
+- Rename symbol
+- Document highlights (read/write)
 - Syntax highlighting
 
 ## Quick Start

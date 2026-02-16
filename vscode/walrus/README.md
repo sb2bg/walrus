@@ -4,6 +4,9 @@ This extension provides:
 
 - Syntax highlighting for `.walrus` files
 - Language Server Protocol (LSP) support powered by `walrus-lsp`
+- Hover docs, scoped completion, signature help
+- Go to definition, find references, rename symbol
+- Document symbols and document highlights
 
 ## Setup
 
