@@ -763,6 +763,7 @@ cargo run -- showcase.walrus
 Additional example projects:
 
 - `examples/json_parser/` - A simple recursive-descent JSON parser project in Walrus.
+- `examples/terminal_roguelike/` - A simulation-style ASCII roguelike demo using structs, RNG, file I/O, and VM `try/catch`.
 
 ## Contributing
 

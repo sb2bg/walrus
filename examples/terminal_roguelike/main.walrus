@@ -1,0 +1,501 @@
+import "std/math";
+import "std/io";
+
+fn digit_value : ch {
+    if ch == "0" {
+        return 0;
+    }
+    if ch == "1" {
+        return 1;
+    }
+    if ch == "2" {
+        return 2;
+    }
+    if ch == "3" {
+        return 3;
+    }
+    if ch == "4" {
+        return 4;
+    }
+    if ch == "5" {
+        return 5;
+    }
+    if ch == "6" {
+        return 6;
+    }
+    if ch == "7" {
+        return 7;
+    }
+    if ch == "8" {
+        return 8;
+    }
+    if ch == "9" {
+        return 9;
+    }
+
+    return -1;
+}
+
+fn parse_int : text {
+    if core.len(text) == 0 {
+        throw "cannot parse empty integer";
+    }
+
+    let is_negative = false;
+    let i = 0;
+
+    if text[0] == "-" {
+        is_negative = true;
+        i = 1;
+        if core.len(text) == 1 {
+            throw "invalid integer: '-'";
+        }
+    }
+
+    let value = 0;
+
+    while i < core.len(text) {
+        let d = digit_value(text[i]);
+        if d < 0 {
+            throw f"invalid integer: {text}";
+        }
+
+        value = value * 10 + d;
+        i += 1;
+    }
+
+    if is_negative {
+        value = -value;
+    }
+
+    return value;
+}
+
+fn abs_int : n {
+    if n < 0 {
+        return -n;
+    }
+    return n;
+}
+
+fn roll_damage : atk {
+    return atk + math.rand_int(0, 2);
+}
+
+struct Player {
+    fn init : self, name, hp, atk, gold, potions, x, y {
+        self.name = name;
+        self.hp = hp;
+        self.atk = atk;
+        self.gold = gold;
+        self.potions = potions;
+        self.x = x;
+        self.y = y;
+        self.inventory = [];
+    }
+
+    fn is_alive : self {
+        return self.hp > 0;
+    }
+
+    fn drink_potion : self {
+        if self.potions <= 0 {
+            println("[hero] no potions left");
+            return false;
+        }
+
+        self.potions = self.potions - 1;
+        self.hp = self.hp + 7;
+        println(f"[hero] drinks potion -> hp={self.hp}, potions={self.potions}");
+        return true;
+    }
+}
+
+struct Goblin {
+    fn init : self, name, hp, atk, x, y {
+        self.name = name;
+        self.hp = hp;
+        self.atk = atk;
+        self.x = x;
+        self.y = y;
+    }
+
+    fn is_alive : self {
+        return self.hp > 0;
+    }
+}
+
+struct Dungeon {
+    fn init : self, width, height {
+        self.width = width;
+        self.height = height;
+        self.tiles = build_tiles(width, height);
+    }
+}
+
+fn build_tiles : width, height {
+    let rows = [];
+
+    let y = 0;
+    while y < height {
+        let row = "";
+
+        let x = 0;
+        while x < width {
+            if x == 0 or y == 0 or x == width - 1 or y == height - 1 {
+                row += "#";
+            } else {
+                if math.rand_int(1, 100) <= 14 {
+                    row += "#";
+                } else {
+                    row += ".";
+                }
+            }
+
+            x += 1;
+        }
+
+        rows.push(row);
+        y += 1;
+    }
+
+    return rows;
+}
+
+fn has_enemy_at : enemies, x, y {
+    let i = 0;
+    while i < enemies.len() {
+        let g = enemies[i];
+        if g.is_alive() and g.x == x and g.y == y {
+            return true;
+        }
+        i += 1;
+    }
+
+    return false;
+}
+
+fn random_floor_tile : dungeon {
+    let attempts = 0;
+
+    while attempts < 500 {
+        let x = math.rand_int(1, dungeon.width - 2);
+        let y = math.rand_int(1, dungeon.height - 2);
+
+        if dungeon.tiles[y][x] == "." {
+            return {"x": x, "y": y};
+        }
+
+        attempts += 1;
+    }
+
+    return {"x": 1, "y": 1};
+}
+
+fn move_entity : entity, dx, dy, dungeon {
+    let nx = entity.x + dx;
+    let ny = entity.y + dy;
+
+    if nx < 1 or ny < 1 or nx >= dungeon.width - 1 or ny >= dungeon.height - 1 {
+        return void;
+    }
+
+    if dungeon.tiles[ny][nx] == "#" {
+        return void;
+    }
+
+    entity.x = nx;
+    entity.y = ny;
+}
+
+fn manhattan : a, b {
+    return abs_int(a.x - b.x) + abs_int(a.y - b.y);
+}
+
+fn spawn_goblins : dungeon, player, count {
+    let mobs = [];
+    let i = 0;
+
+    while i < count {
+        let pos = random_floor_tile(dungeon);
+
+        if (pos["x"] == player.x and pos["y"] == player.y)
+            or has_enemy_at(mobs, pos["x"], pos["y"]) {
+            continue;
+        }
+
+        let g = Goblin(f"Goblin-{i + 1}", 12, 4, pos["x"], pos["y"]);
+        mobs.push(g);
+        i += 1;
+    }
+
+    return mobs;
+}
+
+fn alive_enemies : enemies {
+    let alive = 0;
+    let i = 0;
+
+    while i < enemies.len() {
+        if enemies[i].is_alive() {
+            alive += 1;
+        }
+        i += 1;
+    }
+
+    return alive;
+}
+
+fn first_adjacent_enemy : player, enemies {
+    let i = 0;
+    while i < enemies.len() {
+        let g = enemies[i];
+        if g.is_alive() and manhattan(player, g) <= 1 {
+            return i;
+        }
+        i += 1;
+    }
+
+    return -1;
+}
+
+fn attack : attacker, defender {
+    let dmg = roll_damage(attacker.atk);
+    defender.hp = defender.hp - dmg;
+
+    if defender.hp < 0 {
+        defender.hp = 0;
+    }
+
+    println(f"  {attacker.name} hits {defender.name} for {dmg} (hp={defender.hp})");
+
+    if defender.hp == 0 {
+        println(f"  {defender.name} is defeated");
+    }
+
+    return dmg;
+}
+
+fn step_player : player, dungeon {
+    let roll = math.rand_int(1, 5);
+    let dx = 0;
+    let dy = 0;
+
+    if roll == 1 {
+        dx = 1;
+    } else {
+        if roll == 2 {
+            dx = -1;
+        } else {
+            if roll == 3 {
+                dy = 1;
+            } else {
+                if roll == 4 {
+                    dy = -1;
+                }
+            }
+        }
+    }
+
+    move_entity(player, dx, dy, dungeon);
+}
+
+fn step_goblin : goblin, player, dungeon {
+    let dx = 0;
+    let dy = 0;
+
+    if goblin.x < player.x {
+        dx = 1;
+    } else {
+        if goblin.x > player.x {
+            dx = -1;
+        }
+    }
+
+    if goblin.y < player.y {
+        dy = 1;
+    } else {
+        if goblin.y > player.y {
+            dy = -1;
+        }
+    }
+
+    if dx != 0 and dy != 0 {
+        if math.rand_bool() {
+            dx = 0;
+        } else {
+            dy = 0;
+        }
+    }
+
+    move_entity(goblin, dx, dy, dungeon);
+}
+
+fn render : dungeon, player, enemies {
+    let y = 0;
+
+    while y < dungeon.height {
+        let row = dungeon.tiles[y];
+        let line = "";
+
+        let x = 0;
+        while x < dungeon.width {
+            let glyph = row[x];
+
+            if player.is_alive() and player.x == x and player.y == y {
+                glyph = "@";
+            } else {
+                let i = 0;
+                while i < enemies.len() {
+                    let g = enemies[i];
+                    if g.is_alive() and g.x == x and g.y == y {
+                        glyph = "g";
+                        i = enemies.len();
+                    } else {
+                        i += 1;
+                    }
+                }
+            }
+
+            line += glyph;
+            x += 1;
+        }
+
+        println(line);
+        y += 1;
+    }
+}
+
+fn save_snapshot : path, player {
+    let payload = f"{player.name}|{player.hp}|{player.atk}|{player.gold}|{player.potions}|{player.x}|{player.y}";
+    io.write_file(path, payload);
+}
+
+fn load_snapshot : path {
+    let payload = io.read_file(path);
+    let parts = payload.split("|");
+
+    if parts.len() != 7 {
+        throw f"bad save format, expected 7 fields, got {parts.len()}";
+    }
+
+    return {
+        "name": parts[0],
+        "hp": parse_int(parts[1]),
+        "atk": parse_int(parts[2]),
+        "gold": parse_int(parts[3]),
+        "potions": parse_int(parts[4]),
+        "x": parse_int(parts[5]),
+        "y": parse_int(parts[6])
+    };
+}
+
+fn apply_snapshot : player, snapshot {
+    player.name = snapshot["name"];
+    player.hp = snapshot["hp"];
+    player.atk = snapshot["atk"];
+    player.gold = snapshot["gold"];
+    player.potions = snapshot["potions"];
+    player.x = snapshot["x"];
+    player.y = snapshot["y"];
+}
+
+math.seed(1337);
+
+let dungeon = Dungeon(24, 10);
+let spawn_pos = random_floor_tile(dungeon);
+let hero = Player("Walrus", 28, 6, 0, 2, spawn_pos["x"], spawn_pos["y"]);
+let goblins = spawn_goblins(dungeon, hero, 5);
+
+let stats = {"turns": 0, "kills": 0, "damage": 0};
+
+println("=== WALRUS ROGUELIKE (SIMULATION) ===");
+println("Legend: # wall, . floor, @ hero, g goblin");
+println("");
+render(dungeon, hero, goblins);
+println("");
+
+let turn = 1;
+while turn <= 12 and hero.is_alive() and alive_enemies(goblins) > 0 {
+    println(f"-- turn {turn} --");
+
+    if hero.hp <= 9 and math.rand_int(1, 100) <= 45 {
+        hero.drink_potion();
+    }
+
+    step_player(hero, dungeon);
+
+    let enemy_idx = first_adjacent_enemy(hero, goblins);
+    if enemy_idx >= 0 {
+        let target = goblins[enemy_idx];
+        let dealt = attack(hero, target);
+        stats["damage"] = stats["damage"] + dealt;
+
+        if target.hp == 0 {
+            let loot = math.rand_int(4, 11);
+            hero.gold = hero.gold + loot;
+            hero.inventory.push("fang");
+            stats["kills"] = stats["kills"] + 1;
+            println(f"  loot: +{loot} gold, +fang");
+        }
+    }
+
+    let i = 0;
+    while i < goblins.len() {
+        let g = goblins[i];
+        if g.is_alive() {
+            if manhattan(g, hero) <= 1 {
+                let _ = attack(g, hero);
+            } else {
+                step_goblin(g, hero, dungeon);
+            }
+        }
+        i += 1;
+    }
+
+    if math.rand_int(1, 100) <= 22 {
+        let coins = math.rand_int(1, 5);
+        hero.gold = hero.gold + coins;
+        println(f"  chest: +{coins} gold");
+    }
+
+    println(f"  hero hp={hero.hp} gold={hero.gold} potions={hero.potions} enemies={alive_enemies(goblins)}");
+    render(dungeon, hero, goblins);
+    println("");
+
+    stats["turns"] = stats["turns"] + 1;
+    turn += 1;
+}
+
+println("=== RUN SUMMARY ===");
+let turns_taken = stats["turns"];
+let kills_done = stats["kills"];
+let total_damage = stats["damage"];
+println(f"alive={hero.is_alive()} turns={turns_taken} kills={kills_done} damage={total_damage}");
+println(f"inventory_count={hero.inventory.len()} inventory={hero.inventory}");
+println(f"final_pos=({hero.x}, {hero.y})");
+println("");
+
+let save_path = "/tmp/walrus_roguelike_save.txt";
+
+io.write_file(save_path, "broken|save");
+
+try {
+    let _ = load_snapshot(save_path);
+    println("[save] unexpected: broken save loaded");
+} catch err {
+    println(f"[save] expected failure: {err}");
+};
+
+save_snapshot(save_path, hero);
+
+try {
+    let loaded = load_snapshot(save_path);
+    let clone = Player("tmp", 1, 1, 0, 0, 1, 1);
+    apply_snapshot(clone, loaded);
+
+    println(f"[save] loaded hero={clone.name} hp={clone.hp} atk={clone.atk}");
+    println(f"[save] loaded pos=({clone.x}, {clone.y}) gold={clone.gold} potions={clone.potions}");
+} catch err {
+    println(f"[save] unexpected failure: {err}");
+};
