@@ -1092,7 +1092,7 @@ impl<'a> VM<'a> {
                     // SAFETY: compiler guarantees conditional jump has a condition value.
                     let value = self.pop_unchecked();
 
-                    if let Value::Bool(false) = value {
+                    if !self.get_heap().is_truthy(value)? {
                         self.ip = offset as usize;
                     }
                 }
@@ -1967,35 +1967,21 @@ impl<'a> VM<'a> {
                 }
                 Opcode::Not => {
                     let a = self.pop(opcode, span)?;
-
-                    match a {
-                        Value::Bool(a) => {
-                            self.push(Value::Bool(!a));
-                        }
-                        _ => return Err(self.construct_err(opcode, a, None, span)),
-                    }
+                    self.push(Value::Bool(!self.get_heap().is_truthy(a)?));
                 }
                 Opcode::And => {
                     let b = self.pop(opcode, span)?;
                     let a = self.pop(opcode, span)?;
-
-                    match (a, b) {
-                        (Value::Bool(a), Value::Bool(b)) => {
-                            self.push(Value::Bool(a && b));
-                        }
-                        _ => return Err(self.construct_err(opcode, a, Some(b), span)),
-                    }
+                    self.push(Value::Bool(
+                        self.get_heap().is_truthy(a)? && self.get_heap().is_truthy(b)?,
+                    ));
                 }
                 Opcode::Or => {
                     let b = self.pop(opcode, span)?;
                     let a = self.pop(opcode, span)?;
-
-                    match (a, b) {
-                        (Value::Bool(a), Value::Bool(b)) => {
-                            self.push(Value::Bool(a || b));
-                        }
-                        _ => return Err(self.construct_err(opcode, a, Some(b), span)),
-                    }
+                    self.push(Value::Bool(
+                        self.get_heap().is_truthy(a)? || self.get_heap().is_truthy(b)?,
+                    ));
                 }
                 Opcode::Equal => {
                     let b = self.pop(opcode, span)?;

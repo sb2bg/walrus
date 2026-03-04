@@ -44,7 +44,7 @@ impl<'a> VM<'a> {
     pub(crate) fn handle_jump_if_false(&mut self, offset: u32, span: Span) -> WalrusResult<()> {
         let value = self.pop(Opcode::JumpIfFalse(offset), span)?;
 
-        if let Value::Bool(false) = value {
+        if !self.get_heap().is_truthy(value)? {
             self.ip = offset as usize;
         }
         Ok(())
