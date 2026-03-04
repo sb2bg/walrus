@@ -1,0 +1,236 @@
+import "std/math";
+
+fn pos_key : x, y {
+    return f"{x},{y}";
+}
+
+fn heuristic : ax, ay, bx, by {
+    return math.abs(ax - bx) + math.abs(ay - by);
+}
+
+fn is_walkable : grid, x, y {
+    if y < 0 or y >= grid.len() {
+        return false;
+    }
+
+    let row = grid[y];
+    if x < 0 or x >= row.len() {
+        return false;
+    }
+
+    return row[x] != "#";
+}
+
+fn pop_lowest_f : open {
+    if open.len() == 0 {
+        throw "open set is empty";
+    }
+
+    let best_idx = 0;
+    let best_f = open[0]["f"];
+    let i = 1;
+
+    while i < open.len() {
+        let candidate = open[i]["f"];
+        if candidate < best_f {
+            best_f = candidate;
+            best_idx = i;
+        }
+        i += 1;
+    }
+
+    return open.remove(best_idx);
+}
+
+fn consider_neighbor : grid, nx, ny, goal, g_current, g_score, came_from, open, current_key {
+    if not is_walkable(grid, nx, ny) {
+        return void;
+    }
+
+    let neighbor_key = pos_key(nx, ny);
+    let tentative = g_current + 1;
+    let previous = g_score.get(neighbor_key, 1000000000);
+
+    if tentative < previous {
+        g_score[neighbor_key] = tentative;
+        came_from[neighbor_key] = current_key;
+
+        let estimate = heuristic(nx, ny, goal["x"], goal["y"]);
+        open.push({"x": nx, "y": ny, "f": tentative + estimate});
+    }
+
+    return void;
+}
+
+fn reconstruct_path : came_from, start_key, goal_key {
+    let path = [];
+    let current = goal_key;
+    path.push(current);
+
+    while current != start_key {
+        let parent = came_from.get(current, "");
+        if parent == "" {
+            throw "failed to reconstruct path";
+        }
+
+        current = parent;
+        path.push(current);
+    }
+
+    path.reverse();
+    return path;
+}
+
+fn find_path : grid, origin, goal {
+    let start_key = pos_key(origin["x"], origin["y"]);
+    let goal_key = pos_key(goal["x"], goal["y"]);
+
+    let open = [{
+        "x": origin["x"],
+        "y": origin["y"],
+        "f": heuristic(origin["x"], origin["y"], goal["x"], goal["y"])
+    }];
+
+    let came_from = {};
+    let g_score = {};
+    let closed = {};
+    let expanded = [];
+
+    g_score[start_key] = 0;
+
+    while open.len() > 0 {
+        let current = pop_lowest_f(open);
+        let x = current["x"];
+        let y = current["y"];
+        let current_key = pos_key(x, y);
+
+        if closed.contains(current_key) {
+            continue;
+        }
+
+        closed[current_key] = true;
+        expanded.push(current_key);
+
+        if current_key == goal_key {
+            let path = reconstruct_path(came_from, start_key, goal_key);
+            return {"expanded": expanded, "path": path};
+        }
+
+        let current_cost = g_score.get(current_key, 1000000000);
+
+        consider_neighbor(grid, x + 1, y, goal, current_cost, g_score, came_from, open, current_key);
+        consider_neighbor(grid, x - 1, y, goal, current_cost, g_score, came_from, open, current_key);
+        consider_neighbor(grid, x, y + 1, goal, current_cost, g_score, came_from, open, current_key);
+        consider_neighbor(grid, x, y - 1, goal, current_cost, g_score, came_from, open, current_key);
+    }
+
+    throw "no path found";
+}
+
+fn make_set : items {
+    let set = {};
+    let i = 0;
+
+    while i < items.len() {
+        set[items[i]] = true;
+        i += 1;
+    }
+
+    return set;
+}
+
+fn render : grid, origin, goal, explored, path {
+    let y = 0;
+
+    while y < grid.len() {
+        let row = grid[y];
+        let line = "";
+
+        let x = 0;
+        while x < row.len() {
+            let key = pos_key(x, y);
+            let cell = row[x];
+            let ch = " ";
+
+            if x == origin["x"] and y == origin["y"] {
+                ch = "S";
+            } else {
+                if x == goal["x"] and y == goal["y"] {
+                    ch = "G";
+                } else {
+                    if cell == "#" {
+                        ch = "#";
+                    } else {
+                        if path.contains(key) {
+                            ch = "o";
+                        } else {
+                            if explored.contains(key) {
+                                ch = ".";
+                            } else {
+                                ch = " ";
+                            }
+                        }
+                    }
+                }
+            }
+
+            line += ch;
+            x += 1;
+        }
+
+        println(line);
+        y += 1;
+    }
+}
+
+fn replay : grid, origin, goal, expanded, path {
+    println("=== A* SEARCH SNAPSHOTS ===");
+    println("Legend: # wall, . explored, o final path, S origin, G goal");
+    println("");
+
+    let explored = {};
+    let i = 0;
+
+    while i < expanded.len() {
+        explored[expanded[i]] = true;
+
+        if i % 8 == 0 or i == expanded.len() - 1 {
+            println(f"step {i + 1}/{expanded.len()}");
+            render(grid, origin, goal, explored, {});
+            println("");
+        }
+
+        i += 1;
+    }
+
+    let path_set = make_set(path);
+
+    println("=== FINAL PATH ===");
+    println(f"expanded nodes: {expanded.len()}");
+    println(f"path nodes: {path.len()}");
+    render(grid, origin, goal, explored, path_set);
+}
+
+let grid = [
+    "#####################",
+    "#...................#",
+    "#.#####.#######.###.#",
+    "#.#...#.....#...#...#",
+    "#.#.#.#####.#.###.#.#",
+    "#...#.....#.#.....#.#",
+    "###.#####.#.#######.#",
+    "#...#...#.#.........#",
+    "#.###.#.#.#########.#",
+    "#.....#.............#",
+    "#####################"
+];
+
+let origin = {"x": 1, "y": 1};
+let goal = {"x": 19, "y": 9};
+
+try {
+    let result = find_path(grid, origin, goal);
+    replay(grid, origin, goal, result["expanded"], result["path"]);
+} catch err {
+    println(f"pathfinding failed: {err}");
+};
