@@ -15,9 +15,18 @@ env:
 
 jobs:
   test:
+    strategy:
+      fail-fast: false
+      matrix:
+        profile:
+          - name: default
+            cargo_args: ""
+          - name: jit
+            cargo_args: "--features jit"
     runs-on: ubuntu-latest
+    name: test (${{ matrix.profile.name }})
 
     steps:
       - uses: actions/checkout@v4
       - name: Run tests
-        run: cargo test --verbose --all-targets
+        run: cargo test --verbose --all-targets ${{ matrix.profile.cargo_args }}

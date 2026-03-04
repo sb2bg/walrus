@@ -15,11 +15,20 @@ env:
 
 jobs:
   build:
+    strategy:
+      fail-fast: false
+      matrix:
+        profile:
+          - name: default
+            cargo_args: ""
+          - name: jit
+            cargo_args: "--features jit"
     runs-on: ubuntu-latest
+    name: build (${{ matrix.profile.name }})
 
     steps:
       - uses: actions/checkout@v4
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Build
-        run: cargo build --verbose
+        run: cargo build --verbose ${{ matrix.profile.cargo_args }}

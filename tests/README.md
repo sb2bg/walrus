@@ -8,6 +8,8 @@ This directory contains the language-level test suite for Walrus.
 - `tests/fixtures/pass/*.walrus`: programs that must execute successfully
 - `tests/fixtures/pass/*.stdout`: expected stdout for each passing program
 - Optional `tests/fixtures/pass/*.exitcode`: expected process exit code for a fixture (defaults to success for pass fixtures)
+- Optional `*.env` sidecar file: fixture-specific environment variables (dotenv syntax)
+- Optional `*.stdin` sidecar file: bytes piped to program stdin before assertion
 - `tests/fixtures/fail/*.walrus`: programs that must report an error
 - `tests/fixtures/fail/*.stderr`: required stderr snippet for each failing program
 - Optional `*.modes` sidecar file:
