@@ -111,6 +111,27 @@ impl<'a> Interpreter<'a> {
         res
     }
 
+    pub fn interpret_module(&mut self, node: Node) -> InterpreterResult {
+        let module_span = *node.span();
+        let mut module_interpreter = self.create_child("module".to_string());
+
+        match node.into_kind() {
+            NodeKind::Program(nodes)
+            | NodeKind::Statements(nodes)
+            | NodeKind::UnscopedStatements(nodes) => {
+                for entry in nodes {
+                    let _ = module_interpreter.interpret(entry)?;
+                }
+            }
+            other => {
+                let single = Node::new(other, module_span);
+                let _ = module_interpreter.interpret(single)?;
+            }
+        }
+
+        module_interpreter.export_scope_as_module()
+    }
+
     fn visit_variable(&self, name: &str, span: Span) -> InterpreterResult {
         self.scope
             .get(name)
@@ -690,20 +711,23 @@ impl<'a> Interpreter<'a> {
         }
     }
 
-    // fixme: when 2 files import each other, it loops
-    // fixme: when importing a function, for example, it clones the function rather than just referencing it
     fn visit_module_import(&mut self, name: String, as_name: Option<String>) -> InterpreterResult {
-        if let Some(as_name) = as_name {
-            // need to get program as mut
-            let module = self.program.load_module(&name)?;
-            self.scope.assign(as_name, module);
-        }
-
+        let module = self
+            .program
+            .load_module(&name, self.source_ref.filename())?;
+        let binding_name = as_name.unwrap_or_else(|| default_import_alias(&name));
+        self.scope.assign(binding_name, module);
         Ok(Value::Void)
     }
 
     fn visit_package_import(&mut self, name: String, as_name: Option<String>) -> InterpreterResult {
-        todo!("importing packages")
+        let module_spec = format!("@{name}");
+        let module = self
+            .program
+            .load_module(&module_spec, self.source_ref.filename())?;
+        let binding_name = as_name.unwrap_or(name);
+        self.scope.assign(binding_name, module);
+        Ok(Value::Void)
     }
 
     fn visit_for(&mut self, name: String, value: Node, body: Node) -> InterpreterResult {
@@ -1189,4 +1213,24 @@ impl<'a> Interpreter<'a> {
             filename: self.source_ref.filename().to_string(),
         }
     }
+
+    fn export_scope_as_module(&mut self) -> InterpreterResult {
+        let mut exports = FxHashMap::default();
+
+        for (name, value) in self.scope.iter_local_vars() {
+            if name == "_" {
+                continue;
+            }
+
+            let key = HeapValue::String(name).alloc();
+            exports.insert(key, *value);
+        }
+
+        Ok(HeapValue::Dict(exports).alloc())
+    }
+}
+
+fn default_import_alias(module_name: &str) -> String {
+    let tail = module_name.rsplit('/').next().unwrap_or(module_name);
+    tail.strip_suffix(".walrus").unwrap_or(tail).to_string()
 }

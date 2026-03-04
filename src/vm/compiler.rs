@@ -1171,15 +1171,7 @@ impl<'a> BytecodeEmitter<'a> {
                     .push(Instruction::new(Opcode::Import, span));
 
                 // Store the module dict in a variable
-                let var_name = alias.unwrap_or_else(|| {
-                    // Extract last component of module path as default name
-                    // e.g., "std/io" -> "io"
-                    module_name
-                        .rsplit('/')
-                        .next()
-                        .unwrap_or(&module_name)
-                        .to_string()
-                });
+                let var_name = alias.unwrap_or_else(|| default_import_alias(&module_name));
 
                 if self.depth == 0 {
                     self.define_global_variable(var_name, span);
@@ -1187,13 +1179,29 @@ impl<'a> BytecodeEmitter<'a> {
                     self.define_variable(var_name, span);
                 }
             }
-            NodeKind::PackageImport(_, _) => {
-                // Package imports not yet implemented
-                return Err(WalrusError::PackageImportNotImplemented {
-                    span,
-                    src: self.source_ref.source().to_string(),
-                    filename: self.source_ref.filename().to_string(),
-                });
+            NodeKind::PackageImport(package_name, alias) => {
+                // Lower package imports to "@package" module spec strings.
+                let module_spec = format!("@{package_name}");
+                let name_val = self
+                    .instructions
+                    .get_heap_mut()
+                    .push(HeapValue::String(&module_spec));
+                let index = self.instructions.push_constant(name_val);
+                let opcode = match index {
+                    0 => Opcode::LoadConst0,
+                    1 => Opcode::LoadConst1,
+                    _ => Opcode::LoadConst(index),
+                };
+                self.instructions.push(Instruction::new(opcode, span));
+                self.instructions
+                    .push(Instruction::new(Opcode::Import, span));
+
+                let var_name = alias.unwrap_or(package_name);
+                if self.depth == 0 {
+                    self.define_global_variable(var_name, span);
+                } else {
+                    self.define_variable(var_name, span);
+                }
             }
             _ => unimplemented!("{}", kind),
         }
@@ -1452,4 +1460,9 @@ impl<'a> BytecodeEmitter<'a> {
             source: source.to_string(),
         });
     }
+}
+
+fn default_import_alias(module_name: &str) -> String {
+    let tail = module_name.rsplit('/').next().unwrap_or(module_name);
+    tail.strip_suffix(".walrus").unwrap_or(tail).to_string()
 }

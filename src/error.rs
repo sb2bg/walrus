@@ -551,7 +551,7 @@ pub enum WalrusError {
         filename: String,
     },
 
-    #[error("Module '{module}' not found. Available modules: std/io, std/sys, std/math at {}",
+    #[error("Module '{module}' not found at {}",
         get_line(src, filename, *span)
     )]
     ModuleNotFound {

@@ -98,6 +98,7 @@ pub struct VM<'a> {
     ip: usize,                  // Current instruction pointer
     gc_poll_counter: u32,       // Throttle GC checks to avoid per-instruction overhead
     globals: Vec<Value>,
+    global_names: Vec<String>,
     source_ref: SourceRef<'a>,
     // Debugger state
     debugger: Option<debugger::Debugger>,
@@ -115,6 +116,7 @@ pub struct VM<'a> {
 
 impl<'a> VM<'a> {
     pub fn new(source_ref: SourceRef<'a>, is: InstructionSet) -> Self {
+        let global_names = is.globals.get_all_names();
         // Initialize hot-spot detector with loop and function metadata from the bytecode
         let mut hotspot_detector = HotSpotDetector::new();
 
@@ -149,6 +151,7 @@ impl<'a> VM<'a> {
             ip: 0,
             gc_poll_counter: 0,
             globals: Vec::new(),
+            global_names,
             source_ref,
             debugger: None,
             debug_mode: false,
@@ -250,6 +253,27 @@ impl<'a> VM<'a> {
         self.source_ref
     }
 
+    pub fn export_globals_as_module(&mut self) -> WalrusResult<Value> {
+        let global_names = self.global_names.clone();
+        let mut exports = FxHashMap::default();
+
+        for (index, name) in global_names.iter().enumerate() {
+            if name == "_" {
+                continue;
+            }
+
+            let value = match self.globals.get(index).copied() {
+                Some(value) => value,
+                None => continue,
+            };
+
+            let key = self.get_heap_mut().push(HeapValue::String(name));
+            exports.insert(key, value);
+        }
+
+        Ok(self.get_heap_mut().push(HeapValue::Dict(exports)))
+    }
+
     /// Collect all root values that the GC needs to trace from
     fn collect_roots(&self) -> Vec<Value> {
         let mut roots = Vec::with_capacity(self.stack.len() + self.locals.len() + 64);
@@ -267,6 +291,9 @@ impl<'a> VM<'a> {
         for frame in &self.call_stack {
             roots.extend(frame.instructions.constants.iter().copied());
         }
+
+        // Imported modules are cached process-wide and must remain rooted.
+        roots.extend(crate::program::cached_module_roots());
 
         roots
     }
@@ -2237,12 +2264,11 @@ impl<'a> VM<'a> {
                                 let module = self.get_heap_mut().push(HeapValue::Dict(dict));
                                 self.push(module);
                             } else {
-                                return Err(WalrusError::ModuleNotFound {
-                                    module: name_str.to_string(),
-                                    span,
-                                    src: self.source_ref.source().into(),
-                                    filename: self.source_ref.filename().into(),
-                                });
+                                let module = crate::program::load_module_for_vm(
+                                    name_str,
+                                    self.source_ref.filename(),
+                                )?;
+                                self.push(module);
                             }
                         }
                         _ => {

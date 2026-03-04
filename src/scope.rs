@@ -106,6 +106,10 @@ impl Scope {
         self.get(name).is_some()
     }
 
+    pub fn iter_local_vars(&self) -> impl Iterator<Item = (&String, &Value)> {
+        self.vars.iter()
+    }
+
     pub fn reassign<'a>(&'a mut self, name: &'a str, value: Value) -> Result<(), &'a str> {
         if self.vars.contains_key(name) {
             if let Some((entry, _)) = self.vars.remove_entry(name) {
