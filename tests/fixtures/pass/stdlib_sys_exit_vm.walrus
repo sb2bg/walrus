@@ -1,0 +1,4 @@
+import "std/sys";
+println("before");
+sys.exit(7);
+println("after");

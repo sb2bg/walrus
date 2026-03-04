@@ -1,0 +1,11 @@
+import "std/sys";
+
+let missing = sys.env_get("WALRUS_TEST_MISSING_ENV_42F7");
+println(missing == void);
+
+println(type(sys.args()));
+println(len(sys.args()));
+
+let cwd = sys.cwd();
+println(type(cwd));
+println(len(cwd) > 0);
