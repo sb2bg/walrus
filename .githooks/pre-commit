@@ -1,8 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+staged_rust_files="$(git diff --cached --name-only --diff-filter=ACMR -- '*.rs')"
+
 echo "[pre-commit] running cargo fmt --all"
 cargo fmt --all
 
-echo "[pre-commit] re-staging Rust files"
-git add -A -- '*.rs'
+if [[ -n "${staged_rust_files}" ]]; then
+  echo "[pre-commit] re-staging previously staged Rust files"
+  while IFS= read -r file; do
+    [[ -n "${file}" ]] || continue
+    git add -- "${file}"
+  done <<< "${staged_rust_files}"
+else
+  echo "[pre-commit] no staged Rust files to re-stage"
+fi
