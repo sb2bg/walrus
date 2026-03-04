@@ -4,7 +4,8 @@ A small recursive-descent JSON parser written in Walrus.
 
 ## Files
 
-- `main.walrus`: parser implementation + runnable demo
+- `parser.walrus`: parser implementation
+- `main.walrus`: runnable demo that imports the parser module
 - `sample.json`: sample input
 
 ## Run
