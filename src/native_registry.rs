@@ -1,12 +1,12 @@
 use float_ord::FloatOrd;
 
+use crate::WalrusResult;
 use crate::arenas::HeapValue;
 use crate::error::WalrusError;
 use crate::function::NativeFunction;
 use crate::span::Span;
 use crate::value::Value;
 use crate::vm::VM;
-use crate::WalrusResult;
 
 pub type NativeHandler = for<'a> fn(&mut VM<'a>, &[Value], Span) -> WalrusResult<Value>;
 

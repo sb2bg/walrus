@@ -7,6 +7,7 @@ use rustc_hash::FxHashMap;
 
 use instruction_set::InstructionSet;
 
+use crate::WalrusResult;
 use crate::arenas::HeapValue;
 use crate::error::WalrusError;
 use crate::function::WalrusFunction;
@@ -17,7 +18,6 @@ use crate::source_ref::SourceRef;
 use crate::span::Span;
 use crate::value::Value;
 use crate::vm::opcode::Opcode;
-use crate::WalrusResult;
 
 pub mod compiler;
 pub mod debugger;
@@ -221,11 +221,7 @@ impl<'a> VM<'a> {
     #[inline(always)]
     fn function_name(&self) -> &str {
         let name = &self.current_frame().function_name;
-        if name.is_empty() {
-            "<fn>"
-        } else {
-            name
-        }
+        if name.is_empty() { "<fn>" } else { name }
     }
 
     /// Helper to access heap - uses thread-local ARENA

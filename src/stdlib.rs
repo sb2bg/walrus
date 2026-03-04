@@ -13,11 +13,11 @@ use std::path::Path;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
+use crate::WalrusResult;
 use crate::error::WalrusError;
 use crate::function::NativeFunction;
 use crate::span::Span;
 use crate::value::Value;
-use crate::WalrusResult;
 
 // File handle table - maps integer handles to open files
 thread_local! {

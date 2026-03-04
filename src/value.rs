@@ -4,13 +4,13 @@ use std::hash::Hash;
 
 use float_ord::FloatOrd;
 
+use crate::WalrusResult;
 use crate::arenas::{
     DictKey, FuncKey, IterKey, ListKey, Resolve, StringKey, StructDefKey, StructInstKey, TupleKey,
     ValueHolder,
 };
 use crate::iter::{CollectionIter, DictIter, RangeIter, StrIter, ValueIterator};
 use crate::range::RangeValue;
-use crate::WalrusResult;
 
 #[derive(Debug, Clone)]
 pub enum ValueIter {

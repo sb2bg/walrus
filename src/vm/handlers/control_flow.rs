@@ -4,6 +4,7 @@ use std::rc::Rc;
 
 use log::debug;
 
+use crate::WalrusResult;
 use crate::error::WalrusError;
 use crate::function::WalrusFunction;
 use crate::jit::WalrusType;
@@ -11,7 +12,6 @@ use crate::span::Span;
 use crate::value::Value;
 use crate::vm::opcode::Opcode;
 use crate::vm::{CallFrame, VM};
-use crate::WalrusResult;
 
 /// Result of a call handler - either continue execution or return a value
 pub enum CallResult {

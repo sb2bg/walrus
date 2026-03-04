@@ -3,10 +3,10 @@ use std::str::FromStr;
 
 use float_ord::FloatOrd;
 use git_version::git_version;
-use lalrpop_util::lexer::Token;
 use lalrpop_util::ParseError;
+use lalrpop_util::lexer::Token;
 use line_span::{find_line_end, find_line_start};
-use snailquote::{unescape, UnescapeError};
+use snailquote::{UnescapeError, unescape};
 use thiserror::Error;
 
 use crate::ast::NodeKind;

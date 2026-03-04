@@ -2,14 +2,14 @@
 
 use rustc_hash::FxHashMap;
 
+use crate::WalrusResult;
 use crate::arenas::HeapValue;
 use crate::error::WalrusError;
 use crate::range::RangeValue;
 use crate::span::Span;
 use crate::value::Value;
-use crate::vm::opcode::Opcode;
 use crate::vm::VM;
-use crate::WalrusResult;
+use crate::vm::opcode::Opcode;
 
 impl<'a> VM<'a> {
     #[inline(always)]

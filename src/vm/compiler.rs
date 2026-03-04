@@ -1,3 +1,4 @@
+use crate::WalrusResult;
 use crate::arenas::HeapValue;
 use crate::ast::FStringPart;
 use crate::ast::{Node, NodeKind};
@@ -9,7 +10,6 @@ use crate::value::Value;
 use crate::vm::instruction_set::InstructionSet;
 use crate::vm::opcode::{Instruction, Opcode};
 use crate::vm::optimize;
-use crate::WalrusResult;
 use rustc_hash::FxHashSet;
 
 // Builtin function metadata

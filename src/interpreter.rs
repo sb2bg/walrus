@@ -5,6 +5,7 @@ use log::debug;
 use rustc_hash::FxHashMap;
 use uuid::Uuid;
 
+use crate::WalrusResult;
 use crate::arenas::{Free, HeapValue, Resolve};
 use crate::ast::{Node, NodeKind};
 use crate::error::WalrusError;
@@ -16,7 +17,6 @@ use crate::source_ref::SourceRef;
 use crate::span::{Span, Spanned};
 use crate::value::Value;
 use crate::vm::opcode::Opcode;
-use crate::WalrusResult;
 
 pub struct Interpreter<'a> {
     scope: Scope,

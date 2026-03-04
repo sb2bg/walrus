@@ -3,7 +3,7 @@ use std::{backtrace, panic};
 
 use clap::Parser as ClapParser;
 use lalrpop_util::lalrpop_mod;
-use log::{trace, LevelFilter};
+use log::{LevelFilter, trace};
 use simplelog::SimpleLogger;
 
 use crate::error::WalrusError;

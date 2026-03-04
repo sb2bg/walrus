@@ -1,19 +1,19 @@
 use std::cell::RefCell;
 use std::collections::HashSet;
 use std::fs;
-use std::io::{stdout, BufRead, Write};
+use std::io::{BufRead, Write, stdout};
 use std::path::PathBuf;
 
 use log::debug;
 
 use crate::ast::Node;
-use crate::error::{parser_err_mapper, WalrusError};
+use crate::error::{WalrusError, parser_err_mapper};
 use crate::grammar::ProgramParser;
 use crate::interpreter::{Interpreter, InterpreterResult};
 use crate::source_ref::{OwnedSourceRef, SourceRef};
 use crate::value::Value;
-use crate::vm::compiler::BytecodeEmitter;
 use crate::vm::VM;
+use crate::vm::compiler::BytecodeEmitter;
 
 // Thread-local set to track modules currently being loaded (for circular import detection)
 thread_local! {

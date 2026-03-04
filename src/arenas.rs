@@ -3,18 +3,18 @@ use std::cell::RefCell;
 use float_ord::FloatOrd;
 use log::debug;
 use rustc_hash::FxHashMap;
-use slotmap::{new_key_type, DenseSlotMap};
+use slotmap::{DenseSlotMap, new_key_type};
 
+use crate::WalrusResult;
 use crate::error::WalrusError;
 use crate::function::WalrusFunction;
 use crate::gc::{
-    estimate_dict_size, estimate_function_size, estimate_list_size, estimate_struct_instance_size,
-    estimate_tuple_size, get_allocation_threshold, GcState,
+    GcState, estimate_dict_size, estimate_function_size, estimate_list_size,
+    estimate_struct_instance_size, estimate_tuple_size, get_allocation_threshold,
 };
 use crate::iter::{CollectionIter, DictIter, RangeIter, StrIter};
 use crate::structs::{StructDefinition, StructInstance};
 use crate::value::{Value, ValueIter};
-use crate::WalrusResult;
 
 // Thread-local arena for heap-allocated values.
 // Using thread_local! with RefCell provides safe interior mutability without
