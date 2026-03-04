@@ -98,30 +98,44 @@ pub fn parse_fstring<T>(
     let mut current_literal = String::new();
     let mut char_indices = content.char_indices().peekable();
 
-    fn decode_fstring_escape(ch: char) -> Option<char> {
+    fn decode_fstring_escape<T>(
+        ch: char,
+        span: Span,
+    ) -> Result<char, ParseError<usize, T, RecoveredParseError>> {
         match ch {
-            'n' => Some('\n'),
-            't' => Some('\t'),
-            'r' => Some('\r'),
-            '\\' => Some('\\'),
-            '"' => Some('"'),
-            '{' => Some('{'),
-            '}' => Some('}'),
-            _ => None,
+            'n' => Ok('\n'),
+            't' => Ok('\t'),
+            'r' => Ok('\r'),
+            '\\' => Ok('\\'),
+            '"' => Ok('"'),
+            '{' => Ok('{'),
+            '}' => Ok('}'),
+            'u' => Err(ParseError::User {
+                error: RecoveredParseError::InvalidUnicodeEscapeSequence(span),
+            }),
+            _ => Err(ParseError::User {
+                error: RecoveredParseError::InvalidEscapeSequence(format!("\\{ch}"), span),
+            }),
         }
     }
 
     while let Some((byte_pos, ch)) = char_indices.next() {
         if ch == '\\' {
-            // Handle escape sequences
-            if let Some(&(_, next_ch)) = char_indices.peek() {
-                char_indices.next();
-                if let Some(decoded) = decode_fstring_escape(next_ch) {
-                    current_literal.push(decoded);
-                } else {
-                    current_literal.push('\\');
-                    current_literal.push(next_ch);
-                }
+            if let Some((_, next_ch)) = char_indices.next() {
+                let escape_span = Span(
+                    content_offset + byte_pos,
+                    content_offset + byte_pos + 1 + next_ch.len_utf8(),
+                );
+                let decoded = decode_fstring_escape(next_ch, escape_span)?;
+                current_literal.push(decoded);
+            } else {
+                let escape_span = Span(content_offset + byte_pos, content_offset + byte_pos + 1);
+                return Err(ParseError::User {
+                    error: RecoveredParseError::InvalidEscapeSequence(
+                        "\\".to_string(),
+                        escape_span,
+                    ),
+                });
             }
         } else if ch == '{' {
             // Start of an interpolation
@@ -134,38 +148,80 @@ pub fn parse_fstring<T>(
             let expr_start = byte_pos + 1; // Position after {
             let mut expr_str = String::new();
             let mut brace_depth = 1;
+            let mut interpolation_closed = false;
+            let mut in_string_literal = false;
+            let mut string_escape = false;
 
-            while let Some((_, expr_ch)) = char_indices.next() {
-                if expr_ch == '\\' {
-                    if let Some(&(_, next_ch)) = char_indices.peek() {
-                        char_indices.next();
-                        if let Some(decoded) = decode_fstring_escape(next_ch) {
-                            expr_str.push(decoded);
-                        } else {
-                            expr_str.push('\\');
-                            expr_str.push(next_ch);
-                        }
+            while let Some((expr_pos, expr_ch)) = char_indices.next() {
+                let emitted = if expr_ch == '\\' {
+                    if let Some((_, next_ch)) = char_indices.next() {
+                        let escape_span = Span(
+                            content_offset + expr_pos,
+                            content_offset + expr_pos + 1 + next_ch.len_utf8(),
+                        );
+                        decode_fstring_escape(next_ch, escape_span)?
                     } else {
-                        expr_str.push('\\');
+                        let escape_span =
+                            Span(content_offset + expr_pos, content_offset + expr_pos + 1);
+                        return Err(ParseError::User {
+                            error: RecoveredParseError::InvalidEscapeSequence(
+                                "\\".to_string(),
+                                escape_span,
+                            ),
+                        });
                     }
-                } else if expr_ch == '{' {
+                } else {
+                    expr_ch
+                };
+
+                if in_string_literal {
+                    if string_escape {
+                        string_escape = false;
+                    } else if emitted == '\\' {
+                        string_escape = true;
+                    } else if emitted == '"' {
+                        in_string_literal = false;
+                    }
+
+                    expr_str.push(emitted);
+                    continue;
+                }
+
+                if emitted == '"' {
+                    in_string_literal = true;
+                    expr_str.push(emitted);
+                    continue;
+                }
+
+                if emitted == '{' {
                     brace_depth += 1;
-                    expr_str.push(expr_ch);
-                } else if expr_ch == '}' {
+                    expr_str.push(emitted);
+                    continue;
+                }
+
+                if emitted == '}' {
                     brace_depth -= 1;
                     if brace_depth == 0 {
+                        interpolation_closed = true;
                         break;
                     }
-                    expr_str.push(expr_ch);
-                } else {
-                    expr_str.push(expr_ch);
+                    expr_str.push(emitted);
+                    continue;
                 }
+
+                expr_str.push(emitted);
+            }
+
+            if !interpolation_closed {
+                let expr_span = Span(content_offset + expr_start, content_offset + content.len());
+                return Err(ParseError::User {
+                    error: RecoveredParseError::InvalidFStringExpression(expr_str, expr_span),
+                });
             }
 
             // Parse the expression with proper span
             if expr_str.trim().is_empty() {
-                let expr_span =
-                    crate::span::Span(content_offset + expr_start, content_offset + expr_start);
+                let expr_span = Span(content_offset + expr_start, content_offset + expr_start);
                 return Err(ParseError::User {
                     error: RecoveredParseError::InvalidFStringExpression(expr_str, expr_span),
                 });
@@ -175,7 +231,7 @@ pub fn parse_fstring<T>(
                 Ok(node) => {
                     // Adjust the span to reflect the actual position in the source file
                     let expr_span = node.span();
-                    let adjusted_span = crate::span::Span(
+                    let adjusted_span = Span(
                         content_offset + expr_start + expr_span.0,
                         content_offset + expr_start + expr_span.1,
                     );
@@ -185,7 +241,7 @@ pub fn parse_fstring<T>(
                 }
                 Err(_) => {
                     // If parsing fails, return an error
-                    let expr_span = crate::span::Span(
+                    let expr_span = Span(
                         content_offset + expr_start,
                         content_offset + expr_start + expr_str.len(),
                     );

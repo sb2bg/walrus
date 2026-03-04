@@ -160,6 +160,19 @@ impl<'a> BytecodeEmitter<'a> {
                     }
                 }
 
+                if part_count == 0 {
+                    // Ensure empty f-strings still push an empty string value.
+                    let value = self.instructions.get_heap_mut().push(HeapValue::String(""));
+                    let index = self.instructions.push_constant(value);
+                    let opcode = match index {
+                        0 => Opcode::LoadConst0,
+                        1 => Opcode::LoadConst1,
+                        _ => Opcode::LoadConst(index),
+                    };
+                    self.instructions.push(Instruction::new(opcode, span));
+                    return Ok(());
+                }
+
                 // Concatenate all parts using Add operations
                 for _ in 1..part_count {
                     self.instructions.push(Instruction::new(Opcode::Add, span));
