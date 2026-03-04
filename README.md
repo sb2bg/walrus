@@ -81,13 +81,9 @@ import "std/math";
 
 ### Package Imports (`@name`)
 
-Walrus supports package-style imports with pinned lock entries:
+Walrus supports package-style imports with pinned lock entries.
 
-1. Declare dependencies in `Walrus.toml`.
-2. Generate/update `Walrus.lock` with `walrus --sync-lock`.
-3. Import with `import @package_name`.
-
-`Walrus.toml` example:
+#### 1. Declare dependencies in `Walrus.toml`
 
 ```toml
 [package]
@@ -98,12 +94,44 @@ version = "0.1.0"
 greeter = { version = "1.2.3", path = "./deps/greeter" }
 ```
 
-Then in code:
+Current scope: local `path` dependencies.
+
+#### 2. Generate lockfile
+
+```bash
+walrus --sync-lock
+```
+
+This creates or updates `Walrus.lock` with pinned package versions and resolved paths.
+
+Example `Walrus.lock`:
+
+```toml
+version = 1
+
+[packages.greeter]
+version = "1.2.3"
+path = "deps/greeter"
+```
+
+#### 3. Import and use
 
 ```walrus
 import @greeter as g;
-println(g["message"]);
+
+println(g.message);
+println(g.double(21));
 ```
+
+Imported modules/packages are dictionary-backed objects:
+- Preferred: dot access (`g.message`, `g.double(21)`).
+- Use indexing (`g["name"]`) only when the member name is dynamic or not a valid identifier.
+
+#### Behavior Notes
+
+- If `Walrus.toml` is present, `import @name` resolves through `Walrus.lock`.
+- If the manifest version and lock version differ for a package, execution fails with a pin mismatch error.
+- If no `Walrus.toml` is found, Walrus falls back to resolving `@name` as `./name/main.walrus` relative to the importing file.
 
 #### `std/io` - File I/O Operations
 
