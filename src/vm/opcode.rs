@@ -20,6 +20,8 @@ pub enum Opcode {
     StoreGlobal(u32),
     Call(u32),
     TailCall(u32), // Tail call optimization: reuses current frame instead of pushing new one
+    PushExceptionHandler(u32), // Catch target IP
+    PopExceptionHandler,
 
     // Specialized constant loading (zero-operand for efficiency)
     LoadConst0,  // Load constant at index 0
@@ -79,6 +81,7 @@ pub enum Opcode {
     Or,
     Print,
     Println,
+    Throw,
     Index,
     StoreIndex, // Store value at index (for list[i] = x and dict[k] = v)
     Nop,

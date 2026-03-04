@@ -53,6 +53,22 @@ struct CallFrame {
     return_override: Option<Value>,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct ExceptionHandler {
+    /// Frame index where this handler was installed.
+    frame_index: usize,
+    /// Inclusive start IP for the protected lexical region.
+    start_ip: usize,
+    /// Exclusive end IP for the protected lexical region (catch block start).
+    end_ip: usize,
+    /// IP of the catch block entry.
+    catch_ip: usize,
+    /// Operand stack length to restore before entering catch.
+    stack_len: usize,
+    /// Locals length to restore before entering catch.
+    locals_len: usize,
+}
+
 /// The Walrus Virtual Machine executes compiled bytecode.
 ///
 /// # Architecture
@@ -95,8 +111,9 @@ pub struct VM<'a> {
     stack: Vec<Value>,          // Operand stack for expression evaluation
     locals: Vec<Value>,         // Shared across all call frames
     call_stack: Vec<CallFrame>, // Stack of call frames
-    ip: usize,                  // Current instruction pointer
-    gc_poll_counter: u32,       // Throttle GC checks to avoid per-instruction overhead
+    exception_handlers: Vec<ExceptionHandler>,
+    ip: usize,            // Current instruction pointer
+    gc_poll_counter: u32, // Throttle GC checks to avoid per-instruction overhead
     globals: Vec<Value>,
     global_names: Vec<String>,
     source_ref: SourceRef<'a>,
@@ -148,6 +165,7 @@ impl<'a> VM<'a> {
             stack: Vec::new(),
             locals: Vec::new(),
             call_stack: vec![main_frame],
+            exception_handlers: Vec::new(),
             ip: 0,
             gc_poll_counter: 0,
             // Pre-size globals to declared symbol count so sparse/forward writes are safe.
@@ -213,6 +231,11 @@ impl<'a> VM<'a> {
     fn current_frame(&self) -> &CallFrame {
         // SAFETY: call_stack is never empty during VM execution (always has at least main frame)
         unsafe { self.call_stack.last().unwrap_unchecked() }
+    }
+
+    #[inline(always)]
+    fn current_frame_index(&self) -> usize {
+        self.call_stack.len() - 1
     }
 
     /// Get the current frame pointer (start of current frame's locals)
@@ -508,6 +531,75 @@ impl<'a> VM<'a> {
         s.char_indices().nth(char_index).map(|(offset, _)| offset)
     }
 
+    /// Remove handlers that are no longer reachable from the current execution point.
+    ///
+    /// Handlers become stale when:
+    /// - Their frame has been popped.
+    /// - Control flow in the same frame has jumped out of the protected try range.
+    fn prune_exception_handlers(&mut self) {
+        if self.exception_handlers.is_empty() {
+            return;
+        }
+
+        let current_frame = self.current_frame_index();
+        while let Some(handler) = self.exception_handlers.last().copied() {
+            let stale_frame = handler.frame_index > current_frame;
+            let out_of_range_in_frame = handler.frame_index == current_frame
+                && (self.ip < handler.start_ip || self.ip >= handler.end_ip);
+
+            if stale_frame || out_of_range_in_frame {
+                self.exception_handlers.pop();
+            } else {
+                break;
+            }
+        }
+    }
+
+    /// Clear all handlers that belong to `frame_index` or deeper.
+    /// Used when a frame is reused (tail call) or dropped.
+    fn clear_exception_handlers_from_frame(&mut self, frame_index: usize) {
+        while let Some(handler) = self.exception_handlers.last().copied() {
+            if handler.frame_index >= frame_index {
+                self.exception_handlers.pop();
+            } else {
+                break;
+            }
+        }
+    }
+
+    /// Raise a thrown value, transferring control to the nearest active catch handler.
+    fn throw_value(&mut self, value: Value, span: Span) -> WalrusResult<()> {
+        while let Some(handler) = self.exception_handlers.pop() {
+            if handler.frame_index > self.current_frame_index() {
+                continue;
+            }
+
+            // Unwind call frames until we reach the frame that owns this handler.
+            while self.current_frame_index() > handler.frame_index {
+                let frame = self
+                    .call_stack
+                    .pop()
+                    .expect("Call stack should never be empty while unwinding");
+                self.locals.truncate(frame.frame_pointer);
+                self.stack.truncate(frame.stack_pointer);
+            }
+
+            self.locals.truncate(handler.locals_len);
+            self.stack.truncate(handler.stack_len);
+            self.ip = handler.catch_ip;
+            self.push(value);
+            return Ok(());
+        }
+
+        let message = self.stringify_value(value)?;
+        Err(WalrusError::ThrownValue {
+            message,
+            span,
+            src: self.source_ref.source().into(),
+            filename: self.source_ref.filename().into(),
+        })
+    }
+
     /// Run the VM and add stack trace information to any errors
     pub fn run(&mut self) -> WalrusResult<Value> {
         match self.run_inner() {
@@ -538,6 +630,10 @@ impl<'a> VM<'a> {
             if self.gc_poll_counter & 0xFF == 0 {
                 self.maybe_collect_garbage();
             }
+
+            // Drop handlers that became unreachable because control flow
+            // moved outside their protected lexical try range.
+            self.prune_exception_handlers();
 
             // Check if we've reached the end of the current frame's instructions
             if self.ip >= self.current_frame().instructions.instructions.len() {
@@ -1286,6 +1382,7 @@ impl<'a> VM<'a> {
                                         .call_stack
                                         .pop()
                                         .expect("Call stack should never be empty on tail call");
+                                    self.clear_exception_handlers_from_frame(self.call_stack.len());
 
                                     if self.call_stack.is_empty() {
                                         return Ok(result);
@@ -1305,6 +1402,7 @@ impl<'a> VM<'a> {
                                         .call_stack
                                         .pop()
                                         .expect("Call stack should never be empty on tail call");
+                                    self.clear_exception_handlers_from_frame(self.call_stack.len());
 
                                     if self.call_stack.is_empty() {
                                         return Ok(result);
@@ -1329,6 +1427,8 @@ impl<'a> VM<'a> {
                                     // Clone what we need before mutating self
                                     let new_instructions = Rc::clone(&func.code);
                                     let new_name = String::new();
+                                    let frame_index = self.current_frame_index();
+                                    self.clear_exception_handlers_from_frame(frame_index);
 
                                     // Get the current frame pointer before modifying
                                     let frame_pointer = self.frame_pointer();
@@ -1391,6 +1491,8 @@ impl<'a> VM<'a> {
                                         self.get_heap_mut().push(HeapValue::StructInst(instance));
 
                                     let new_instructions = Rc::clone(&init_func.code);
+                                    let frame_index = self.current_frame_index();
+                                    self.clear_exception_handlers_from_frame(frame_index);
                                     let frame_pointer = self.frame_pointer();
                                     self.locals.truncate(frame_pointer);
                                     self.locals.push(instance_value);
@@ -1439,6 +1541,7 @@ impl<'a> VM<'a> {
                                         .call_stack
                                         .pop()
                                         .expect("Call stack should never be empty on tail call");
+                                    self.clear_exception_handlers_from_frame(self.call_stack.len());
 
                                     if self.call_stack.is_empty() {
                                         return Ok(result);
@@ -1461,6 +1564,29 @@ impl<'a> VM<'a> {
                             });
                         }
                     }
+                }
+                Opcode::PushExceptionHandler(catch_ip) => {
+                    let catch_ip = catch_ip as usize;
+                    let handler = ExceptionHandler {
+                        frame_index: self.current_frame_index(),
+                        start_ip: self.ip,
+                        end_ip: catch_ip,
+                        catch_ip,
+                        stack_len: self.stack.len(),
+                        locals_len: self.locals.len(),
+                    };
+                    self.exception_handlers.push(handler);
+                }
+                Opcode::PopExceptionHandler => {
+                    if let Some(handler) = self.exception_handlers.last().copied() {
+                        if handler.frame_index == self.current_frame_index() {
+                            self.exception_handlers.pop();
+                        }
+                    }
+                }
+                Opcode::Throw => {
+                    let value = self.pop(opcode, span)?;
+                    self.throw_value(value, span)?;
                 }
                 // Specialized integer arithmetic (hot path - skips type checking)
                 // SAFETY: Compiler guarantees stack has operands and both are integers
@@ -2257,6 +2383,7 @@ impl<'a> VM<'a> {
                         .call_stack
                         .pop()
                         .expect("Call stack should never be empty on return");
+                    self.clear_exception_handlers_from_frame(self.call_stack.len());
 
                     if let Some(override_value) = frame.return_override {
                         return_value = override_value;

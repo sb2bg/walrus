@@ -1119,6 +1119,47 @@ impl<'a> BytecodeEmitter<'a> {
                 self.instructions
                     .push(Instruction::new(Opcode::StoreIndex, span));
             }
+            NodeKind::Throw(value) => {
+                self.emit(*value)?;
+                self.instructions
+                    .push(Instruction::new(Opcode::Throw, span));
+            }
+            NodeKind::Try(try_block, catch_var, catch_block) => {
+                // Install an exception handler for the lexical try range.
+                // The catch target is patched once the try block has been emitted.
+                let handler_addr = self.instructions.len();
+                self.instructions
+                    .push(Instruction::new(Opcode::PushExceptionHandler(0), span));
+
+                // Emit try body.
+                self.emit(*try_block)?;
+
+                // Normal path: remove handler and skip catch block.
+                self.instructions
+                    .push(Instruction::new(Opcode::PopExceptionHandler, span));
+                let jump_over_catch = self.instructions.len();
+                self.instructions
+                    .push(Instruction::new(Opcode::Jump(0), span));
+
+                // Exception path starts here.
+                let catch_ip = self.instructions.len();
+                self.instructions.set(
+                    handler_addr,
+                    Instruction::new(Opcode::PushExceptionHandler(catch_ip as u32), span),
+                );
+
+                // Catch variable is scoped to the catch body.
+                self.inc_depth();
+                self.define_variable(catch_var, span);
+                self.emit(*catch_block)?;
+                self.dec_depth(span);
+
+                let end_ip = self.instructions.len();
+                self.instructions.set(
+                    jump_over_catch,
+                    Instruction::new(Opcode::Jump(end_ip as u32), span),
+                );
+            }
             NodeKind::ModuleImport(module_name, alias) => {
                 // Push the module name as a string constant
                 let name_val = self
