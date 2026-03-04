@@ -4,7 +4,7 @@ use lalrpop_util::ParseError;
 use lalrpop_util::lexer::Token;
 
 use crate::ast::{FStringPart, Node, NodeKind};
-use crate::error::RecoveredParseError;
+use crate::error::{RecoveredParseError, preprocess_fstrings_for_lexer};
 use crate::grammar::ProgramParser;
 use crate::span::Span;
 
@@ -190,7 +190,8 @@ impl Analysis {
 
 pub fn analyze(source: &str) -> Analysis {
     let parser = ProgramParser::new();
-    match parser.parse(source) {
+    let parse_source = preprocess_fstrings_for_lexer(source);
+    match parser.parse(&parse_source) {
         Ok(ast) => {
             let mut analyzer = Analyzer::new(source);
             analyzer.walk(&ast);

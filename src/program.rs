@@ -9,7 +9,7 @@ use log::debug;
 
 use crate::arenas::{HeapValue, with_arena_mut};
 use crate::ast::{Node, NodeKind};
-use crate::error::{WalrusError, parser_err_mapper};
+use crate::error::{WalrusError, parser_err_mapper, preprocess_fstrings_for_lexer};
 use crate::grammar::ProgramParser;
 use crate::interpreter::{Interpreter, InterpreterResult};
 use crate::package;
@@ -124,9 +124,10 @@ impl Program {
             source_ref.filename()
         );
 
+        let parse_source = preprocess_fstrings_for_lexer(source_ref.source());
         let ast = self
             .parser
-            .parse(source_ref.source())
+            .parse(&parse_source)
             .map_err(|err| parser_err_mapper(err, source_ref.source(), source_ref.filename()))?;
         let PreludeInjection { ast, .. } = inject_core_prelude(ast);
 
@@ -149,9 +150,10 @@ impl Program {
             }
         };
 
+        let parse_source = preprocess_fstrings_for_lexer(source_ref.source());
         let ast = self
             .parser
-            .parse(source_ref.source())
+            .parse(&parse_source)
             .map_err(|err| parser_err_mapper(err, source_ref.source(), source_ref.filename()))?;
         let PreludeInjection { ast, inserted_core } = inject_core_prelude(ast);
 
@@ -290,9 +292,10 @@ impl Program {
                 continue;
             }
 
+            let parse_input = preprocess_fstrings_for_lexer(&input);
             let ast = self
                 .parser
-                .parse(&input)
+                .parse(&parse_input)
                 .map_err(|err| parser_err_mapper(err, &input, Self::REPL_FILENAME))?;
             let PreludeInjection { ast, .. } = inject_core_prelude(ast);
 

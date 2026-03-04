@@ -13,12 +13,222 @@ use crate::ast::NodeKind;
 use crate::span::{Span, Spanned};
 use crate::vm::opcode::Opcode;
 
+const FSTRING_INTERP_QUOTE_SENTINEL: char = '\u{001F}';
+
 #[derive(Debug)]
 pub enum RecoveredParseError {
     NumberTooLarge(String, Span),
     InvalidEscapeSequence(String, Span),
     InvalidUnicodeEscapeSequence(Span),
     InvalidFStringExpression(String, Span),
+}
+
+fn is_ident_char(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || ch == '_'
+}
+
+/// Rewrites raw `"` inside f-string interpolations to a sentinel byte so the
+/// lexer can still tokenize the full `f"..."` literal.
+pub fn preprocess_fstrings_for_lexer(source: &str) -> String {
+    fn has_matching_quote_before_interp_end(
+        mut chars: std::iter::Peekable<std::str::Chars<'_>>,
+        mut interp_depth: usize,
+    ) -> bool {
+        while let Some(ch) = chars.next() {
+            if ch == '"' {
+                return true;
+            }
+
+            if ch == '{' {
+                interp_depth += 1;
+                continue;
+            }
+
+            if ch == '}' {
+                interp_depth = interp_depth.saturating_sub(1);
+                if interp_depth == 0 {
+                    return false;
+                }
+            }
+        }
+
+        false
+    }
+
+    #[derive(Clone, Copy)]
+    enum ScannerState {
+        Normal,
+        String {
+            escape: bool,
+        },
+        LineComment,
+        BlockComment {
+            prev_star: bool,
+        },
+        FString {
+            interp_depth: usize,
+            literal_escape: bool,
+            in_interp_string: bool,
+        },
+    }
+
+    let mut out = String::with_capacity(source.len());
+    let mut chars = source.chars().peekable();
+    let mut state = ScannerState::Normal;
+    let mut prev_char: Option<char> = None;
+
+    while let Some(ch) = chars.next() {
+        match state {
+            ScannerState::Normal => {
+                if ch == '/' {
+                    if let Some('/') = chars.peek().copied() {
+                        out.push(ch);
+                        let next = chars.next().unwrap_or('/');
+                        out.push(next);
+                        prev_char = Some(next);
+                        state = ScannerState::LineComment;
+                        continue;
+                    }
+                    if let Some('*') = chars.peek().copied() {
+                        out.push(ch);
+                        let next = chars.next().unwrap_or('*');
+                        out.push(next);
+                        prev_char = Some(next);
+                        state = ScannerState::BlockComment { prev_star: false };
+                        continue;
+                    }
+                }
+
+                if ch == '"' {
+                    out.push(ch);
+                    prev_char = Some(ch);
+                    state = ScannerState::String { escape: false };
+                    continue;
+                }
+
+                let starts_fstring = ch == 'f'
+                    && matches!(chars.peek(), Some('"'))
+                    && prev_char.map_or(true, |prev| !is_ident_char(prev));
+
+                if starts_fstring {
+                    out.push(ch);
+                    let quote = chars.next().unwrap_or('"');
+                    out.push(quote);
+                    prev_char = Some(quote);
+                    state = ScannerState::FString {
+                        interp_depth: 0,
+                        literal_escape: false,
+                        in_interp_string: false,
+                    };
+                    continue;
+                }
+
+                out.push(ch);
+                prev_char = Some(ch);
+            }
+            ScannerState::String { mut escape } => {
+                out.push(ch);
+
+                if escape {
+                    escape = false;
+                } else if ch == '\\' {
+                    escape = true;
+                } else if ch == '"' {
+                    state = ScannerState::Normal;
+                    prev_char = Some(ch);
+                    continue;
+                }
+
+                prev_char = Some(ch);
+                state = ScannerState::String { escape };
+            }
+            ScannerState::LineComment => {
+                out.push(ch);
+                prev_char = Some(ch);
+
+                if ch == '\n' || ch == '\r' {
+                    state = ScannerState::Normal;
+                }
+            }
+            ScannerState::BlockComment { mut prev_star } => {
+                out.push(ch);
+                prev_char = Some(ch);
+
+                if prev_star && ch == '/' {
+                    state = ScannerState::Normal;
+                    continue;
+                }
+                prev_star = ch == '*';
+                state = ScannerState::BlockComment { prev_star };
+            }
+            ScannerState::FString {
+                mut interp_depth,
+                mut literal_escape,
+                mut in_interp_string,
+            } => {
+                if interp_depth == 0 {
+                    out.push(ch);
+                    prev_char = Some(ch);
+
+                    if literal_escape {
+                        literal_escape = false;
+                    } else if ch == '\\' {
+                        literal_escape = true;
+                    } else if ch == '{' {
+                        interp_depth = 1;
+                        in_interp_string = false;
+                    } else if ch == '"' {
+                        state = ScannerState::Normal;
+                        continue;
+                    }
+                } else {
+                    if in_interp_string {
+                        let emitted = if ch == '"' {
+                            FSTRING_INTERP_QUOTE_SENTINEL
+                        } else {
+                            ch
+                        };
+                        out.push(emitted);
+                        prev_char = Some(ch);
+
+                        if ch == '"' {
+                            in_interp_string = false;
+                        }
+                    } else {
+                        if ch == '"' {
+                            if has_matching_quote_before_interp_end(chars.clone(), interp_depth) {
+                                out.push(FSTRING_INTERP_QUOTE_SENTINEL);
+                                prev_char = Some(ch);
+                                in_interp_string = true;
+                            } else {
+                                out.push(ch);
+                                prev_char = Some(ch);
+                                state = ScannerState::Normal;
+                                continue;
+                            }
+                        } else {
+                            out.push(ch);
+                            prev_char = Some(ch);
+
+                            if ch == '{' {
+                                interp_depth += 1;
+                            } else if ch == '}' {
+                                interp_depth -= 1;
+                            }
+                        }
+                    }
+                }
+
+                state = ScannerState::FString {
+                    interp_depth,
+                    literal_escape,
+                    in_interp_string,
+                };
+            }
+        }
+    }
+
+    out
 }
 
 pub fn parse_int<T>(
@@ -88,6 +298,13 @@ pub fn parse_fstring<T>(
     let parser = grammar::ExpressionParser::new();
 
     let raw = spanned.value();
+    let normalized_raw;
+    let raw = if raw.contains(FSTRING_INTERP_QUOTE_SENTINEL) {
+        normalized_raw = raw.replace(FSTRING_INTERP_QUOTE_SENTINEL, "\"");
+        normalized_raw.as_str()
+    } else {
+        raw
+    };
     let base_offset = spanned.span().0; // Start position of the f-string
 
     // Remove f" and trailing " -> f" is 2 chars, so content starts at base_offset + 2
