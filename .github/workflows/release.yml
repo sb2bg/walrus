@@ -1,0 +1,67 @@
+name: Release
+
+on:
+  push:
+    branches: ["master"]
+    paths:
+      - "Cargo.toml"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect version change
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          current_version=$(awk -F '"' '/^version\s*=\s*"/{print $2; exit}' Cargo.toml)
+          previous_version=""
+
+          if git rev-parse --verify HEAD^ >/dev/null 2>&1; then
+            if git show HEAD^:Cargo.toml >/tmp/previous_cargo_toml 2>/dev/null; then
+              previous_version=$(awk -F '"' '/^version\s*=\s*"/{print $2; exit}' /tmp/previous_cargo_toml)
+            fi
+          fi
+
+          tag="v${current_version}"
+          tag_exists="false"
+          if git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null 2>&1; then
+            tag_exists="true"
+          fi
+
+          should_release="false"
+          if [[ -n "${current_version}" && "${current_version}" != "${previous_version}" && "${tag_exists}" != "true" ]]; then
+            should_release="true"
+          fi
+
+          echo "current_version=${current_version}" >> "${GITHUB_OUTPUT}"
+          echo "previous_version=${previous_version}" >> "${GITHUB_OUTPUT}"
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+          echo "should_release=${should_release}" >> "${GITHUB_OUTPUT}"
+
+      - name: Create GitHub release
+        if: steps.version.outputs.should_release == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ steps.version.outputs.tag }}" \
+            --title "${{ steps.version.outputs.tag }}" \
+            --target "${GITHUB_SHA}" \
+            --generate-notes
+
+      - name: Skip release
+        if: steps.version.outputs.should_release != 'true'
+        run: |
+          echo "Skipping release."
+          echo "current=${{ steps.version.outputs.current_version }}"
+          echo "previous=${{ steps.version.outputs.previous_version }}"
