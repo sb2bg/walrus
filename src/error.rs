@@ -98,23 +98,29 @@ pub fn parse_fstring<T>(
     let mut current_literal = String::new();
     let mut char_indices = content.char_indices().peekable();
 
+    fn decode_fstring_escape(ch: char) -> Option<char> {
+        match ch {
+            'n' => Some('\n'),
+            't' => Some('\t'),
+            'r' => Some('\r'),
+            '\\' => Some('\\'),
+            '"' => Some('"'),
+            '{' => Some('{'),
+            '}' => Some('}'),
+            _ => None,
+        }
+    }
+
     while let Some((byte_pos, ch)) = char_indices.next() {
         if ch == '\\' {
             // Handle escape sequences
             if let Some(&(_, next_ch)) = char_indices.peek() {
                 char_indices.next();
-                match next_ch {
-                    'n' => current_literal.push('\n'),
-                    't' => current_literal.push('\t'),
-                    'r' => current_literal.push('\r'),
-                    '\\' => current_literal.push('\\'),
-                    '"' => current_literal.push('"'),
-                    '{' => current_literal.push('{'),
-                    '}' => current_literal.push('}'),
-                    _ => {
-                        current_literal.push('\\');
-                        current_literal.push(next_ch);
-                    }
+                if let Some(decoded) = decode_fstring_escape(next_ch) {
+                    current_literal.push(decoded);
+                } else {
+                    current_literal.push('\\');
+                    current_literal.push(next_ch);
                 }
             }
         } else if ch == '{' {
@@ -130,7 +136,19 @@ pub fn parse_fstring<T>(
             let mut brace_depth = 1;
 
             while let Some((_, expr_ch)) = char_indices.next() {
-                if expr_ch == '{' {
+                if expr_ch == '\\' {
+                    if let Some(&(_, next_ch)) = char_indices.peek() {
+                        char_indices.next();
+                        if let Some(decoded) = decode_fstring_escape(next_ch) {
+                            expr_str.push(decoded);
+                        } else {
+                            expr_str.push('\\');
+                            expr_str.push(next_ch);
+                        }
+                    } else {
+                        expr_str.push('\\');
+                    }
+                } else if expr_ch == '{' {
                     brace_depth += 1;
                     expr_str.push(expr_ch);
                 } else if expr_ch == '}' {
@@ -145,31 +163,35 @@ pub fn parse_fstring<T>(
             }
 
             // Parse the expression with proper span
-            if !expr_str.is_empty() {
-                match parser.parse(&expr_str) {
-                    Ok(node) => {
-                        // Adjust the span to reflect the actual position in the source file
-                        let expr_span = node.span();
-                        let adjusted_span = crate::span::Span(
-                            content_offset + expr_start + expr_span.0,
-                            content_offset + expr_start + expr_span.1,
-                        );
-                        // Create a new node with the adjusted span
-                        let adjusted_node = crate::ast::Node::new(node.into_kind(), adjusted_span);
-                        parts.push(FStringPart::Expr(Box::new(adjusted_node)));
-                    }
-                    Err(_) => {
-                        // If parsing fails, return an error
-                        let expr_span = crate::span::Span(
-                            content_offset + expr_start,
-                            content_offset + expr_start + expr_str.len(),
-                        );
-                        return Err(ParseError::User {
-                            error: RecoveredParseError::InvalidFStringExpression(
-                                expr_str, expr_span,
-                            ),
-                        });
-                    }
+            if expr_str.trim().is_empty() {
+                let expr_span =
+                    crate::span::Span(content_offset + expr_start, content_offset + expr_start);
+                return Err(ParseError::User {
+                    error: RecoveredParseError::InvalidFStringExpression(expr_str, expr_span),
+                });
+            }
+
+            match parser.parse(&expr_str) {
+                Ok(node) => {
+                    // Adjust the span to reflect the actual position in the source file
+                    let expr_span = node.span();
+                    let adjusted_span = crate::span::Span(
+                        content_offset + expr_start + expr_span.0,
+                        content_offset + expr_start + expr_span.1,
+                    );
+                    // Create a new node with the adjusted span
+                    let adjusted_node = crate::ast::Node::new(node.into_kind(), adjusted_span);
+                    parts.push(FStringPart::Expr(Box::new(adjusted_node)));
+                }
+                Err(_) => {
+                    // If parsing fails, return an error
+                    let expr_span = crate::span::Span(
+                        content_offset + expr_start,
+                        content_offset + expr_start + expr_str.len(),
+                    );
+                    return Err(ParseError::User {
+                        error: RecoveredParseError::InvalidFStringExpression(expr_str, expr_span),
+                    });
                 }
             }
         } else {
