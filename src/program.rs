@@ -11,6 +11,7 @@ use crate::ast::Node;
 use crate::error::{WalrusError, parser_err_mapper};
 use crate::grammar::ProgramParser;
 use crate::interpreter::{Interpreter, InterpreterResult};
+use crate::package;
 use crate::source_ref::{OwnedSourceRef, SourceRef};
 use crate::value::Value;
 use crate::vm::VM;
@@ -374,6 +375,17 @@ fn resolve_import(
     let base_dir = import_base_dir(importer_filename);
 
     let mut relative_path = if let Some(package_name) = module_name.strip_prefix('@') {
+        if package_name.is_empty() {
+            return Err(WalrusError::GenericError {
+                message: "Invalid package import: empty package name".to_string(),
+            });
+        }
+
+        if let Some(main_file) = package::resolve_package_main(&base_dir, package_name)? {
+            return Ok(ResolvedImport::File(main_file));
+        }
+
+        // Backward-compatible fallback when no Walrus.toml is found.
         let mut package_path = PathBuf::from(package_name);
         package_path.push("main.walrus");
         package_path

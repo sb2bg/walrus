@@ -19,6 +19,7 @@ mod interpreter;
 mod iter;
 pub mod jit;
 mod native_registry;
+mod package;
 mod program;
 mod range;
 mod scope;
@@ -84,6 +85,12 @@ struct Args {
         help = "Enable JIT compilation of hot code (requires 'jit' feature)"
     )]
     enable_jit: bool,
+
+    #[clap(
+        long = "sync-lock",
+        help = "Generate or update Walrus.lock from path dependencies in Walrus.toml"
+    )]
+    sync_lock: bool,
 }
 
 type WalrusResult<T> = Result<T, WalrusError>;
@@ -112,6 +119,13 @@ fn main() {
 
 fn try_main() -> WalrusResult<()> {
     let args = Args::parse();
+
+    if args.sync_lock {
+        let cwd = std::env::current_dir().map_err(|source| WalrusError::IOError { source })?;
+        let lock_path = package::sync_lock_from(&cwd)?;
+        println!("Updated {}", lock_path.display());
+        return Ok(());
+    }
 
     setup_logger(if args.trace {
         LevelFilter::Trace
