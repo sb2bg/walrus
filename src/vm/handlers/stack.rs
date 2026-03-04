@@ -109,11 +109,11 @@ impl<'a> VM<'a> {
         let value = self.pop(Opcode::StoreGlobal(index), span)?;
         let index = index as usize;
 
-        if index == self.globals.len() {
-            self.globals.push(value);
-        } else {
-            self.globals[index] = value;
+        if index >= self.globals.len() {
+            self.globals.resize(index + 1, Value::Void);
         }
+
+        self.globals[index] = value;
         Ok(())
     }
 
@@ -128,7 +128,13 @@ impl<'a> VM<'a> {
     #[inline(always)]
     pub(crate) fn handle_reassign_global(&mut self, index: u32, span: Span) -> WalrusResult<()> {
         let value = self.pop(Opcode::ReassignGlobal(index), span)?;
-        self.globals[index as usize] = value;
+        let index = index as usize;
+
+        if index >= self.globals.len() {
+            self.globals.resize(index + 1, Value::Void);
+        }
+
+        self.globals[index] = value;
         Ok(())
     }
 

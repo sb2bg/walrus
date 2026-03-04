@@ -1,0 +1,5 @@
+let answer = 42;
+
+fn id : value {
+    return value;
+}

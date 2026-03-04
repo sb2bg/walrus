@@ -69,10 +69,11 @@ Walrus is a dynamically-typed, interpreted programming language that combines si
 | `core.heap_stats()`   | Get heap statistics as a dict (VM mode) |
 | `core.gc_threshold(n)`| Configure GC allocation threshold (VM mode) |
 
-Import it with:
+`core` is auto-imported by the prelude in every file.
+You only need an explicit import if you want a different alias:
 
 ```walrus
-import "std/core" as core;
+import "std/core" as c;
 ```
 
 ### Standard Library
@@ -83,7 +84,6 @@ Walrus provides a standard library through an import system. Modules are importe
 import "std/io";
 import "std/sys" as system;
 import "std/math";
-import "std/core";
 ```
 
 ### Package Imports (`@name`)
@@ -192,7 +192,6 @@ io.file_close(reader);
 
 ```walrus
 import "std/sys";
-import "std/core" as core;
 
 // Environment variables
 let home = sys.env_get("HOME");
@@ -528,8 +527,6 @@ let data = {"key": "value", "count": 10};
 ### Format Strings
 
 ```walrus
-import "std/core" as core;
-
 let name = "Alice";
 let age = 30;
 let score = 95.5;
@@ -647,8 +644,6 @@ for n in 1..101 {
 ### Quicksort Example
 
 ```walrus
-import "std/core" as core;
-
 fn quicksort : arr {
         if core.len(arr) <= 1 {
                 return arr;

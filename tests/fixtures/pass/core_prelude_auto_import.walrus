@@ -1,0 +1,4 @@
+let values = [1, 2, 3];
+println(core.len(values));
+println(core.type(values));
+println(core.str(42));

@@ -142,14 +142,20 @@ impl Value {
             Value::Dict(d) => {
                 let dict = d.resolve()?;
                 let mut s = String::new();
+                let mut entries = Vec::with_capacity(dict.len());
 
                 s.push('{');
 
-                for (i, (key, value)) in dict.iter().enumerate() {
+                for (&key, &value) in &dict {
+                    entries.push((key.stringify()?, value));
+                }
+                entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+
+                for (i, (key, value)) in entries.iter().enumerate() {
                     if i > 0 {
                         s.push_str(", ");
                     }
-                    s.push_str(&key.stringify()?);
+                    s.push_str(key);
                     s.push_str(": ");
                     s.push_str(&value.stringify()?);
                 }
@@ -160,14 +166,20 @@ impl Value {
             Value::Module(d) => {
                 let dict = d.resolve()?;
                 let mut s = String::new();
+                let mut entries = Vec::with_capacity(dict.len());
 
                 s.push('{');
 
-                for (i, (key, value)) in dict.iter().enumerate() {
+                for (&key, &value) in &dict {
+                    entries.push((key.stringify()?, value));
+                }
+                entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+
+                for (i, (key, value)) in entries.iter().enumerate() {
                     if i > 0 {
                         s.push_str(", ");
                     }
-                    s.push_str(&key.stringify()?);
+                    s.push_str(key);
                     s.push_str(": ");
                     s.push_str(&value.stringify()?);
                 }

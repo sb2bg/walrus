@@ -7,12 +7,14 @@ use std::path::{Path, PathBuf};
 
 use log::debug;
 
-use crate::ast::Node;
+use crate::arenas::{HeapValue, with_arena_mut};
+use crate::ast::{Node, NodeKind};
 use crate::error::{WalrusError, parser_err_mapper};
 use crate::grammar::ProgramParser;
 use crate::interpreter::{Interpreter, InterpreterResult};
 use crate::package;
 use crate::source_ref::{OwnedSourceRef, SourceRef};
+use crate::span::Span;
 use crate::value::Value;
 use crate::vm::VM;
 use crate::vm::compiler::BytecodeEmitter;
@@ -77,6 +79,11 @@ enum ResolvedImport {
     File(PathBuf),
 }
 
+struct PreludeInjection {
+    ast: Node,
+    inserted_core: bool,
+}
+
 impl Program {
     pub fn new(
         file: Option<PathBuf>,
@@ -121,7 +128,7 @@ impl Program {
             .parser
             .parse(source_ref.source())
             .map_err(|err| parser_err_mapper(err, source_ref.source(), source_ref.filename()))?;
-        let ast = inject_core_prelude(ast);
+        let PreludeInjection { ast, .. } = inject_core_prelude(ast);
 
         let result = match self.opts {
             Opts::Compile => self.compile(ast, source_ref),
@@ -146,11 +153,13 @@ impl Program {
             .parser
             .parse(source_ref.source())
             .map_err(|err| parser_err_mapper(err, source_ref.source(), source_ref.filename()))?;
-        let ast = inject_core_prelude(ast);
+        let PreludeInjection { ast, inserted_core } = inject_core_prelude(ast);
 
         match self.opts {
-            Opts::Interpret => self.interpret_module(ast, source_ref),
-            Opts::Compile | Opts::Disassemble => self.compile_module(ast, source_ref),
+            Opts::Interpret => self.interpret_module(ast, source_ref, inserted_core),
+            Opts::Compile | Opts::Disassemble => {
+                self.compile_module(ast, source_ref, inserted_core)
+            }
         }
     }
 
@@ -226,7 +235,12 @@ impl Program {
         Ok(Value::Void)
     }
 
-    fn compile_module(&self, ast: Node, source_ref: SourceRef) -> InterpreterResult {
+    fn compile_module(
+        &self,
+        ast: Node,
+        source_ref: SourceRef,
+        strip_implicit_core_export: bool,
+    ) -> InterpreterResult {
         let span = *ast.span();
         let mut emitter = BytecodeEmitter::new(source_ref);
         emitter.emit(ast)?;
@@ -239,12 +253,19 @@ impl Program {
         vm.set_jit_enabled(self.jit_opts.enable_jit);
 
         let _ = vm.run()?;
-        vm.export_globals_as_module()
+        let module = vm.export_globals_as_module()?;
+        strip_implicit_core_export_from_module(module, strip_implicit_core_export)
     }
 
-    fn interpret_module(&self, ast: Node, source_ref: SourceRef) -> InterpreterResult {
+    fn interpret_module(
+        &self,
+        ast: Node,
+        source_ref: SourceRef,
+        strip_implicit_core_export: bool,
+    ) -> InterpreterResult {
         let mut interpreter = Interpreter::new(source_ref, self);
-        interpreter.interpret_module(ast)
+        let module = interpreter.interpret_module(ast)?;
+        strip_implicit_core_export_from_module(module, strip_implicit_core_export)
     }
 
     const REPL_FILENAME: &'static str = "<repl>";
@@ -273,7 +294,7 @@ impl Program {
                 .parser
                 .parse(&input)
                 .map_err(|err| parser_err_mapper(err, &input, Self::REPL_FILENAME))?;
-            let ast = inject_core_prelude(ast);
+            let PreludeInjection { ast, .. } = inject_core_prelude(ast);
 
             debug!("AST > {:?}", ast);
 
@@ -447,7 +468,29 @@ fn import_base_dir(importer_filename: &str) -> PathBuf {
         .to_path_buf()
 }
 
-fn inject_core_prelude(ast: Node) -> Node {
+fn strip_implicit_core_export_from_module(
+    module: Value,
+    strip_implicit_core_export: bool,
+) -> InterpreterResult {
+    if !strip_implicit_core_export {
+        return Ok(module);
+    }
+
+    let Value::Module(module_key) = module else {
+        return Ok(module);
+    };
+
+    with_arena_mut(|arena| -> Result<(), WalrusError> {
+        let core_key = arena.push(HeapValue::String("core"));
+        let module_dict = arena.get_mut_module(module_key)?;
+        module_dict.remove(&core_key);
+        Ok(())
+    })?;
+
+    Ok(module)
+}
+
+fn inject_core_prelude(ast: Node) -> PreludeInjection {
     fn has_core_import(nodes: &[Node]) -> bool {
         nodes.iter().any(|node| {
             matches!(
@@ -461,9 +504,12 @@ fn inject_core_prelude(ast: Node) -> Node {
         })
     }
 
-    fn with_prelude(mut nodes: Vec<Node>, span: Span) -> Node {
+    fn with_prelude(mut nodes: Vec<Node>, span: Span) -> PreludeInjection {
         if has_core_import(&nodes) {
-            return Node::new(NodeKind::Program(nodes), span);
+            return PreludeInjection {
+                ast: Node::new(NodeKind::Program(nodes), span),
+                inserted_core: false,
+            };
         }
 
         let prelude = Node::new(
@@ -471,7 +517,10 @@ fn inject_core_prelude(ast: Node) -> Node {
             span,
         );
         nodes.insert(0, prelude);
-        Node::new(NodeKind::Program(nodes), span)
+        PreludeInjection {
+            ast: Node::new(NodeKind::Program(nodes), span),
+            inserted_core: true,
+        }
     }
 
     let span = *ast.span();
@@ -480,7 +529,10 @@ fn inject_core_prelude(ast: Node) -> Node {
         NodeKind::Program(nodes) => with_prelude(nodes, span),
         NodeKind::Statements(nodes) => with_prelude(nodes, span),
         NodeKind::UnscopedStatements(nodes) => with_prelude(nodes, span),
-        other => Node::new(other, span),
+        other => PreludeInjection {
+            ast: Node::new(other, span),
+            inserted_core: false,
+        },
     }
 }
 

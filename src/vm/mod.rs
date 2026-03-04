@@ -150,7 +150,8 @@ impl<'a> VM<'a> {
             call_stack: vec![main_frame],
             ip: 0,
             gc_poll_counter: 0,
-            globals: Vec::new(),
+            // Pre-size globals to declared symbol count so sparse/forward writes are safe.
+            globals: vec![Value::Void; global_names.len()],
             global_names,
             source_ref,
             debugger: None,
@@ -770,13 +771,13 @@ impl<'a> VM<'a> {
                     let value = self.pop_unchecked();
                     let index = index as usize;
 
-                    if index == self.globals.len() {
-                        self.globals.push(value);
-                    } else {
-                        // SAFETY: compiler guarantees global index is valid when not appending.
-                        unsafe {
-                            *self.globals.get_unchecked_mut(index) = value;
-                        }
+                    if index >= self.globals.len() {
+                        self.globals.resize(index + 1, Value::Void);
+                    }
+
+                    // SAFETY: index has been ensured to exist.
+                    unsafe {
+                        *self.globals.get_unchecked_mut(index) = value;
                     }
                 }
                 Opcode::Reassign(index) => {
@@ -792,9 +793,15 @@ impl<'a> VM<'a> {
                 Opcode::ReassignGlobal(index) => {
                     // SAFETY: valid bytecode guarantees stack has a value to assign.
                     let value = self.pop_unchecked();
+                    let index = index as usize;
+
+                    if index >= self.globals.len() {
+                        self.globals.resize(index + 1, Value::Void);
+                    }
+
                     // SAFETY: compiler guarantees reassigned global exists.
                     unsafe {
-                        *self.globals.get_unchecked_mut(index as usize) = value;
+                        *self.globals.get_unchecked_mut(index) = value;
                     }
                 }
                 Opcode::List(cap) => {
