@@ -1,22 +1,30 @@
 import "std/io";
 import "std/sys" as sys;
 
+struct ParserState {
+    fn init : self, text {
+        self.source = text;
+        self.index = 0;
+        self.length = core.len(text);
+    }
+}
+
 fn fail : state, message {
-    let index = state["index"];
+    let index = state.index;
     throw f"JSON parse error at index {index}: {message}";
     return void;
 }
 
 fn is_eof : state {
-    return state["index"] >= state["length"];
+    return state.index >= state.length;
 }
 
 fn peek : state {
-    return state["source"][state["index"]];
+    return state.source[state.index];
 }
 
 fn advance : state {
-    state["index"] = state["index"] + 1;
+    state.index = state.index + 1;
 }
 
 fn skip_whitespace : state {
@@ -70,18 +78,18 @@ fn is_digit : ch {
 }
 
 fn consume_literal : state, expected {
-    let saved_index = state["index"];
+    let saved_index = state.index;
     let i = 0;
     let expected_len = core.len(expected);
 
     while i < expected_len {
         if is_eof(state) {
-            state["index"] = saved_index;
+            state.index = saved_index;
             return false;
         }
 
         if peek(state) != expected[i] {
-            state["index"] = saved_index;
+            state.index = saved_index;
             return false;
         }
 
@@ -199,7 +207,7 @@ fn parse_string : state {
             } else if esc == "t" {
                 out = out + "\t";
             } else {
-                fail(state, "unsupported escape: \\" + esc);
+                fail(state, f"unsupported escape: \\{esc}");
             }
         } else {
             out = out + ch;
@@ -346,15 +354,11 @@ fn parse_value : state {
         return parse_number(state);
     }
 
-    fail(state, "unexpected token: " + ch);
+    fail(state, f"unexpected token: {ch}");
 }
 
 fn parse_json : text {
-    let state = {
-        "source": text,
-        "index": 0,
-        "length": core.len(text),
-    };
+    let state = ParserState(text);
 
     let value = parse_value(state);
     skip_whitespace(state);
@@ -374,13 +378,13 @@ println(parsed);
 println("");
 
 let maintainer = parsed["maintainer"];
-println("Project: " + parsed["project"]);
-println("Version: " + core.str(parsed["version"]));
-println("First feature: " + parsed["features"][0]);
-println("Maintainer: " + maintainer["name"]);
-println("Maintainer active: " + core.str(maintainer["active"]));
-println("Maintainer contact email: " + maintainer["contact"]["email"]);
-println("Maintainer contact phone: " + maintainer["contact"]["phone"]);
+println(f"Project: {parsed["project"]}");
+println(f"Version: {core.str(parsed["version"])}");
+println(f"First feature: {parsed["features"][0]}");
+println(f"Maintainer: {maintainer["name"]}");
+println(f"Maintainer active: {core.str(maintainer["active"])}");
+println(f"Maintainer contact email: {maintainer["contact"]["email"]}");
+println(f"Maintainer contact phone: {maintainer["contact"]["phone"]}");
 
 println("");
 let inline = "{\"nums\": [1, 2, 3], \"ok\": true, \"missing\": null}";
