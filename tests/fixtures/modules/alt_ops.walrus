@@ -1,0 +1,6 @@
+fn add : a, b {
+    return a + b + 1;
+}
+
+let answer = 43;
+let name = "alt_ops";
