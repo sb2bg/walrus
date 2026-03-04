@@ -1,42 +1,28 @@
-# Walrus Test Suite
+# Walrus Integration Test Suite
 
-This directory contains the comprehensive test suite for the Walrus programming language.
+This directory contains the language-level test suite for Walrus.
 
-## 💬 Comments Support
+## Layout
 
-Walrus supports both single-line (`//`) and multi-line (`/* */`) comments in `.walrus` files. You can use comments to document your code and explain test behavior.
+- `tests/language_suite.rs`: fixture runner (asserts exact stdout or expected stderr snippets)
+- `tests/fixtures/pass/*.walrus`: programs that must execute successfully
+- `tests/fixtures/pass/*.stdout`: expected stdout for each passing program
+- `tests/fixtures/fail/*.walrus`: programs that must report an error
+- `tests/fixtures/fail/*.stderr`: required stderr snippet for each failing program
+- Optional `*.modes` sidecar file:
+  - `vm` -> run only in VM mode
+  - `interpreted` -> run only in interpreted mode
+  - `both` -> run in both modes (default if omitted)
 
-**Single-line comments:**
-
-```walrus
-// This is a single-line comment
-let x = 42; // Comment after code
-```
-
-**Multi-line comments:**
-
-```walrus
-/* This is a multi-line comment
-   that spans multiple lines */
-let y = 84; /* Inline multi-line comment */
-```
-
-## Test Files
-
-The files are constantly evolving as new features are added to Walrus. Each `.walrus` file contains tests for specific language features. As such, no complete list is provided here. Instead, please explore the files in this directory to see the various tests implemented.
-
-## Running Tests
+## Running
 
 ```bash
-# Compiled mode
-./scripts/run-file.sh tests/fibonacci.walrus
-
-# Interpreted mode
-cargo run -- tests/fibonacci.walrus -i
+cargo test --test language_suite
 ```
 
-## State of the Test Suite
+This runs the fixture suite twice:
 
-As of now, the testing suite is _extremely_ incomplete and immature. Many language features lack dedicated tests, and existing tests may not cover all edge cases. In addition, there is no automatic test runner or framework in place yet. Correctness is evaluated manually by inspecting output.
+- VM mode (`walrus <file>`)
+- interpreted mode (`walrus <file> --interpreted`)
 
-Contributions to expand and improve the test suite are highly encouraged!
+Fixtures tagged with mode restrictions only run where they apply.

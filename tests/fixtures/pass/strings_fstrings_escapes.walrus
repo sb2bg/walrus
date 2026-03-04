@@ -1,0 +1,7 @@
+let name = "Walrus";
+println(name[0]);
+println("Hello, " + name);
+println(f"{name}::{len(name)}");
+let n = 7;
+println(f"n+1={n + 1}");
+println("line1\nline2");

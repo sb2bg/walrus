@@ -1,0 +1,6 @@
+println(str(true));
+println(type({"k": 1}));
+let fn_value = : {
+    return 1;
+};
+println(type(fn_value));

@@ -1,0 +1,11 @@
+import "std/math";
+
+println(math.min(4, 9));
+math.seed(42);
+let a = math.rand_int(1, 100);
+math.seed(42);
+let b = math.rand_int(1, 100);
+println(a == b);
+println(math.abs(-9));
+println(math.sqrt(81));
+println(math.clamp(12, 0, 10));

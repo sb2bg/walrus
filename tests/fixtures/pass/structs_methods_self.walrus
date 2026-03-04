@@ -1,0 +1,27 @@
+struct Counter {
+    fn init : self, initial {
+        self.value = initial;
+    }
+
+    fn inc : self {
+        self.value = self.value + 1;
+        return self.value;
+    }
+
+    fn get : self {
+        return self.value;
+    }
+}
+
+let c = Counter(10);
+println(c.get());
+println(c.inc());
+println(c.inc());
+
+struct Math {
+    fn twice : x {
+        return x * 2;
+    }
+}
+
+println(Math.twice(9));

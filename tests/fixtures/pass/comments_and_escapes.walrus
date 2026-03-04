@@ -1,0 +1,7 @@
+let x = 1; // inline comment
+/* block
+   comment */
+let y = 2;
+println(x + y);
+println("tab:\tX");
+println("quote: \"ok\"");

@@ -1,8 +1,0 @@
-println("hello");
-
-fn test : {
-    continue;
-}
-
-test();
-println("world");

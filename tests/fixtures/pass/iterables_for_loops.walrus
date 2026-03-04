@@ -1,0 +1,17 @@
+let letters = "";
+for ch in "abc" {
+    letters = letters + ch;
+}
+println(letters);
+
+let total = 0;
+for n in [2, 4, 6] {
+    total += n;
+}
+println(total);
+
+let rtotal = 0;
+for i in 1..4 {
+    rtotal += i;
+}
+println(rtotal);

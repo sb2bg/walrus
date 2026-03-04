@@ -1,0 +1,11 @@
+let sum = 0;
+for i in 0..5 {
+    sum += i;
+}
+println(sum);
+
+let c = 0;
+while c < 3 {
+    println(c);
+    c += 1;
+}

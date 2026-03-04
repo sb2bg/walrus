@@ -1,0 +1,11 @@
+let out = 0;
+for i in 0..10 {
+    if i == 3 {
+        continue;
+    }
+    if i == 6 {
+        break;
+    }
+    out += i;
+}
+println(out);

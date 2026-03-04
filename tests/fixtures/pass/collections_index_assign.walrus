@@ -1,0 +1,16 @@
+let list = [10, 20, 30];
+list[1] = 99;
+list[-1] = 77;
+println(list[0]);
+println(list[1]);
+println(list[2]);
+
+let dict = {"a": 1};
+dict["b"] = 2;
+dict["a"] = 3;
+println(dict["a"]);
+println(dict["b"]);
+
+let nested = [{"x": 5}, {"x": 9}];
+nested[0]["x"] = nested[0]["x"] + 1;
+println(nested[0]["x"]);

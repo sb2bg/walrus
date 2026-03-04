@@ -1,5 +1,0 @@
-struct test {
-    fn test_fn : {
-        return 0;
-    }
-}

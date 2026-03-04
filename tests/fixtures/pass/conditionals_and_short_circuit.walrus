@@ -1,0 +1,14 @@
+fn side_effect : {
+    println("SIDE");
+    return true;
+}
+
+println(false and side_effect());
+println(true or side_effect());
+println(not false);
+
+if 3 > 2 and 1 < 2 {
+    println("if-ok");
+} else {
+    println("if-bad");
+}

@@ -1,0 +1,23 @@
+fn fib : n {
+    if n <= 1 {
+        return n;
+    }
+    return fib(n - 1) + fib(n - 2);
+}
+println(fib(8));
+
+let multiplier = 3;
+let times = : x {
+    return x * multiplier;
+};
+println(times(7));
+
+fn apply_twice : f, value {
+    return f(f(value));
+}
+
+let inc = : x {
+    return x + 1;
+};
+
+println(apply_twice(inc, 10));
