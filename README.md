@@ -59,15 +59,15 @@ Walrus is a dynamically-typed, interpreted programming language that combines si
 
 ### `std/core` Functions
 
-| Function              | Description                         |
-| --------------------- | ----------------------------------- |
-| `core.len(x)`         | Get length of string, list, dict, or module |
-| `core.str(x)`         | Convert value to string             |
-| `core.type(x)`        | Get type name of a value            |
-| `core.input(prompt)`  | Read user input with prompt         |
-| `core.gc()`           | Manually trigger garbage collection (VM mode) |
-| `core.heap_stats()`   | Get heap statistics as a dict (VM mode) |
-| `core.gc_threshold(n)`| Configure GC allocation threshold (VM mode) |
+| Function               | Description                                   |
+| ---------------------- | --------------------------------------------- |
+| `core.len(x)`          | Get length of string, list, dict, or module   |
+| `core.str(x)`          | Convert value to string                       |
+| `core.type(x)`         | Get type name of a value                      |
+| `core.input(prompt)`   | Read user input with prompt                   |
+| `core.gc()`            | Manually trigger garbage collection (VM mode) |
+| `core.heap_stats()`    | Get heap statistics as a dict (VM mode)       |
+| `core.gc_threshold(n)` | Configure GC allocation threshold (VM mode)   |
 
 `core` is auto-imported by the prelude in every file.
 You only need an explicit import if you want a different alias:
@@ -131,6 +131,7 @@ println(g.double(21));
 ```
 
 Imported modules/packages are `module` values (map-backed internally):
+
 - Preferred: dot access (`g.message`, `g.double(21)`).
 - Use indexing (`g["name"]`) only when the member name is dynamic or not a valid identifier.
 
@@ -218,50 +219,50 @@ if core.len(args) < 2 {
 
 #### `std/math` - Math and Random Utilities
 
-| Function                 | Description                                                |
-| ------------------------ | ---------------------------------------------------------- |
-| `math.pi()`              | Returns π                                                  |
-| `math.e()`               | Returns Euler's number e                                   |
-| `math.tau()`             | Returns τ (2π)                                             |
-| `math.inf()`             | Returns positive infinity                                  |
-| `math.nan()`             | Returns NaN                                                |
-| `math.abs(x)`            | Absolute value                                             |
-| `math.sign(x)`           | Sign of `x` as -1, 0, or 1                                 |
-| `math.min(a, b)`         | Smaller of two numbers                                     |
-| `math.max(a, b)`         | Larger of two numbers                                      |
-| `math.clamp(x, lo, hi)`  | Clamp value to a range                                     |
-| `math.floor(x)`          | Floor                                                      |
-| `math.ceil(x)`           | Ceiling                                                    |
-| `math.round(x)`          | Round to nearest integer value                             |
-| `math.trunc(x)`          | Truncate fractional part                                   |
-| `math.fract(x)`          | Fractional part                                            |
-| `math.sqrt(x)`           | Square root (`x` must be >= 0)                             |
-| `math.cbrt(x)`           | Cube root                                                  |
-| `math.pow(x, y)`         | `x` raised to `y`                                          |
-| `math.hypot(x, y)`       | Euclidean norm `sqrt(x*x + y*y)`                           |
-| `math.sin(x)`            | Sine (radians)                                             |
-| `math.cos(x)`            | Cosine (radians)                                           |
-| `math.tan(x)`            | Tangent (radians)                                          |
-| `math.asin(x)`           | Inverse sine (`x` in [-1, 1])                              |
-| `math.acos(x)`           | Inverse cosine (`x` in [-1, 1])                            |
-| `math.atan(x)`           | Inverse tangent                                            |
-| `math.atan2(y, x)`       | Inverse tangent with quadrant awareness                    |
-| `math.exp(x)`            | e^x                                                        |
-| `math.ln(x)`             | Natural log (`x` > 0)                                      |
-| `math.log2(x)`           | Base-2 log (`x` > 0)                                       |
-| `math.log10(x)`          | Base-10 log (`x` > 0)                                      |
-| `math.log(x, base)`      | Logarithm with custom base (`x` > 0, `base` > 0, `base` != 1) |
-| `math.lerp(a, b, t)`     | Linear interpolation between `a` and `b`                   |
-| `math.degrees(r)`        | Convert radians to degrees                                 |
-| `math.radians(d)`        | Convert degrees to radians                                 |
-| `math.is_finite(x)`      | Returns true if finite                                     |
-| `math.is_nan(x)`         | Returns true if NaN                                        |
-| `math.is_inf(x)`         | Returns true if infinite                                   |
-| `math.seed(n)`           | Seed RNG for deterministic random sequences                |
-| `math.rand_float()`      | Random float in [0.0, 1.0)                                 |
-| `math.rand_bool()`       | Random boolean (50/50)                                     |
-| `math.rand_int(a, b)`    | Random integer in [a, b] (inclusive)                       |
-| `math.rand_range(a, b)`  | Random float in [a, b)                                     |
+| Function                | Description                                                   |
+| ----------------------- | ------------------------------------------------------------- |
+| `math.pi()`             | Returns π                                                     |
+| `math.e()`              | Returns Euler's number e                                      |
+| `math.tau()`            | Returns τ (2π)                                                |
+| `math.inf()`            | Returns positive infinity                                     |
+| `math.nan()`            | Returns NaN                                                   |
+| `math.abs(x)`           | Absolute value                                                |
+| `math.sign(x)`          | Sign of `x` as -1, 0, or 1                                    |
+| `math.min(a, b)`        | Smaller of two numbers                                        |
+| `math.max(a, b)`        | Larger of two numbers                                         |
+| `math.clamp(x, lo, hi)` | Clamp value to a range                                        |
+| `math.floor(x)`         | Floor                                                         |
+| `math.ceil(x)`          | Ceiling                                                       |
+| `math.round(x)`         | Round to nearest integer value                                |
+| `math.trunc(x)`         | Truncate fractional part                                      |
+| `math.fract(x)`         | Fractional part                                               |
+| `math.sqrt(x)`          | Square root (`x` must be >= 0)                                |
+| `math.cbrt(x)`          | Cube root                                                     |
+| `math.pow(x, y)`        | `x` raised to `y`                                             |
+| `math.hypot(x, y)`      | Euclidean norm `sqrt(x*x + y*y)`                              |
+| `math.sin(x)`           | Sine (radians)                                                |
+| `math.cos(x)`           | Cosine (radians)                                              |
+| `math.tan(x)`           | Tangent (radians)                                             |
+| `math.asin(x)`          | Inverse sine (`x` in [-1, 1])                                 |
+| `math.acos(x)`          | Inverse cosine (`x` in [-1, 1])                               |
+| `math.atan(x)`          | Inverse tangent                                               |
+| `math.atan2(y, x)`      | Inverse tangent with quadrant awareness                       |
+| `math.exp(x)`           | e^x                                                           |
+| `math.ln(x)`            | Natural log (`x` > 0)                                         |
+| `math.log2(x)`          | Base-2 log (`x` > 0)                                          |
+| `math.log10(x)`         | Base-10 log (`x` > 0)                                         |
+| `math.log(x, base)`     | Logarithm with custom base (`x` > 0, `base` > 0, `base` != 1) |
+| `math.lerp(a, b, t)`    | Linear interpolation between `a` and `b`                      |
+| `math.degrees(r)`       | Convert radians to degrees                                    |
+| `math.radians(d)`       | Convert degrees to radians                                    |
+| `math.is_finite(x)`     | Returns true if finite                                        |
+| `math.is_nan(x)`        | Returns true if NaN                                           |
+| `math.is_inf(x)`        | Returns true if infinite                                      |
+| `math.seed(n)`          | Seed RNG for deterministic random sequences                   |
+| `math.rand_float()`     | Random float in [0.0, 1.0)                                    |
+| `math.rand_bool()`      | Random boolean (50/50)                                        |
+| `math.rand_int(a, b)`   | Random integer in [a, b] (inclusive)                          |
+| `math.rand_range(a, b)` | Random float in [a, b)                                        |
 
 **Example: Math + Random**
 
@@ -328,7 +329,7 @@ jit = ["cranelift-codegen", "cranelift-frontend", "cranelift-jit", "cranelift-mo
 
 The JIT compiler targets **hot integer range loops** that follow specific patterns. A loop becomes "hot" after 1000 iterations.
 
-**✅ JIT-Compatible Patterns:**
+**JIT-Compatible Patterns:**
 
 ```walrus
 // Pattern 1: Sum accumulation (acc += i)
@@ -362,7 +363,7 @@ for i in 0..n {
 }
 ```
 
-**❌ NOT JIT-Compatible (falls back to interpreter):**
+**NOT JIT-Compatible (falls back to interpreter):**
 
 ```walrus
 // Function calls inside loop
@@ -759,7 +760,7 @@ Run it with:
 cargo run -- showcase.walrus
 ```
 
-## 🤝 Contributing
+## Contributing
 
 Contributions are welcome! Areas of interest:
 
@@ -770,11 +771,11 @@ Contributions are welcome! Areas of interest:
 
 Please check our [issue tracker](https://github.com/sb2bg/walrus/issues) for open tasks.
 
-## 📜 License
+## License
 
 Walrus is licensed under the MIT License. See [LICENSE](LICENSE) for details.
 
-## 🙏 Acknowledgments
+## Acknowledgments
 
 Built with:
 
