@@ -1,0 +1,16 @@
+let answer = 42;
+
+fn list_len : items {
+    return core.len(items);
+}
+
+struct Counter {
+    fn init : self, text {
+        self.length = core.len(text);
+    }
+}
+
+fn parse_len : text {
+    let counter = Counter(text);
+    return counter.length;
+}
