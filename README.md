@@ -57,17 +57,23 @@ Walrus is a dynamically-typed, interpreted programming language that combines si
 - **String Interning**: Via `strena` for deduplicated string storage
 - **Custom Allocator**: `mimalloc` for improved allocation performance
 
-### Built-in Functions
+### `std/core` Functions
 
 | Function              | Description                         |
 | --------------------- | ----------------------------------- |
-| `len(x)`              | Get length of string, list, dict, or module |
-| `str(x)`              | Convert value to string             |
-| `type(x)`             | Get type name of a value            |
-| `input(prompt)`       | Read user input with prompt         |
-| `__gc__()`            | Manually trigger garbage collection |
-| `__heap_stats__()`    | Get heap statistics as a dict       |
-| `__gc_threshold__(n)` | Configure GC allocation threshold   |
+| `core.len(x)`         | Get length of string, list, dict, or module |
+| `core.str(x)`         | Convert value to string             |
+| `core.type(x)`        | Get type name of a value            |
+| `core.input(prompt)`  | Read user input with prompt         |
+| `core.gc()`           | Manually trigger garbage collection (VM mode) |
+| `core.heap_stats()`   | Get heap statistics as a dict (VM mode) |
+| `core.gc_threshold(n)`| Configure GC allocation threshold (VM mode) |
+
+Import it with:
+
+```walrus
+import "std/core" as core;
+```
 
 ### Standard Library
 
@@ -77,6 +83,7 @@ Walrus provides a standard library through an import system. Modules are importe
 import "std/io";
 import "std/sys" as system;
 import "std/math";
+import "std/core";
 ```
 
 ### Package Imports (`@name`)
@@ -185,6 +192,7 @@ io.file_close(reader);
 
 ```walrus
 import "std/sys";
+import "std/core" as core;
 
 // Environment variables
 let home = sys.env_get("HOME");
@@ -195,7 +203,7 @@ if home != void {
 // Command line arguments
 let args = sys.args();
 println(f"Program: {args[0]}");
-if len(args) > 1 {
+if core.len(args) > 1 {
     println(f"Arguments: {args[1..]}");
 }
 
@@ -203,7 +211,7 @@ if len(args) > 1 {
 println(f"Working directory: {sys.cwd()}");
 
 // Exit with status
-if len(args) < 2 {
+if core.len(args) < 2 {
     println("Usage: walrus script.walrus <args>");
     sys.exit(1);
 }
@@ -473,9 +481,9 @@ Then open `vscode/walrus` in VS Code and press `F5` to launch an Extension Devel
 Open any `.walrus` file to get:
 
 - Parse diagnostics
-- Rich hover for symbols, keywords, and builtins
-- Scoped completion (locals, functions, structs, modules, builtins, keywords)
-- Signature help for function and builtin calls
+- Rich hover for symbols, keywords, and standard library APIs
+- Scoped completion (locals, functions, structs, modules, keywords)
+- Signature help for function and standard library calls
 - Document symbols (nested outline)
 - Go-to-definition
 - Find references
@@ -520,6 +528,8 @@ let data = {"key": "value", "count": 10};
 ### Format Strings
 
 ```walrus
+import "std/core" as core;
+
 let name = "Alice";
 let age = 30;
 let score = 95.5;
@@ -535,7 +545,7 @@ println(f"Next year you'll be {age + 1}");
 
 // Complex expressions
 let items = [1, 2, 3];
-println(f"List has {len(items)} items: {items}");
+println(f"List has {core.len(items)} items: {items}");
 println(f"Score: {score * 100 / 100}%");
 ```
 
@@ -637,8 +647,10 @@ for n in 1..101 {
 ### Quicksort Example
 
 ```walrus
+import "std/core" as core;
+
 fn quicksort : arr {
-        if len(arr) <= 1 {
+        if core.len(arr) <= 1 {
                 return arr;
         }
 
@@ -692,8 +704,8 @@ The mark-and-sweep GC traces from roots and frees unreachable objects:
 - **Root Collection**: Stack, locals, globals, and constants are all roots
 - **Configurable Thresholds**: Default 1024 allocations or 8MB estimated memory
 - **Memory Estimation**: Tracks approximate bytes for lists, dicts, functions, etc.
-- **Statistics Tracking**: Total bytes freed, collection count available via `__heap_stats__()`
-- **Manual Trigger**: `__gc__()` builtin for explicit collection
+- **Statistics Tracking**: Total bytes freed, collection count available via `core.heap_stats()`
+- **Manual Trigger**: `core.gc()` for explicit collection
 
 ### Memory Management
 
