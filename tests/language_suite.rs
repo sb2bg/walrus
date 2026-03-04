@@ -1,7 +1,8 @@
 use std::fmt::Write as _;
 use std::fs;
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ExecMode {
@@ -42,6 +43,8 @@ struct Case {
     expectation: Expectation,
     modes: Vec<ExecMode>,
     expected_exit_code: Option<i32>,
+    env_vars: Vec<(String, String)>,
+    stdin_bytes: Option<Vec<u8>>,
 }
 
 #[test]
@@ -157,6 +160,8 @@ fn load_case(fixtures_root: &Path, program: &Path, is_pass: bool) -> Case {
 
     let modes = read_modes(program);
     let expected_exit_code = read_exit_code(program);
+    let env_vars = read_env_vars(program);
+    let stdin_bytes = read_stdin(program);
 
     let relative = program.strip_prefix(fixtures_root).unwrap_or_else(|_| {
         panic!(
@@ -172,6 +177,8 @@ fn load_case(fixtures_root: &Path, program: &Path, is_pass: bool) -> Case {
         expectation,
         modes,
         expected_exit_code,
+        env_vars,
+        stdin_bytes,
     }
 }
 
@@ -251,8 +258,64 @@ fn read_exit_code(program: &Path) -> Option<i32> {
     Some(code)
 }
 
+fn read_env_vars(program: &Path) -> Vec<(String, String)> {
+    let env_path = program.with_extension("env");
+    if !env_path.exists() {
+        return Vec::new();
+    }
+
+    let text = fs::read_to_string(&env_path)
+        .unwrap_or_else(|err| panic!("failed to read env file '{}': {err}", env_path.display()));
+
+    let mut pairs = Vec::new();
+
+    for (line_number, raw_line) in text.lines().enumerate() {
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+
+        let (raw_key, raw_value) = line.split_once('=').unwrap_or_else(|| {
+            panic!(
+                "invalid env line {} in '{}'; expected KEY=VALUE",
+                line_number + 1,
+                env_path.display()
+            )
+        });
+
+        let key = raw_key.trim();
+        if key.is_empty() {
+            panic!(
+                "invalid env line {} in '{}'; key cannot be empty",
+                line_number + 1,
+                env_path.display()
+            );
+        }
+
+        pairs.push((key.to_string(), raw_value.to_string()));
+    }
+
+    pairs
+}
+
+fn read_stdin(program: &Path) -> Option<Vec<u8>> {
+    let stdin_path = program.with_extension("stdin");
+    if !stdin_path.exists() {
+        return None;
+    }
+
+    let bytes = fs::read(&stdin_path).unwrap_or_else(|err| {
+        panic!(
+            "failed to read stdin fixture '{}': {err}",
+            stdin_path.display()
+        )
+    });
+
+    Some(bytes)
+}
+
 fn run_case(case: &Case, mode: ExecMode) -> Result<(), String> {
-    let output = run_program(&case.program, mode)
+    let output = run_program(case, mode)
         .map_err(|err| format!("{} [{}]: {err}", case.name, mode.label()))?;
 
     let stdout = normalize(&String::from_utf8_lossy(&output.stdout));
@@ -321,22 +384,61 @@ fn run_case(case: &Case, mode: ExecMode) -> Result<(), String> {
     Ok(())
 }
 
-fn run_program(program: &Path, mode: ExecMode) -> Result<Output, String> {
+fn run_program(case: &Case, mode: ExecMode) -> Result<Output, String> {
     let mut command = Command::new(env!("CARGO_BIN_EXE_walrus"));
     command.current_dir(repo_root());
-    command.arg(program);
+    command.arg(&case.program);
 
     for arg in mode.cli_args() {
         command.arg(arg);
     }
 
-    command.output().map_err(|err| {
-        format!(
-            "failed to execute '{}' for '{}': {err}",
-            env!("CARGO_BIN_EXE_walrus"),
-            program.display()
-        )
-    })
+    for (key, value) in &case.env_vars {
+        command.env(key, value);
+    }
+
+    if let Some(stdin_bytes) = &case.stdin_bytes {
+        command.stdin(Stdio::piped());
+        command.stdout(Stdio::piped());
+        command.stderr(Stdio::piped());
+        let mut child = command.spawn().map_err(|err| {
+            format!(
+                "failed to spawn '{}' for '{}': {err}",
+                env!("CARGO_BIN_EXE_walrus"),
+                case.program.display()
+            )
+        })?;
+
+        if let Some(mut child_stdin) = child.stdin.take() {
+            child_stdin.write_all(stdin_bytes).map_err(|err| {
+                format!(
+                    "failed to write stdin for '{}': {err}",
+                    case.program.display()
+                )
+            })?;
+        } else {
+            return Err(format!(
+                "stdin pipe was not available for '{}'",
+                case.program.display()
+            ));
+        }
+
+        child.wait_with_output().map_err(|err| {
+            format!(
+                "failed to execute '{}' for '{}': {err}",
+                env!("CARGO_BIN_EXE_walrus"),
+                case.program.display()
+            )
+        })
+    } else {
+        command.output().map_err(|err| {
+            format!(
+                "failed to execute '{}' for '{}': {err}",
+                env!("CARGO_BIN_EXE_walrus"),
+                case.program.display()
+            )
+        })
+    }
 }
 
 fn format_exit_code(code: Option<i32>) -> String {

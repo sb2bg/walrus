@@ -139,21 +139,39 @@ pub fn file_read_line(handle: i64, _span: Span) -> WalrusResult<Option<String>> 
     FILE_TABLE.with(|table| {
         let mut table = table.borrow_mut();
         if let Some(entry) = table.get_mut(handle) {
-            use std::io::BufRead;
-            let mut reader = std::io::BufReader::new(&entry.file);
-            let mut line = String::new();
-            match reader.read_line(&mut line) {
-                Ok(0) => Ok(None), // EOF
-                Ok(_) => {
-                    // Remove trailing newline
-                    if line.ends_with('\n') {
-                        line.pop();
-                        if line.ends_with('\r') {
-                            line.pop();
+            // Read byte-by-byte so repeated calls preserve exact file cursor semantics.
+            let mut bytes = Vec::new();
+            let mut buf = [0u8; 1];
+
+            loop {
+                match entry.file.read(&mut buf) {
+                    Ok(0) => {
+                        if bytes.is_empty() {
+                            return Ok(None); // EOF with no data
                         }
+                        break;
                     }
-                    Ok(Some(line))
+                    Ok(_) => {
+                        if buf[0] == b'\n' {
+                            break;
+                        }
+                        bytes.push(buf[0]);
+                    }
+                    Err(e) => {
+                        return Err(WalrusError::FileReadLineFailed {
+                            handle,
+                            reason: e.to_string(),
+                        });
+                    }
                 }
+            }
+
+            if bytes.last().copied() == Some(b'\r') {
+                bytes.pop();
+            }
+
+            match String::from_utf8(bytes) {
+                Ok(line) => Ok(Some(line)),
                 Err(e) => Err(WalrusError::FileReadLineFailed {
                     handle,
                     reason: e.to_string(),

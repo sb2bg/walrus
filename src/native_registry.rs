@@ -959,3 +959,84 @@ fn native_math_rand_range(vm: &mut VM<'_>, args: &[Value], span: Span) -> Walrus
         min, max, span,
     )?)))
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::collections::HashSet;
+
+    use super::*;
+
+    #[test]
+    fn native_specs_are_unique_and_well_formed() {
+        let mut ids = HashSet::new();
+        let mut module_names = HashSet::new();
+
+        for spec in NATIVE_SPECS {
+            assert!(
+                ids.insert(spec.id),
+                "duplicate native function id detected: {:?}",
+                spec.id
+            );
+            assert!(
+                module_names.insert((spec.module, spec.name)),
+                "duplicate native function name detected: {}/{}",
+                spec.module,
+                spec.name
+            );
+            assert_eq!(
+                spec.arity,
+                spec.params.len(),
+                "arity mismatch for {}/{}",
+                spec.module,
+                spec.name
+            );
+            assert!(
+                !spec.docs.trim().is_empty(),
+                "missing docs for {}/{}",
+                spec.module,
+                spec.name
+            );
+            assert!(
+                spec.module.starts_with("std/"),
+                "unexpected module prefix for {}/{}",
+                spec.module,
+                spec.name
+            );
+        }
+    }
+
+    #[test]
+    fn module_lookup_matches_registered_specs() {
+        let mut expected_by_module: HashMap<&str, Vec<NativeFunction>> = HashMap::new();
+        for spec in NATIVE_SPECS {
+            expected_by_module
+                .entry(spec.module)
+                .or_default()
+                .push(spec.id);
+        }
+
+        for (module, expected_fns) in expected_by_module {
+            let actual = module_functions(module)
+                .unwrap_or_else(|| panic!("module '{module}' should have registered functions"));
+            assert_eq!(
+                actual.len(),
+                expected_fns.len(),
+                "function count mismatch for module '{module}'"
+            );
+
+            for expected in expected_fns {
+                assert!(
+                    actual.contains(&expected),
+                    "module '{module}' missing function {:?}",
+                    expected
+                );
+            }
+        }
+
+        assert!(
+            module_functions("std/unknown").is_none(),
+            "unknown module unexpectedly returned functions"
+        );
+    }
+}
