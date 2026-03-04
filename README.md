@@ -760,6 +760,10 @@ Run it with:
 cargo run -- showcase.walrus
 ```
 
+Additional example projects:
+
+- `examples/json_parser/` - A simple recursive-descent JSON parser project in Walrus.
+
 ## Contributing
 
 Contributions are welcome! Areas of interest:

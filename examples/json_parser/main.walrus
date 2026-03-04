@@ -1,0 +1,387 @@
+import "std/io";
+import "std/sys" as sys;
+
+fn fail : state, message {
+    let index = state["index"];
+    throw f"JSON parse error at index {index}: {message}";
+    return void;
+}
+
+fn is_eof : state {
+    return state["index"] >= state["length"];
+}
+
+fn peek : state {
+    return state["source"][state["index"]];
+}
+
+fn advance : state {
+    state["index"] = state["index"] + 1;
+}
+
+fn skip_whitespace : state {
+    while is_eof(state) == false {
+        let ch = peek(state);
+        if ch == " " or ch == "\n" or ch == "\r" or ch == "\t" {
+            advance(state);
+        } else {
+            break;
+        }
+    }
+}
+
+fn digit_value : ch {
+    if ch == "0" {
+        return 0;
+    }
+    if ch == "1" {
+        return 1;
+    }
+    if ch == "2" {
+        return 2;
+    }
+    if ch == "3" {
+        return 3;
+    }
+    if ch == "4" {
+        return 4;
+    }
+    if ch == "5" {
+        return 5;
+    }
+    if ch == "6" {
+        return 6;
+    }
+    if ch == "7" {
+        return 7;
+    }
+    if ch == "8" {
+        return 8;
+    }
+    if ch == "9" {
+        return 9;
+    }
+
+    return -1;
+}
+
+fn is_digit : ch {
+    return digit_value(ch) >= 0;
+}
+
+fn consume_literal : state, expected {
+    let saved_index = state["index"];
+    let i = 0;
+    let expected_len = core.len(expected);
+
+    while i < expected_len {
+        if is_eof(state) {
+            state["index"] = saved_index;
+            return false;
+        }
+
+        if peek(state) != expected[i] {
+            state["index"] = saved_index;
+            return false;
+        }
+
+        advance(state);
+        i = i + 1;
+    }
+
+    return true;
+}
+
+fn parse_digits : state {
+    let saw_digit = false;
+    let value = 0;
+
+    while is_eof(state) == false {
+        let digit = digit_value(peek(state));
+        if digit < 0 {
+            break;
+        }
+
+        saw_digit = true;
+        value = value * 10 + digit;
+        advance(state);
+    }
+
+    if saw_digit == false {
+        fail(state, "expected a number");
+    }
+
+    return value;
+}
+
+fn parse_fraction : state {
+    let saw_digit = false;
+    let value = 0.0;
+    let place = 0.1;
+
+    while is_eof(state) == false {
+        let digit = digit_value(peek(state));
+        if digit < 0 {
+            break;
+        }
+
+        saw_digit = true;
+        value = value + digit * place;
+        place = place / 10.0;
+        advance(state);
+    }
+
+    if saw_digit == false {
+        fail(state, "expected digits after decimal point");
+    }
+
+    return value;
+}
+
+fn parse_number : state {
+    let sign = 1;
+
+    if peek(state) == "-" {
+        sign = -1;
+        advance(state);
+    }
+
+    let int_part = parse_digits(state);
+    let value = int_part * sign;
+
+    if is_eof(state) == false and peek(state) == "." {
+        advance(state);
+        let frac_part = parse_fraction(state);
+        value = value + frac_part * sign;
+    }
+
+    return value;
+}
+
+fn parse_string : state {
+    if is_eof(state) or peek(state) != "\"" {
+        fail(state, "expected string");
+    }
+
+    advance(state);
+    let out = "";
+
+    while true {
+        if is_eof(state) {
+            fail(state, "unterminated string");
+        }
+
+        let ch = peek(state);
+        advance(state);
+
+        if ch == "\"" {
+            break;
+        }
+
+        if ch == "\\" {
+            if is_eof(state) {
+                fail(state, "unterminated escape sequence");
+            }
+
+            let esc = peek(state);
+            advance(state);
+
+            if esc == "\"" {
+                out = out + "\"";
+            } else if esc == "\\" {
+                out = out + "\\";
+            } else if esc == "/" {
+                out = out + "/";
+            } else if esc == "n" {
+                out = out + "\n";
+            } else if esc == "r" {
+                out = out + "\r";
+            } else if esc == "t" {
+                out = out + "\t";
+            } else {
+                fail(state, "unsupported escape: \\" + esc);
+            }
+        } else {
+            out = out + ch;
+        }
+    }
+
+    return out;
+}
+
+fn parse_array : state {
+    if is_eof(state) or peek(state) != "[" {
+        fail(state, "expected '['");
+    }
+
+    advance(state);
+    skip_whitespace(state);
+
+    let items = [];
+
+    if is_eof(state) == false and peek(state) == "]" {
+        advance(state);
+        return items;
+    }
+
+    while true {
+        let value = parse_value(state);
+        items = items + [value];
+
+        skip_whitespace(state);
+        if is_eof(state) {
+            fail(state, "unterminated array");
+        }
+
+        let ch = peek(state);
+        if ch == "," {
+            advance(state);
+            skip_whitespace(state);
+        } else if ch == "]" {
+            advance(state);
+            break;
+        } else {
+            fail(state, "expected ',' or ']' in array");
+        }
+    }
+
+    return items;
+}
+
+fn parse_object : state {
+    if is_eof(state) or peek(state) != "{" {
+        fail(state, "expected '{'");
+    }
+
+    advance(state);
+    skip_whitespace(state);
+
+    let obj = {};
+
+    if is_eof(state) == false and peek(state) == "}" {
+        advance(state);
+        return obj;
+    }
+
+    while true {
+        if is_eof(state) or peek(state) != "\"" {
+            fail(state, "expected string key in object");
+        }
+
+        let key = parse_string(state);
+        skip_whitespace(state);
+
+        if is_eof(state) or peek(state) != ":" {
+            fail(state, "expected ':' after object key");
+        }
+
+        advance(state);
+        skip_whitespace(state);
+
+        obj[key] = parse_value(state);
+
+        skip_whitespace(state);
+        if is_eof(state) {
+            fail(state, "unterminated object");
+        }
+
+        let ch = peek(state);
+        if ch == "," {
+            advance(state);
+            skip_whitespace(state);
+        } else if ch == "}" {
+            advance(state);
+            break;
+        } else {
+            fail(state, "expected ',' or '}' in object");
+        }
+    }
+
+    return obj;
+}
+
+fn parse_value : state {
+    skip_whitespace(state);
+
+    if is_eof(state) {
+        fail(state, "expected a JSON value");
+    }
+
+    let ch = peek(state);
+
+    if ch == "{" {
+        return parse_object(state);
+    }
+
+    if ch == "[" {
+        return parse_array(state);
+    }
+
+    if ch == "\"" {
+        return parse_string(state);
+    }
+
+    if ch == "t" {
+        if consume_literal(state, "true") {
+            return true;
+        }
+        fail(state, "invalid literal");
+    }
+
+    if ch == "f" {
+        if consume_literal(state, "false") {
+            return false;
+        }
+        fail(state, "invalid literal");
+    }
+
+    if ch == "n" {
+        if consume_literal(state, "null") {
+            return void;
+        }
+        fail(state, "invalid literal");
+    }
+
+    if ch == "-" or is_digit(ch) {
+        return parse_number(state);
+    }
+
+    fail(state, "unexpected token: " + ch);
+}
+
+fn parse_json : text {
+    let state = {
+        "source": text,
+        "index": 0,
+        "length": core.len(text),
+    };
+
+    let value = parse_value(state);
+    skip_whitespace(state);
+
+    if is_eof(state) == false {
+        fail(state, "unexpected trailing characters");
+    }
+
+    return value;
+}
+
+let raw = io.read_file("examples/json_parser/sample.json");
+let parsed = parse_json(raw);
+
+println("Parsed JSON value:");
+println(parsed);
+println("");
+
+let maintainer = parsed["maintainer"];
+println("Project: " + parsed["project"]);
+println("Version: " + core.str(parsed["version"]));
+println("First feature: " + parsed["features"][0]);
+println("Maintainer: " + maintainer["name"]);
+println("Maintainer active: " + core.str(maintainer["active"]));
+println("Maintainer contact email: " + maintainer["contact"]["email"]);
+println("Maintainer contact phone: " + maintainer["contact"]["phone"]);
+
+println("");
+let inline = "{\"nums\": [1, 2, 3], \"ok\": true, \"missing\": null}";
+println(f"Inline JSON value: {parse_json(inline)}");

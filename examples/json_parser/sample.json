@@ -1,0 +1,17 @@
+{
+  "project": "walrus-json-demo",
+  "version": 1.0,
+  "features": ["objects", "arrays", "numbers", "strings", "booleans", "null"],
+  "maintainer": {
+    "name": "Sullivan",
+    "active": true,
+    "contact": {
+      "email": "email@example.com",
+      "phone": "+1234567890"
+    }
+  },
+  "meta": {
+    "stars": 42,
+    "quality": "stable"
+  }
+}
