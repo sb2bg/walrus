@@ -1,0 +1,3 @@
+let d = {"outer": {"inner": 7}};
+
+println(f"value={d["outer"]["inner"]}");

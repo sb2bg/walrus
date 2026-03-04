@@ -1,0 +1,10 @@
+let d = {};
+d[1] = "int";
+d["1"] = "string";
+
+println(d[1]);
+println(d["1"]);
+
+d[1] = "int-updated";
+println(d[1]);
+println(core.len(d));

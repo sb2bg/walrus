@@ -1,0 +1,10 @@
+let counter = 0;
+
+fn get : {
+    return counter;
+}
+
+fn inc : {
+    counter = counter + 1;
+    return counter;
+}

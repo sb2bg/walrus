@@ -1,0 +1,4 @@
+let data = {"project": "walrus", "meta": {"n": 2}};
+
+println(f"{ data [ "project" ] }");
+println(f"{ data [ "meta" ] [ "n" ] }");

@@ -1,0 +1,6 @@
+let minus = -1;
+
+println("é"[0]);
+println("é"[minus]);
+println("🙂x"[0]);
+println("🙂x"[minus]);

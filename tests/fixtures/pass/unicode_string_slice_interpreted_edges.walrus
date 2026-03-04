@@ -1,0 +1,7 @@
+let s = "é🙂z";
+let hi = -1;
+
+println(s[0..0]);
+println(s[1..1]);
+println(s[0..1]);
+println(s[2..hi]);

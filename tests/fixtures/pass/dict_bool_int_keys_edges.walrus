@@ -1,0 +1,8 @@
+let data = {0: "zero", false: "false", 1: "one", true: "true"};
+
+println(data[0]);
+println(data[false]);
+println(data[1]);
+println(data[true]);
+println(data[0] != data[false]);
+println(data[1] != data[true]);

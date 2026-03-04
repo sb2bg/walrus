@@ -1,0 +1,15 @@
+let sum = 0;
+
+for i in 0..5 {
+    try {
+        if i == 2 {
+            throw "skip";
+        }
+
+        sum = sum + i;
+    } catch err {
+        sum = sum + 100;
+    };
+}
+
+println(sum);

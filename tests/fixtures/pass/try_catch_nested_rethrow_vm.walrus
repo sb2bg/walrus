@@ -1,0 +1,15 @@
+fn explode : {
+    throw "boom";
+}
+
+try {
+    try {
+        explode();
+    } catch inner {
+        throw inner + "!";
+    };
+} catch outer {
+    println(outer);
+};
+
+println("done");
