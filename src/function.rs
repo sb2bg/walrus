@@ -69,6 +69,7 @@ impl NodeFunction {
 pub struct VmModuleBinding {
     pub module_key: DictKey,
     pub global_names: Rc<Vec<String>>,
+    pub global_values: Rc<Vec<Value>>,
     pub source: Rc<String>,
     pub filename: Rc<String>,
 }

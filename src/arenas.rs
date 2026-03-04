@@ -93,6 +93,9 @@ impl ValueHolder {
                 // Exported module functions keep a module dictionary binding.
                 if let Some(binding) = vm_fn.module_binding {
                     self.mark(Value::Module(binding.module_key));
+                    for value in binding.global_values.iter().copied() {
+                        self.mark(value);
+                    }
                 }
             }
             WalrusFunction::TreeWalk(node_fn) => {

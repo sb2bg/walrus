@@ -324,7 +324,15 @@ impl<'a> VM<'a> {
 
             let key = Value::String(self.get_heap_mut().push_ident(name));
             let module = self.get_heap().get_module(binding.module_key)?;
-            Ok(module.get(&key).copied().unwrap_or(Value::Void))
+            if let Some(value) = module.get(&key).copied() {
+                return Ok(value);
+            }
+
+            Ok(binding
+                .global_values
+                .get(index)
+                .copied()
+                .unwrap_or(Value::Void))
         } else {
             self.globals
                 .get(index)
@@ -353,8 +361,49 @@ impl<'a> VM<'a> {
         }
     }
 
+    fn bind_exported_value_to_module(
+        &mut self,
+        value: Value,
+        binding: &Rc<VmModuleBinding>,
+    ) -> WalrusResult<Value> {
+        match value {
+            Value::Function(func_key) => {
+                let function = self.get_heap().get_function(func_key)?.clone();
+                match function {
+                    WalrusFunction::Vm(mut vm_func) => {
+                        vm_func.module_binding = Some(binding.clone());
+                        Ok(self
+                            .get_heap_mut()
+                            .push(HeapValue::Function(WalrusFunction::Vm(vm_func))))
+                    }
+                    _ => Ok(value),
+                }
+            }
+            Value::StructDef(struct_key) => {
+                let original = self.get_heap().get_struct_def(struct_key)?.clone();
+                let mut rebound =
+                    crate::structs::StructDefinition::new(original.name().to_string());
+
+                for (method_name, method_fn) in original.methods() {
+                    let bound_method = match method_fn.clone() {
+                        WalrusFunction::Vm(mut vm_func) => {
+                            vm_func.module_binding = Some(binding.clone());
+                            WalrusFunction::Vm(vm_func)
+                        }
+                        other => other,
+                    };
+                    rebound.add_method(method_name.clone(), bound_method);
+                }
+
+                Ok(self.get_heap_mut().push(HeapValue::StructDef(rebound)))
+            }
+            _ => Ok(value),
+        }
+    }
+
     pub fn export_globals_as_module(&mut self) -> WalrusResult<Value> {
         let global_names = self.global_names.clone();
+        let global_values = self.globals.clone();
         let mut exports = FxHashMap::default();
 
         for (index, name) in global_names.iter().enumerate() {
@@ -379,12 +428,13 @@ impl<'a> VM<'a> {
         let binding = Rc::new(VmModuleBinding {
             module_key,
             global_names: Rc::new(global_names),
+            global_values: Rc::new(global_values),
             source: Rc::new(self.source_ref.source().to_string()),
             filename: Rc::new(self.source_ref.filename().to_string()),
         });
 
-        // Rebind exported VM functions so global accesses resolve against this module,
-        // not the importing VM's global vector.
+        // Rebind exported values that contain VM functions so global accesses
+        // resolve against this module, not the importing VM's global vector.
         let names = binding.global_names.clone();
         for name in names.iter() {
             if name == "_" {
@@ -397,27 +447,11 @@ impl<'a> VM<'a> {
                 module.get(&key).copied()
             };
 
-            let Some(Value::Function(func_key)) = entry_value else {
+            let Some(entry_value) = entry_value else {
                 continue;
             };
 
-            let maybe_bound = {
-                let function = self.get_heap().get_function(func_key)?.clone();
-                match function {
-                    WalrusFunction::Vm(mut vm_func) => {
-                        vm_func.module_binding = Some(binding.clone());
-                        Some(
-                            self.get_heap_mut()
-                                .push(HeapValue::Function(WalrusFunction::Vm(vm_func))),
-                        )
-                    }
-                    _ => None,
-                }
-            };
-
-            let Some(bound_value) = maybe_bound else {
-                continue;
-            };
+            let bound_value = self.bind_exported_value_to_module(entry_value, &binding)?;
 
             let key = Value::String(self.get_heap_mut().push_ident(name));
             self.get_heap_mut()
