@@ -8,4 +8,4 @@ git config core.hooksPath .githooks
 
 Installed hooks:
 
-- `pre-commit`: runs `cargo fmt --all` and re-stages `.rs` files.
+- `pre-commit`: runs `cargo fmt --all` and re-stages only `.rs` files that were already staged before formatting.
