@@ -24,12 +24,16 @@ jobs:
         run: |
           set -euo pipefail
 
-          current_version=$(awk -F '"' '/^version\s*=\s*"/{print $2; exit}' Cargo.toml)
+          current_version=$(awk -F '"' '/^version[[:space:]]*=[[:space:]]*"/{print $2; exit}' Cargo.toml)
+          if [[ -z "${current_version}" ]]; then
+            echo "::error::Could not parse current package version from Cargo.toml"
+            exit 1
+          fi
           previous_version=""
 
           if git rev-parse --verify HEAD^ >/dev/null 2>&1; then
             if git show HEAD^:Cargo.toml >/tmp/previous_cargo_toml 2>/dev/null; then
-              previous_version=$(awk -F '"' '/^version\s*=\s*"/{print $2; exit}' /tmp/previous_cargo_toml)
+              previous_version=$(awk -F '"' '/^version[[:space:]]*=[[:space:]]*"/{print $2; exit}' /tmp/previous_cargo_toml)
             fi
           fi
 
