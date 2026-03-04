@@ -1,0 +1,16 @@
+fn explode : x {
+    if x == 0 {
+        throw "boom";
+    }
+    return x;
+}
+
+println("start");
+try {
+    println("before");
+    explode(0);
+    println("after");
+} catch err {
+    println(err);
+};
+println("done");
