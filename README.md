@@ -1,6 +1,10 @@
 <div align="center">
     <img src=".github/logo_alt.png" alt="Walrus Logo" width="200">
     <h1>🦭 Walrus Programming Language</h1>
+    <p>
+        <a href="https://github.com/sb2bg/walrus/actions/workflows/build.yml"><img src="https://github.com/sb2bg/walrus/actions/workflows/build.yml/badge.svg?branch=master" alt="Build"></a>
+        <a href="https://github.com/sb2bg/walrus/actions/workflows/test.yml"><img src="https://github.com/sb2bg/walrus/actions/workflows/test.yml/badge.svg?branch=master" alt="Test"></a>
+    </p>
 </div>
 
 A fast, expressive programming language with a clean syntax and powerful features, built in Rust.
@@ -371,6 +375,13 @@ git clone https://github.com/sb2bg/walrus.git
 cd walrus
 cargo build --release
 ```
+
+## Releases
+
+Releases are automated from GitHub Actions:
+
+- When `Cargo.toml`'s `version` changes on `master`, the `Release` workflow creates a GitHub release with tag `v<version>`.
+- If the version did not change (or the tag already exists), the workflow exits without creating a release.
 
 ### Run
 
