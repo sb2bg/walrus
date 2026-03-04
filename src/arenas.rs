@@ -81,6 +81,30 @@ pub struct ValueHolder {
 }
 
 impl ValueHolder {
+    fn trace_function_contents(&mut self, function: WalrusFunction) {
+        match function {
+            WalrusFunction::Vm(vm_fn) => {
+                // Function bytecode constants can hold heap values (for example strings/lists).
+                // They must stay alive while the function object is reachable.
+                for constant in vm_fn.code.constants.iter().copied() {
+                    self.mark(constant);
+                }
+
+                // Exported module functions keep a module dictionary binding.
+                if let Some(binding) = vm_fn.module_binding {
+                    self.mark(Value::Module(binding.module_key));
+                }
+            }
+            WalrusFunction::TreeWalk(node_fn) => {
+                // Closures keep captured values alive.
+                for captured in node_fn.captures.values().copied() {
+                    self.mark(captured);
+                }
+            }
+            WalrusFunction::Rust(_) | WalrusFunction::Native(_) => {}
+        }
+    }
+
     pub fn new() -> Self {
         Self {
             dicts: DenseSlotMap::with_key(),
@@ -237,7 +261,20 @@ impl ValueHolder {
                     self.mark(value);
                 }
             }
-            // Functions, struct defs, and primitives don't contain traceable values
+            Value::Function(key) => {
+                if let Some(func) = self.functions.get(key).cloned() {
+                    self.trace_function_contents(func);
+                }
+            }
+            Value::StructDef(key) => {
+                if let Some(def) = self.struct_defs.get(key) {
+                    let methods: Vec<WalrusFunction> = def.methods().values().cloned().collect();
+                    for method in methods {
+                        self.trace_function_contents(method);
+                    }
+                }
+            }
+            // Primitives don't contain traceable values
             _ => {}
         }
     }

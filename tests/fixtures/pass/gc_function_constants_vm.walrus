@@ -1,0 +1,21 @@
+core.gc_threshold(10);
+
+fn make_message : {
+    return "still alive";
+}
+
+struct Banner {
+    fn text : self {
+        return "struct method alive";
+    }
+}
+
+let i = 0;
+while i < 500 {
+    let junk = [i, i + 1, i + 2, i + 3];
+    i += 1;
+}
+
+println(make_message());
+let b = Banner();
+println(b.text());
