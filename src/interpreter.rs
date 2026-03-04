@@ -94,6 +94,9 @@ impl<'a> Interpreter<'a> {
             NodeKind::Free(value) => Ok(self.visit_free(*value)?),
             NodeKind::FunctionCall(value, args) => Ok(self.visit_fn_call(*value, args, span)?),
             NodeKind::Index(value, index) => Ok(self.visit_index(*value, *index)?),
+            NodeKind::MemberAccess(value, member) => {
+                Ok(self.visit_member_access(*value, member, span)?)
+            }
             NodeKind::ModuleImport(name, as_name) => Ok(self.visit_module_import(name, as_name)?),
             NodeKind::PackageImport(name, as_name) => Ok(self.visit_package_import(name, as_name)?),
             NodeKind::For(var, iter, body) => Ok(self.visit_for(var, *iter, *body)?),
@@ -705,6 +708,40 @@ impl<'a> Interpreter<'a> {
             _ => Err(WalrusError::NotIndexable {
                 value: value.get_type().to_string(),
                 span: value_span,
+                src: self.source_ref.source().into(),
+                filename: self.source_ref.filename().into(),
+            }),
+        }
+    }
+
+    fn visit_member_access(
+        &mut self,
+        value: Node,
+        member: String,
+        span: Span,
+    ) -> InterpreterResult {
+        let object = self.interpret(value)?;
+        let member_key = HeapValue::String(&member).alloc();
+
+        match object {
+            Value::Dict(dict_key) => {
+                let dict = dict_key.resolve()?;
+                if let Some(found) = dict.get(&member_key).copied() {
+                    Ok(found)
+                } else {
+                    Err(WalrusError::MemberNotFound {
+                        type_name: "module/dict".to_string(),
+                        member,
+                        span,
+                        src: self.source_ref.source().into(),
+                        filename: self.source_ref.filename().into(),
+                    })
+                }
+            }
+            other => Err(WalrusError::InvalidMemberAccessTarget {
+                object_type: other.get_type().to_string(),
+                member_type: "string".to_string(),
+                span,
                 src: self.source_ref.source().into(),
                 filename: self.source_ref.filename().into(),
             }),

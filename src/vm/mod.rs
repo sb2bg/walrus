@@ -2647,13 +2647,71 @@ impl<'a> VM<'a> {
                             let dict = self.get_heap().get_dict(key)?;
 
                             if let Some(func_val) = dict.get(&method_key).copied() {
-                                if let Value::Function(func_key) = func_val {
-                                    let func = self.get_heap().get_function(func_key)?.clone();
-                                    if let WalrusFunction::Native(native) = func {
-                                        // Call the native function and push result
+                                let Value::Function(func_key) = func_val else {
+                                    return Err(WalrusError::NotCallable {
+                                        value: func_val.get_type().to_string(),
+                                        span,
+                                        src: self.source_ref.source().into(),
+                                        filename: self.source_ref.filename().into(),
+                                    });
+                                };
+
+                                let function = self.get_heap().get_function(func_key)?.clone();
+
+                                match function {
+                                    WalrusFunction::Native(native) => {
                                         let result = self.call_native(native, args, span)?;
                                         self.push(result);
-                                        continue; // Skip the push at the end
+                                        continue;
+                                    }
+                                    WalrusFunction::Rust(rust_fn) => {
+                                        if args.len() != rust_fn.args {
+                                            return Err(WalrusError::InvalidArgCount {
+                                                name: rust_fn.name.clone(),
+                                                expected: rust_fn.args,
+                                                got: args.len(),
+                                                span,
+                                                src: self.source_ref.source().into(),
+                                                filename: self.source_ref.filename().into(),
+                                            });
+                                        }
+
+                                        let result = rust_fn.call(args, self.source_ref, span)?;
+                                        self.push(result);
+                                        continue;
+                                    }
+                                    WalrusFunction::Vm(func) => {
+                                        if args.len() != func.arity {
+                                            return Err(WalrusError::InvalidArgCount {
+                                                name: func.name.clone(),
+                                                expected: func.arity,
+                                                got: args.len(),
+                                                span,
+                                                src: self.source_ref.source().into(),
+                                                filename: self.source_ref.filename().into(),
+                                            });
+                                        }
+
+                                        let new_frame = CallFrame {
+                                            return_ip: self.ip,
+                                            frame_pointer: self.locals.len(),
+                                            stack_pointer: self.stack.len(),
+                                            instructions: Rc::clone(&func.code),
+                                            function_name: func.name.clone(),
+                                            return_override: None,
+                                        };
+
+                                        self.call_stack.push(new_frame);
+                                        self.locals.extend(args);
+                                        self.ip = 0;
+                                        continue;
+                                    }
+                                    WalrusFunction::TreeWalk(_) => {
+                                        return Err(WalrusError::NodeFunctionNotSupportedInVm {
+                                            span,
+                                            src: self.source_ref.source().into(),
+                                            filename: self.source_ref.filename().into(),
+                                        });
                                     }
                                 }
                             }

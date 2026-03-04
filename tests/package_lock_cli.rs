@@ -106,13 +106,19 @@ version = "1.2.3"
     );
     write_file(
         &project.path().join("deps/greeter/main.walrus"),
-        r#"let message = "from-lock";"#,
+        r#"let message = "from-lock";
+
+fn double : n {
+    return n * 2;
+}
+"#,
     );
     write_file(
         &project.path().join("main.walrus"),
         r#"import @greeter as g;
 
-println(g["message"]);
+println(g.message);
+println(g.double(21));
 "#,
     );
 
@@ -134,7 +140,7 @@ println(g["message"]);
         .expect("vm run should execute");
     assert_eq!(
         String::from_utf8_lossy(&vm_output.stdout).replace("\r\n", "\n"),
-        "from-lock\n"
+        "from-lock\n42\n"
     );
     assert!(
         vm_output.stderr.is_empty(),
@@ -150,7 +156,7 @@ println(g["message"]);
         .expect("interpreted run should execute");
     assert_eq!(
         String::from_utf8_lossy(&interpreted_output.stdout).replace("\r\n", "\n"),
-        "from-lock\n"
+        "from-lock\n42\n"
     );
     assert!(
         interpreted_output.stderr.is_empty(),
@@ -174,7 +180,12 @@ greeter = { version = "1.2.3", path = "./deps/greeter" }
     );
     write_file(
         &project.path().join("deps/greeter/main.walrus"),
-        r#"let message = "from-lock";"#,
+        r#"let message = "from-lock";
+
+fn double : n {
+    return n * 2;
+}
+"#,
     );
     write_file(
         &project.path().join("Walrus.lock"),
@@ -188,7 +199,8 @@ path = "deps/greeter"
     write_file(
         &project.path().join("main.walrus"),
         r#"import @greeter as g;
-println(g["message"]);
+println(g.message);
+println(g.double(21));
 "#,
     );
 

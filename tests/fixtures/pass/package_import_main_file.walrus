@@ -1,4 +1,4 @@
 import @pkgdemo as pkg;
 
-println(pkg["value"]);
-println(pkg["twice"](6));
+println(pkg.value);
+println(pkg.twice(6));
