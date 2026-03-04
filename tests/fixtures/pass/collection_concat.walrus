@@ -1,0 +1,7 @@
+let a = [1, 2];
+let b = [3, 4];
+println(a + b);
+
+let d = {"x": 1};
+let e = {"y": 2};
+println(d + e);

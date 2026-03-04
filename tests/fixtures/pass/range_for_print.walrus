@@ -1,0 +1,4 @@
+for i in 2..5 {
+    print(i);
+}
+println("");

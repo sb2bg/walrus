@@ -1,0 +1,6 @@
+import "std/io";
+
+let path = "/tmp/walrus_ci_io_test.txt";
+io.write_file(path, "abc");
+println(io.file_exists(path));
+println(io.read_file(path));
