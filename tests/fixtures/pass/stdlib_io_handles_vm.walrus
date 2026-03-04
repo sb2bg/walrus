@@ -1,0 +1,21 @@
+import "std/io";
+
+let path = "/tmp/walrus_ci_io_handles.txt";
+io.write_file(path, "line1\nline2");
+println(io.file_exists(path));
+
+let reader = io.file_open(path, "r");
+let line1 = io.file_read_line(reader);
+let line2 = io.file_read_line(reader);
+let line3 = io.file_read_line(reader);
+io.file_close(reader);
+
+println(line1);
+println(line2);
+println(line3 == void);
+
+let writer = io.file_open(path, "a");
+println(io.file_write(writer, "\nline3"));
+io.file_close(writer);
+
+println(io.read_file(path));

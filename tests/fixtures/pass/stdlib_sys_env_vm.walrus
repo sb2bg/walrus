@@ -1,0 +1,4 @@
+import "std/sys";
+
+println(sys.env_get("WALRUS_TEST_ENV") == "walrus-value");
+println(sys.env_get("WALRUS_TEST_MISSING_48B0") == void);

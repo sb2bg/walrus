@@ -1,0 +1,3 @@
+let line = input("Enter: ");
+println(line == "walrus\n");
+println(len(line));

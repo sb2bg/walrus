@@ -1,0 +1,3 @@
+import "std/math";
+
+println(math.log(10, 1));

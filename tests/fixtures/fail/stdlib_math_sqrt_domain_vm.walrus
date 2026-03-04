@@ -1,0 +1,3 @@
+import "std/math";
+
+println(math.sqrt(-1));
