@@ -264,38 +264,14 @@ fn read_env_vars(program: &Path) -> Vec<(String, String)> {
         return Vec::new();
     }
 
-    let text = fs::read_to_string(&env_path)
-        .unwrap_or_else(|err| panic!("failed to read env file '{}': {err}", env_path.display()));
-
-    let mut pairs = Vec::new();
-
-    for (line_number, raw_line) in text.lines().enumerate() {
-        let line = raw_line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-
-        let (raw_key, raw_value) = line.split_once('=').unwrap_or_else(|| {
-            panic!(
-                "invalid env line {} in '{}'; expected KEY=VALUE",
-                line_number + 1,
-                env_path.display()
-            )
-        });
-
-        let key = raw_key.trim();
-        if key.is_empty() {
-            panic!(
-                "invalid env line {} in '{}'; key cannot be empty",
-                line_number + 1,
-                env_path.display()
-            );
-        }
-
-        pairs.push((key.to_string(), raw_value.to_string()));
-    }
-
-    pairs
+    dotenvy::from_path_iter(&env_path)
+        .unwrap_or_else(|err| panic!("failed to read env file '{}': {err}", env_path.display()))
+        .map(|entry| {
+            entry.unwrap_or_else(|err| {
+                panic!("invalid env entry in '{}': {err}", env_path.display())
+            })
+        })
+        .collect()
 }
 
 fn read_stdin(program: &Path) -> Option<Vec<u8>> {
