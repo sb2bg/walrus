@@ -1,0 +1,5 @@
+let value = "pkg-main";
+
+fn twice : n {
+    return n * 2;
+}

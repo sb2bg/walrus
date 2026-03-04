@@ -1,0 +1,2 @@
+println("loading cached_once");
+let value = 7;

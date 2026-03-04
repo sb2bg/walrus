@@ -1,0 +1,2 @@
+import "./b.walrus" as b;
+let value = 1;

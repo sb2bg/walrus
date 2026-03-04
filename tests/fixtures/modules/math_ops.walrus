@@ -1,0 +1,6 @@
+fn add : a, b {
+    return a + b;
+}
+
+let answer = 42;
+let name = "math_ops";
