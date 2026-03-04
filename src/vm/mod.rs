@@ -10,7 +10,7 @@ use instruction_set::InstructionSet;
 use crate::WalrusResult;
 use crate::arenas::HeapValue;
 use crate::error::WalrusError;
-use crate::function::WalrusFunction;
+use crate::function::{VmModuleBinding, WalrusFunction};
 use crate::iter::ValueIterator;
 use crate::jit::{HotSpotDetector, TypeProfile, WalrusType};
 use crate::range::RangeValue;
@@ -51,6 +51,8 @@ struct CallFrame {
     /// Optional value to return instead of the callee's explicit return value.
     /// Used by struct constructors so `init` can return the new instance.
     return_override: Option<Value>,
+    /// Optional module binding context for exported module VM functions.
+    module_binding: Option<Rc<VmModuleBinding>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -159,6 +161,7 @@ impl<'a> VM<'a> {
             instructions: Rc::new(is),
             function_name: "<main>".to_string(),
             return_override: None,
+            module_binding: None,
         };
 
         Self {
@@ -277,6 +280,79 @@ impl<'a> VM<'a> {
         self.source_ref
     }
 
+    #[inline(always)]
+    fn current_module_binding(&self) -> Option<Rc<VmModuleBinding>> {
+        self.call_stack
+            .last()
+            .and_then(|frame| frame.module_binding.clone())
+    }
+
+    fn undefined_global_error(
+        &self,
+        index: usize,
+        span: Span,
+        binding: Option<&VmModuleBinding>,
+    ) -> WalrusError {
+        let name = binding
+            .and_then(|ctx| ctx.global_names.get(index))
+            .or_else(|| self.global_names.get(index))
+            .cloned()
+            .unwrap_or_else(|| format!("<global[{index}]>"));
+
+        let (src, filename) = if let Some(ctx) = binding {
+            (ctx.source.to_string(), ctx.filename.to_string())
+        } else {
+            (
+                self.source_ref.source().to_string(),
+                self.source_ref.filename().to_string(),
+            )
+        };
+
+        WalrusError::UndefinedVariable {
+            name,
+            span,
+            src,
+            filename,
+        }
+    }
+
+    fn load_global_value(&mut self, index: usize, span: Span) -> WalrusResult<Value> {
+        if let Some(binding) = self.current_module_binding() {
+            let Some(name) = binding.global_names.get(index) else {
+                return Err(self.undefined_global_error(index, span, Some(binding.as_ref())));
+            };
+
+            let key = Value::String(self.get_heap_mut().push_ident(name));
+            let module = self.get_heap().get_module(binding.module_key)?;
+            Ok(module.get(&key).copied().unwrap_or(Value::Void))
+        } else {
+            self.globals
+                .get(index)
+                .copied()
+                .ok_or_else(|| self.undefined_global_error(index, span, None))
+        }
+    }
+
+    fn store_global_value(&mut self, index: usize, value: Value, span: Span) -> WalrusResult<()> {
+        if let Some(binding) = self.current_module_binding() {
+            let Some(name) = binding.global_names.get(index) else {
+                return Err(self.undefined_global_error(index, span, Some(binding.as_ref())));
+            };
+
+            let key = Value::String(self.get_heap_mut().push_ident(name));
+            self.get_heap_mut()
+                .get_mut_module(binding.module_key)?
+                .insert(key, value);
+            Ok(())
+        } else {
+            if index >= self.globals.len() {
+                self.globals.resize(index + 1, Value::Void);
+            }
+            self.globals[index] = value;
+            Ok(())
+        }
+    }
+
     pub fn export_globals_as_module(&mut self) -> WalrusResult<Value> {
         let global_names = self.global_names.clone();
         let mut exports = FxHashMap::default();
@@ -295,7 +371,61 @@ impl<'a> VM<'a> {
             exports.insert(key, value);
         }
 
-        Ok(self.get_heap_mut().push(HeapValue::Module(exports)))
+        let module_key = match self.get_heap_mut().push(HeapValue::Module(exports)) {
+            Value::Module(key) => key,
+            _ => unreachable!("module export must allocate a module"),
+        };
+
+        let binding = Rc::new(VmModuleBinding {
+            module_key,
+            global_names: Rc::new(global_names),
+            source: Rc::new(self.source_ref.source().to_string()),
+            filename: Rc::new(self.source_ref.filename().to_string()),
+        });
+
+        // Rebind exported VM functions so global accesses resolve against this module,
+        // not the importing VM's global vector.
+        let names = binding.global_names.clone();
+        for name in names.iter() {
+            if name == "_" {
+                continue;
+            }
+
+            let entry_value = {
+                let key = Value::String(self.get_heap_mut().push_ident(name));
+                let module = self.get_heap().get_module(module_key)?;
+                module.get(&key).copied()
+            };
+
+            let Some(Value::Function(func_key)) = entry_value else {
+                continue;
+            };
+
+            let maybe_bound = {
+                let function = self.get_heap().get_function(func_key)?.clone();
+                match function {
+                    WalrusFunction::Vm(mut vm_func) => {
+                        vm_func.module_binding = Some(binding.clone());
+                        Some(
+                            self.get_heap_mut()
+                                .push(HeapValue::Function(WalrusFunction::Vm(vm_func))),
+                        )
+                    }
+                    _ => None,
+                }
+            };
+
+            let Some(bound_value) = maybe_bound else {
+                continue;
+            };
+
+            let key = Value::String(self.get_heap_mut().push_ident(name));
+            self.get_heap_mut()
+                .get_mut_module(module_key)?
+                .insert(key, bound_value);
+        }
+
+        Ok(Value::Module(module_key))
     }
 
     /// Collect all root values that the GC needs to trace from
@@ -314,6 +444,9 @@ impl<'a> VM<'a> {
         // Constants in all call frames are roots (they might reference heap objects)
         for frame in &self.call_stack {
             roots.extend(frame.instructions.constants.iter().copied());
+            if let Some(binding) = &frame.module_binding {
+                roots.push(Value::Module(binding.module_key));
+            }
         }
 
         // Imported modules are cached process-wide and must remain rooted.
@@ -450,6 +583,7 @@ impl<'a> VM<'a> {
                     instructions: Rc::clone(&func.code),
                     function_name: func.name.clone(),
                     return_override: None,
+                    module_binding: func.module_binding.clone(),
                 };
 
                 self.call_stack.push(new_frame);
@@ -818,28 +952,23 @@ impl<'a> VM<'a> {
                     }
                 }
                 Opcode::LoadGlobal(index) => {
-                    // SAFETY: compiler guarantees global indices are valid.
-                    let value = unsafe { *self.globals.get_unchecked(index as usize) };
+                    let value = self.load_global_value(index as usize, span)?;
                     self.push(value);
                 }
                 Opcode::LoadGlobal0 => {
-                    // SAFETY: compiler emits LoadGlobal0 only when global 0 exists.
-                    let value = unsafe { *self.globals.get_unchecked(0) };
+                    let value = self.load_global_value(0, span)?;
                     self.push(value);
                 }
                 Opcode::LoadGlobal1 => {
-                    // SAFETY: compiler emits LoadGlobal1 only when global 1 exists.
-                    let value = unsafe { *self.globals.get_unchecked(1) };
+                    let value = self.load_global_value(1, span)?;
                     self.push(value);
                 }
                 Opcode::LoadGlobal2 => {
-                    // SAFETY: compiler emits LoadGlobal2 only when global 2 exists.
-                    let value = unsafe { *self.globals.get_unchecked(2) };
+                    let value = self.load_global_value(2, span)?;
                     self.push(value);
                 }
                 Opcode::LoadGlobal3 => {
-                    // SAFETY: compiler emits LoadGlobal3 only when global 3 exists.
-                    let value = unsafe { *self.globals.get_unchecked(3) };
+                    let value = self.load_global_value(3, span)?;
                     self.push(value);
                 }
                 Opcode::Store => {
@@ -865,16 +994,7 @@ impl<'a> VM<'a> {
                 Opcode::StoreGlobal(index) => {
                     // SAFETY: valid bytecode guarantees stack has a value to store.
                     let value = self.pop_unchecked();
-                    let index = index as usize;
-
-                    if index >= self.globals.len() {
-                        self.globals.resize(index + 1, Value::Void);
-                    }
-
-                    // SAFETY: index has been ensured to exist.
-                    unsafe {
-                        *self.globals.get_unchecked_mut(index) = value;
-                    }
+                    self.store_global_value(index as usize, value, span)?;
                 }
                 Opcode::Reassign(index) => {
                     // SAFETY: valid bytecode guarantees stack has a value to assign.
@@ -889,16 +1009,7 @@ impl<'a> VM<'a> {
                 Opcode::ReassignGlobal(index) => {
                     // SAFETY: valid bytecode guarantees stack has a value to assign.
                     let value = self.pop_unchecked();
-                    let index = index as usize;
-
-                    if index >= self.globals.len() {
-                        self.globals.resize(index + 1, Value::Void);
-                    }
-
-                    // SAFETY: compiler guarantees reassigned global exists.
-                    unsafe {
-                        *self.globals.get_unchecked_mut(index) = value;
-                    }
+                    self.store_global_value(index as usize, value, span)?;
                 }
                 Opcode::List(cap) => {
                     let cap = cap as usize;
@@ -1043,6 +1154,7 @@ impl<'a> VM<'a> {
                                     instructions: Rc::clone(&func.code),
                                     function_name: format!("{}::iter", struct_name),
                                     return_override: None,
+                                    module_binding: func.module_binding.clone(),
                                 };
 
                                 self.call_stack.push(new_frame);
@@ -1205,6 +1317,7 @@ impl<'a> VM<'a> {
                                         instructions: Rc::clone(&func.code), // Share the instruction set via Rc
                                         function_name: String::new(),
                                         return_override: None,
+                                        module_binding: func.module_binding.clone(),
                                     };
 
                                     // Push the new frame
@@ -1287,6 +1400,7 @@ impl<'a> VM<'a> {
                                         instructions: Rc::clone(&init_func.code),
                                         function_name: format!("{}::init", struct_name),
                                         return_override: Some(instance_value),
+                                        module_binding: init_func.module_binding.clone(),
                                     };
 
                                     self.call_stack.push(new_frame);
@@ -1427,6 +1541,7 @@ impl<'a> VM<'a> {
                                     // Clone what we need before mutating self
                                     let new_instructions = Rc::clone(&func.code);
                                     let new_name = String::new();
+                                    let new_module_binding = func.module_binding.clone();
                                     let frame_index = self.current_frame_index();
                                     self.clear_exception_handlers_from_frame(frame_index);
 
@@ -1446,6 +1561,7 @@ impl<'a> VM<'a> {
                                         current_frame.instructions = new_instructions;
                                         current_frame.function_name = new_name;
                                         current_frame.return_override = None;
+                                        current_frame.module_binding = new_module_binding;
                                     }
 
                                     // Reset IP to start of the new function
@@ -1505,6 +1621,8 @@ impl<'a> VM<'a> {
                                         current_frame.function_name =
                                             format!("{}::init", struct_name);
                                         current_frame.return_override = Some(instance_value);
+                                        current_frame.module_binding =
+                                            init_func.module_binding.clone();
                                     }
 
                                     self.ip = 0;
@@ -2591,12 +2709,14 @@ impl<'a> VM<'a> {
                             Value::StructDef(key) => {
                                 let method_name =
                                     self.get_heap().get_string(method_name_sym)?.to_string();
-                                let (method_arity, method_code) = {
+                                let (method_arity, method_code, method_binding) = {
                                     let struct_def = self.get_heap().get_struct_def(key)?;
                                     match struct_def.get_method(&method_name) {
-                                        Some(WalrusFunction::Vm(func)) => {
-                                            (func.arity, Rc::clone(&func.code))
-                                        }
+                                        Some(WalrusFunction::Vm(func)) => (
+                                            func.arity,
+                                            Rc::clone(&func.code),
+                                            func.module_binding.clone(),
+                                        ),
                                         Some(_) => {
                                             return Err(
                                                 WalrusError::StructMethodMustBeVmFunction {
@@ -2636,6 +2756,7 @@ impl<'a> VM<'a> {
                                     instructions: method_code,
                                     function_name: String::new(),
                                     return_override: None,
+                                    module_binding: method_binding,
                                 };
 
                                 self.call_stack.push(new_frame);
@@ -2660,10 +2781,12 @@ impl<'a> VM<'a> {
                                     )
                                 };
 
-                                let (method_arity, method_code) = match method {
-                                    Some(WalrusFunction::Vm(func)) => {
-                                        (func.arity, Rc::clone(&func.code))
-                                    }
+                                let (method_arity, method_code, method_binding) = match method {
+                                    Some(WalrusFunction::Vm(func)) => (
+                                        func.arity,
+                                        Rc::clone(&func.code),
+                                        func.module_binding.clone(),
+                                    ),
                                     Some(_) => {
                                         return Err(WalrusError::StructMethodMustBeVmFunction {
                                             span,
@@ -2701,6 +2824,7 @@ impl<'a> VM<'a> {
                                     instructions: method_code,
                                     function_name: String::new(),
                                     return_override: None,
+                                    module_binding: method_binding,
                                 };
 
                                 self.call_stack.push(new_frame);
@@ -2882,6 +3006,7 @@ impl<'a> VM<'a> {
                                     instructions: Rc::clone(&func.code),
                                     function_name: String::new(),
                                     return_override: None,
+                                    module_binding: func.module_binding.clone(),
                                 };
 
                                 self.call_stack.push(new_frame);
@@ -2935,6 +3060,7 @@ impl<'a> VM<'a> {
                                     instructions: Rc::clone(&func.code),
                                     function_name: String::new(),
                                     return_override: None,
+                                    module_binding: func.module_binding.clone(),
                                 };
 
                                 self.call_stack.push(new_frame);

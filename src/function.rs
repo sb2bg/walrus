@@ -1,5 +1,6 @@
 use rustc_hash::FxHashMap;
 
+use crate::arenas::DictKey;
 use crate::ast::Node;
 use crate::interpreter::InterpreterResult;
 use crate::source_ref::SourceRef;
@@ -65,10 +66,19 @@ impl NodeFunction {
 }
 
 #[derive(Debug, Clone)]
+pub struct VmModuleBinding {
+    pub module_key: DictKey,
+    pub global_names: Rc<Vec<String>>,
+    pub source: Rc<String>,
+    pub filename: Rc<String>,
+}
+
+#[derive(Debug, Clone)]
 pub struct VmFunction {
     pub name: String,
     pub arity: usize,
     pub code: Rc<InstructionSet>,
+    pub module_binding: Option<Rc<VmModuleBinding>>,
 }
 
 impl VmFunction {
@@ -77,6 +87,7 @@ impl VmFunction {
             name,
             arity,
             code: Rc::new(code),
+            module_binding: None,
         }
     }
 }

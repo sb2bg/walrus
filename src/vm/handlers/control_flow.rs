@@ -121,6 +121,7 @@ impl<'a> VM<'a> {
                             instructions: Rc::clone(&func.code),
                             function_name: format!("fn<{}>", func.name),
                             return_override: None,
+                            module_binding: func.module_binding.clone(),
                         };
 
                         self.call_stack.push(new_frame);

@@ -443,7 +443,14 @@ impl ValueHolder {
     }
 
     pub fn push_ident(&mut self, ident: &str) -> StringKey {
-        self.strings.insert(ident.to_string())
+        if let Some(&key) = self.string_intern.get(ident) {
+            return key;
+        }
+
+        let owned = ident.to_string();
+        let key = self.strings.insert(owned.clone());
+        self.string_intern.insert(owned, key);
+        key
     }
 
     pub fn get_mut_dict(&mut self, key: DictKey) -> WalrusResult<&mut FxHashMap<Value, Value>> {

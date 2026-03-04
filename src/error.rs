@@ -724,7 +724,10 @@ pub fn parser_err_mapper(
             line: get_line(source, filename, Span(start, end)),
         },
         ParseError::InvalidToken { location } => WalrusError::InvalidToken {
-            token: source[location..location + 1].to_string(),
+            token: source
+                .get(location..location.saturating_add(1))
+                .unwrap_or("<eof>")
+                .to_string(),
             line: get_line(source, filename, Span(location, location + 1)),
         },
         ParseError::ExtraToken {
@@ -767,19 +770,35 @@ pub fn parser_err_mapper(
 // should probably fix this by printing all of the lines contained in the spans
 // todo: use codespan_reporting? https://github.com/brendanzab/codespan
 fn get_line<'a>(src: &'a str, filename: &'a str, span: Span) -> String {
-    let start = find_line_start(src, span.0);
-    let end = find_line_end(src, span.0);
-    let line = &src[start..end];
+    if src.is_empty() {
+        return format!("\n\n\t<empty source>\n\t^\n[{filename}:1:1]");
+    }
+
+    let src_len = src.len();
+    let start_offset = span.0.min(src_len.saturating_sub(1));
+    let mut end_offset = span.1.min(src_len);
+    if end_offset <= start_offset {
+        end_offset = (start_offset + 1).min(src_len);
+    }
+
+    let line_start = find_line_start(src, start_offset);
+    let line_end = find_line_end(src, start_offset).min(src_len);
+    let line = &src[line_start..line_end];
     let mut trimmed = line.trim_start();
-    let diff = line.len() - trimmed.len();
+    let trim_left = line.len() - trimmed.len();
     trimmed = trimmed.trim_end();
-    let line_num = src[..span.0].lines().count(); // fixme: I have a sneaking suspicion this is wrong but only in some cases
-    let affected_range = span.0 - start - diff..span.1 - start - diff;
+
+    let line_num = src[..start_offset].lines().count() + 1;
+    let col_num = start_offset - line_start + 1;
+
+    let caret_start = start_offset.saturating_sub(line_start + trim_left);
+    let max_caret = trimmed.len().saturating_sub(caret_start);
+    let desired_len = end_offset.saturating_sub(start_offset).max(1);
+    let caret_len = min(desired_len, max_caret.max(1));
 
     format!(
-        "\n\n\t{trimmed}\n\t{}{}\n[{filename}:{line_num}:{}]",
-        &" ".repeat(affected_range.start),
-        &"^".repeat(min(affected_range.len(), line.len() - affected_range.start)),
-        span.0 - start + 1,
+        "\n\n\t{trimmed}\n\t{}{}\n[{filename}:{line_num}:{col_num}]",
+        " ".repeat(caret_start),
+        "^".repeat(caret_len),
     )
 }
