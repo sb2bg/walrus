@@ -1,0 +1,12 @@
+let parsed = {
+    "project": "walrus-json-demo",
+    "nested": {
+        "name": "core",
+    },
+};
+
+println(f"Project: {parsed["project"]}");
+println(f"Nested: {parsed["nested"]["name"]}");
+
+let key = "project";
+println(f"By var key: {parsed[key]}");

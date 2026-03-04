@@ -1,0 +1,21 @@
+println(0 and 2);
+println(1 and 2);
+println("" or "fallback");
+println("x" or "fallback");
+println(not 0);
+println(not "");
+println(not [1]);
+
+if [] {
+    println("if-bad");
+} else {
+    println("if-ok");
+}
+
+let n = 3;
+let sum = 0;
+while n {
+    sum += n;
+    n -= 1;
+}
+println(sum);
