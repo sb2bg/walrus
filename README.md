@@ -79,6 +79,32 @@ import "std/sys" as system;
 import "std/math";
 ```
 
+### Package Imports (`@name`)
+
+Walrus supports package-style imports with pinned lock entries:
+
+1. Declare dependencies in `Walrus.toml`.
+2. Generate/update `Walrus.lock` with `walrus --sync-lock`.
+3. Import with `import @package_name`.
+
+`Walrus.toml` example:
+
+```toml
+[package]
+name = "my-app"
+version = "0.1.0"
+
+[dependencies]
+greeter = { version = "1.2.3", path = "./deps/greeter" }
+```
+
+Then in code:
+
+```walrus
+import @greeter as g;
+println(g["message"]);
+```
+
 #### `std/io` - File I/O Operations
 
 | Function                         | Description                                                       |
