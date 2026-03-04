@@ -41,6 +41,7 @@ struct Case {
     program: PathBuf,
     expectation: Expectation,
     modes: Vec<ExecMode>,
+    expected_exit_code: Option<i32>,
 }
 
 #[test]
@@ -155,6 +156,7 @@ fn load_case(fixtures_root: &Path, program: &Path, is_pass: bool) -> Case {
     };
 
     let modes = read_modes(program);
+    let expected_exit_code = read_exit_code(program);
 
     let relative = program.strip_prefix(fixtures_root).unwrap_or_else(|_| {
         panic!(
@@ -169,6 +171,7 @@ fn load_case(fixtures_root: &Path, program: &Path, is_pass: bool) -> Case {
         program: program.to_path_buf(),
         expectation,
         modes,
+        expected_exit_code,
     }
 }
 
@@ -216,12 +219,66 @@ fn push_unique_mode(modes: &mut Vec<ExecMode>, mode: ExecMode) {
     }
 }
 
+fn read_exit_code(program: &Path) -> Option<i32> {
+    let exit_path = program.with_extension("exitcode");
+    if !exit_path.exists() {
+        return None;
+    }
+
+    let text = fs::read_to_string(&exit_path).unwrap_or_else(|err| {
+        panic!(
+            "failed to read exit code file '{}': {err}",
+            exit_path.display()
+        )
+    });
+
+    let value = text.trim();
+    if value.is_empty() {
+        panic!(
+            "exit code file '{}' is empty; expected an integer exit code",
+            exit_path.display()
+        );
+    }
+
+    let code = value.parse::<i32>().unwrap_or_else(|err| {
+        panic!(
+            "invalid exit code '{}' in '{}': {err}",
+            value,
+            exit_path.display()
+        )
+    });
+
+    Some(code)
+}
+
 fn run_case(case: &Case, mode: ExecMode) -> Result<(), String> {
     let output = run_program(&case.program, mode)
         .map_err(|err| format!("{} [{}]: {err}", case.name, mode.label()))?;
 
     let stdout = normalize(&String::from_utf8_lossy(&output.stdout));
     let stderr = normalize(&String::from_utf8_lossy(&output.stderr));
+    let actual_exit = output.status.code();
+
+    if let Some(expected_exit) = case.expected_exit_code {
+        if actual_exit != Some(expected_exit) {
+            return Err(format!(
+                "{} [{}]: exit code mismatch\nexpected: {}\nactual: {}\n\nstderr:\n{}",
+                case.name,
+                mode.label(),
+                expected_exit,
+                format_exit_code(actual_exit),
+                stderr
+            ));
+        }
+    } else if matches!(case.expectation, Expectation::Stdout(_)) && !output.status.success() {
+        return Err(format!(
+            "{} [{}]: expected successful exit, got {}\n\nstderr:\n{}",
+            case.name,
+            mode.label(),
+            format_exit_code(actual_exit),
+            stderr
+        ));
+    }
 
     match &case.expectation {
         Expectation::Stdout(expected_stdout) => {
@@ -280,6 +337,13 @@ fn run_program(program: &Path, mode: ExecMode) -> Result<Output, String> {
             program.display()
         )
     })
+}
+
+fn format_exit_code(code: Option<i32>) -> String {
+    match code {
+        Some(value) => value.to_string(),
+        None => "terminated by signal".to_string(),
+    }
 }
 
 fn normalize(text: &str) -> String {
