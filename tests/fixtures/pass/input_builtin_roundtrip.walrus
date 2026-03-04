@@ -1,3 +1,5 @@
-let line = input("Enter: ");
+import "std/core" as core;
+
+let line = core.input("Enter: ");
 println(line == "walrus\n");
-println(len(line));
+println(core.len(line));

@@ -12,43 +12,6 @@ use crate::vm::opcode::{Instruction, Opcode};
 use crate::vm::optimize;
 use rustc_hash::FxHashSet;
 
-// Builtin function metadata
-struct BuiltinInfo {
-    opcode: Opcode,
-    arity: usize,
-}
-
-// Registry of builtin functions
-fn get_builtin(name: &str) -> Option<BuiltinInfo> {
-    match name {
-        "len" => Some(BuiltinInfo {
-            opcode: Opcode::Len,
-            arity: 1,
-        }),
-        "str" => Some(BuiltinInfo {
-            opcode: Opcode::Str,
-            arity: 1,
-        }),
-        "type" => Some(BuiltinInfo {
-            opcode: Opcode::Type,
-            arity: 1,
-        }),
-        "__gc__" => Some(BuiltinInfo {
-            opcode: Opcode::Gc,
-            arity: 0,
-        }),
-        "__heap_stats__" => Some(BuiltinInfo {
-            opcode: Opcode::HeapStats,
-            arity: 0,
-        }),
-        "__gc_threshold__" => Some(BuiltinInfo {
-            opcode: Opcode::GcConfig,
-            arity: 1,
-        }),
-        _ => None,
-    }
-}
-
 /// BytecodeEmitter compiles AST nodes into VM bytecode.
 ///
 /// # Architecture Notes
@@ -190,7 +153,7 @@ impl<'a> BytecodeEmitter<'a> {
                         FStringPart::Expr(node) => {
                             // Expression is already parsed with proper span
                             self.emit(*node)?;
-                            // Convert to string using builtin str function
+                            // Convert expression result to string for interpolation
                             self.instructions.push(Instruction::new(Opcode::Str, span));
                             part_count += 1;
                         }
@@ -948,18 +911,9 @@ impl<'a> BytecodeEmitter<'a> {
             NodeKind::Return(node) => {
                 // Check if this is a tail call (returning a function call directly)
                 if let NodeKind::FunctionCall(func, args) = node.kind().clone() {
-                    // Don't optimize builtin function calls - they don't use call frames
-                    let is_builtin = if let NodeKind::Ident(name) = func.kind() {
-                        get_builtin(name).is_some()
-                    } else {
-                        false
-                    };
-
-                    if !is_builtin {
-                        // This is a tail call - emit TailCall instead of Call + Return
-                        self.emit_function_call(func, args, *node.span(), true)?;
-                        return Ok(());
-                    }
+                    // This is a tail call - emit TailCall instead of Call + Return
+                    self.emit_function_call(func, args, *node.span(), true)?;
+                    return Ok(());
                 }
 
                 // Regular return: emit expression then Return opcode
@@ -1274,39 +1228,6 @@ impl<'a> BytecodeEmitter<'a> {
         span: Span,
         is_tail_call: bool,
     ) -> WalrusResult<()> {
-        // Check if this is a builtin function call
-        if let NodeKind::Ident(name) = func.kind() {
-            if let Some(builtin) = get_builtin(name) {
-                // Emit builtin opcode (never tail-optimized since they don't use frames)
-                if args.len() != builtin.arity {
-                    return Err(WalrusError::InvalidArgCount {
-                        name: name.to_string(),
-                        expected: builtin.arity,
-                        got: args.len(),
-                        span,
-                        src: self.source_ref.source().to_string(),
-                        filename: self.source_ref.filename().to_string(),
-                    });
-                }
-
-                // Emit arguments
-                for arg in args {
-                    self.emit(arg)?;
-                }
-
-                // Emit the builtin opcode
-                self.instructions
-                    .push(Instruction::new(builtin.opcode, span));
-
-                // If this was supposed to be a tail call, we still need to return
-                if is_tail_call {
-                    self.instructions
-                        .push(Instruction::new(Opcode::Return, span));
-                }
-                return Ok(());
-            }
-        }
-
         // Check if this is a method call (e.g., arr.push(x) or Calculator.add(a, b))
         if let NodeKind::MemberAccess(object, method_name) = func.kind() {
             let arg_len = args.len();

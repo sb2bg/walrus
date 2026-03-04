@@ -86,14 +86,9 @@ pub enum Opcode {
     GetMethod,       // Get a method from a struct definition
     CallMethod(u32), // Call a method on any value (arg count as operand, method name + object + args on stack)
 
-    // Builtins
-    Len,       // Get length of a string, list, or dict
-    Str,       // Convert value to string
-    Type,      // Get type name of a value
-    Gc,        // Trigger garbage collection, returns dict with stats
-    HeapStats, // Get heap statistics as a dict
-    GcConfig,  // Configure GC threshold (takes 1 int arg)
-    Import,    // (module_name) -> dict of native functions
+    // Runtime helpers
+    Str,    // Convert top-of-stack value to string (used by f-strings)
+    Import, // (module_name) -> module value
 }
 
 impl Display for Opcode {

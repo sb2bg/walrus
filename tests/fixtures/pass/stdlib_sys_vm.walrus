@@ -1,11 +1,12 @@
 import "std/sys";
+import "std/core" as core;
 
 let missing = sys.env_get("WALRUS_TEST_MISSING_ENV_42F7");
 println(missing == void);
 
-println(type(sys.args()));
-println(len(sys.args()));
+println(core.type(sys.args()));
+println(core.len(sys.args()));
 
 let cwd = sys.cwd();
-println(type(cwd));
-println(len(cwd) > 0);
+println(core.type(cwd));
+println(core.len(cwd) > 0);

@@ -1,6 +1,8 @@
-println(str(true));
-println(type({"k": 1}));
+import "std/core" as core;
+
+println(core.str(true));
+println(core.type({"k": 1}));
 let fn_value = : {
     return 1;
 };
-println(type(fn_value));
+println(core.type(fn_value));

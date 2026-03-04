@@ -7,7 +7,7 @@
 //! The GC can be triggered:
 //! - Automatically after a configurable number of allocations
 //! - Automatically when estimated memory exceeds a threshold
-//! - Manually via the `__gc__()` builtin
+//! - Manually via `std/core.gc()`
 
 use std::mem::size_of;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -25,7 +25,7 @@ pub const DEFAULT_ALLOCATION_THRESHOLD: usize = 1024;
 /// Default memory threshold (bytes) before GC is triggered (8 MB)
 pub const DEFAULT_MEMORY_THRESHOLD: usize = 8 * 1024 * 1024;
 
-/// Global configurable threshold - can be changed via `__gc_threshold__()` builtin
+/// Global configurable threshold - can be changed via `std/core.gc_threshold()`
 static ALLOCATION_THRESHOLD: AtomicUsize = AtomicUsize::new(DEFAULT_ALLOCATION_THRESHOLD);
 static MEMORY_THRESHOLD: AtomicUsize = AtomicUsize::new(DEFAULT_MEMORY_THRESHOLD);
 

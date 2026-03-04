@@ -1,8 +1,9 @@
 import "../modules/math_ops.walrus" as math_a;
 import "../modules/math_ops.walrus" as math_b;
 import "../modules/alt_ops.walrus" as alt;
+import "std/core" as core;
 
-println(len(math_a));
+println(core.len(math_a));
 println(math_a.answer);
 println(math_a["answer"]);
 println(math_a.add(20, 22));

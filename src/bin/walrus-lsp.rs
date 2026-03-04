@@ -36,50 +36,7 @@ struct BuiltinInfo {
     params: &'static [&'static str],
 }
 
-const BUILTINS: &[BuiltinInfo] = &[
-    BuiltinInfo {
-        name: "len",
-        signature: "len(value)",
-        docs: "Returns length of a string, list, or dictionary.",
-        params: &["value"],
-    },
-    BuiltinInfo {
-        name: "str",
-        signature: "str(value)",
-        docs: "Converts a value to string.",
-        params: &["value"],
-    },
-    BuiltinInfo {
-        name: "type",
-        signature: "type(value)",
-        docs: "Returns the runtime type name for a value.",
-        params: &["value"],
-    },
-    BuiltinInfo {
-        name: "input",
-        signature: "input(prompt)",
-        docs: "Reads user input from stdin.",
-        params: &["prompt"],
-    },
-    BuiltinInfo {
-        name: "__gc__",
-        signature: "__gc__()",
-        docs: "Manually triggers garbage collection.",
-        params: &[],
-    },
-    BuiltinInfo {
-        name: "__heap_stats__",
-        signature: "__heap_stats__()",
-        docs: "Returns heap statistics as a dictionary.",
-        params: &[],
-    },
-    BuiltinInfo {
-        name: "__gc_threshold__",
-        signature: "__gc_threshold__(threshold)",
-        docs: "Sets garbage-collection allocation threshold.",
-        params: &["threshold"],
-    },
-];
+const BUILTINS: &[BuiltinInfo] = &[];
 
 #[derive(Debug, Clone)]
 struct DocumentState {

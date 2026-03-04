@@ -92,6 +92,14 @@ pub enum WalrusFunction {
 /// Native function ID for stdlib functions callable from VM
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum NativeFunction {
+    // Core
+    CoreLen,
+    CoreStr,
+    CoreType,
+    CoreInput,
+    CoreGc,
+    CoreHeapStats,
+    CoreGcThreshold,
     // File I/O
     FileOpen,
     FileRead,

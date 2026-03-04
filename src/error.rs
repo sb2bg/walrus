@@ -604,7 +604,7 @@ pub enum WalrusError {
         filename: String,
     },
 
-    #[error("__gc_threshold__ requires a positive integer argument at {}",
+    #[error("core.gc_threshold requires a positive integer argument at {}",
         get_line(src, filename, *span)
     )]
     InvalidGcThresholdArg {

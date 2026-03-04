@@ -121,6 +121,7 @@ impl Program {
             .parser
             .parse(source_ref.source())
             .map_err(|err| parser_err_mapper(err, source_ref.source(), source_ref.filename()))?;
+        let ast = inject_core_prelude(ast);
 
         let result = match self.opts {
             Opts::Compile => self.compile(ast, source_ref),
@@ -145,6 +146,7 @@ impl Program {
             .parser
             .parse(source_ref.source())
             .map_err(|err| parser_err_mapper(err, source_ref.source(), source_ref.filename()))?;
+        let ast = inject_core_prelude(ast);
 
         match self.opts {
             Opts::Interpret => self.interpret_module(ast, source_ref),
@@ -271,6 +273,7 @@ impl Program {
                 .parser
                 .parse(&input)
                 .map_err(|err| parser_err_mapper(err, &input, Self::REPL_FILENAME))?;
+            let ast = inject_core_prelude(ast);
 
             debug!("AST > {:?}", ast);
 
@@ -329,9 +332,20 @@ fn load_module_with_mode(
     });
 
     let result = match resolved {
-        ResolvedImport::Std(module) => Err(WalrusError::GenericError {
-            message: format!("Module '{module}' is native stdlib and only available in VM mode"),
-        }),
+        ResolvedImport::Std(module) => match mode {
+            ModuleCacheMode::Compile => Err(WalrusError::GenericError {
+                message: format!(
+                    "Module '{module}' is native stdlib and only available in VM mode"
+                ),
+            }),
+            ModuleCacheMode::Interpret => crate::stdlib::interpreter_module(&module).ok_or_else(
+                || WalrusError::GenericError {
+                    message: format!(
+                        "Module '{module}' is native stdlib and not available in interpreter mode"
+                    ),
+                },
+            ),
+        },
         ResolvedImport::File(path) => {
             let opts = match mode {
                 ModuleCacheMode::Compile => Opts::Compile,
@@ -431,6 +445,43 @@ fn import_base_dir(importer_filename: &str) -> PathBuf {
         .parent()
         .unwrap_or_else(|| Path::new("."))
         .to_path_buf()
+}
+
+fn inject_core_prelude(ast: Node) -> Node {
+    fn has_core_import(nodes: &[Node]) -> bool {
+        nodes.iter().any(|node| {
+            matches!(
+                node.kind(),
+                NodeKind::ModuleImport(module, alias)
+                    if module == "std/core"
+                        && alias
+                            .as_deref()
+                            .map_or(true, |name| name == "core")
+            )
+        })
+    }
+
+    fn with_prelude(mut nodes: Vec<Node>, span: Span) -> Node {
+        if has_core_import(&nodes) {
+            return Node::new(NodeKind::Program(nodes), span);
+        }
+
+        let prelude = Node::new(
+            NodeKind::ModuleImport("std/core".to_string(), Some("core".to_string())),
+            span,
+        );
+        nodes.insert(0, prelude);
+        Node::new(NodeKind::Program(nodes), span)
+    }
+
+    let span = *ast.span();
+
+    match ast.into_kind() {
+        NodeKind::Program(nodes) => with_prelude(nodes, span),
+        NodeKind::Statements(nodes) => with_prelude(nodes, span),
+        NodeKind::UnscopedStatements(nodes) => with_prelude(nodes, span),
+        other => Node::new(other, span),
+    }
 }
 
 fn get_source(file: PathBuf) -> Result<OwnedSourceRef, WalrusError> {

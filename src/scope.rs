@@ -1,11 +1,7 @@
-use std::io::Write;
 use std::ptr::NonNull;
 
 use rustc_hash::FxHashMap;
 
-use crate::arenas::{HeapValue, Resolve};
-use crate::error::WalrusError;
-use crate::function::{RustFunction, WalrusFunction};
 use crate::value::Value;
 
 #[derive(Debug)]
@@ -20,60 +16,9 @@ impl Scope {
     pub fn new() -> Self {
         Self {
             name: "global".to_string(),
-            vars: Self::create_builtins(),
+            vars: FxHashMap::default(),
             parent: None,
         }
-    }
-
-    // fixme: this feels janky
-    fn create_builtins() -> FxHashMap<String, Value> {
-        let mut builtins = FxHashMap::default();
-
-        builtins.insert(
-            "input".to_string(),
-            HeapValue::Function(WalrusFunction::Rust(RustFunction::new(
-                "input".to_string(),
-                1,
-                |args, _, _| {
-                    print!("{}", args[0].stringify()?);
-                    std::io::stdout()
-                        .flush()
-                        .map_err(|source| WalrusError::IOError { source })?;
-
-                    let mut input = String::new();
-
-                    std::io::stdin()
-                        .read_line(&mut input)
-                        .map_err(|source| WalrusError::IOError { source })?;
-
-                    Ok(HeapValue::String(&input).alloc())
-                },
-            )))
-            .alloc(),
-        );
-
-        builtins.insert(
-            "len".to_string(),
-            HeapValue::Function(WalrusFunction::Rust(RustFunction::new(
-                "len".to_string(),
-                1,
-                |args, source_ref, span| match args[0] {
-                    Value::String(key) => Ok(Value::Int(key.resolve()?.len() as i64)),
-                    Value::List(key) => Ok(Value::Int(key.resolve()?.len() as i64)),
-                    Value::Dict(key) => Ok(Value::Int(key.resolve()?.len() as i64)),
-                    Value::Module(key) => Ok(Value::Int(key.resolve()?.len() as i64)),
-                    _ => Err(WalrusError::NoLength {
-                        type_name: args[0].get_type().to_string(),
-                        span,
-                        src: source_ref.source().to_string(),
-                        filename: source_ref.filename().to_string(),
-                    }),
-                },
-            )))
-            .alloc(),
-        );
-
-        builtins
     }
 
     pub fn new_child(&self, name: String) -> Self {

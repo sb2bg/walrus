@@ -1,3 +1,5 @@
-println(len({"a": 1, "b": 2}));
-println(len([]));
-println(len(""));
+import "std/core" as core;
+
+println(core.len({"a": 1, "b": 2}));
+println(core.len([]));
+println(core.len(""));

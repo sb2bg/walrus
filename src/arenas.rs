@@ -370,7 +370,7 @@ impl ValueHolder {
         freed
     }
 
-    /// Force a garbage collection (for manual triggering via builtin)
+    /// Force a garbage collection (for manual triggering via std/core.gc())
     pub fn force_collect(&mut self, roots: &[Value]) -> GcResult {
         let before_objects = self.total_objects();
         let before_bytes = self.gc.bytes_allocated();

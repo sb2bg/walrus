@@ -1,10 +1,11 @@
 import "std/math" as math;
 import "std/sys" as sys;
+import "std/core" as core;
 
-println(type(math));
-println(type(sys));
-println(len(math) > 10);
-println(len(sys) > 0);
-println(type(math.pi));
+println(core.type(math));
+println(core.type(sys));
+println(core.len(math) > 10);
+println(core.len(sys) > 0);
+println(core.type(math.pi));
 println(math.pi() > 3.0);
 println(math["pi"]() > 3.0);
