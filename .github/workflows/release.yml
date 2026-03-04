@@ -95,11 +95,17 @@ jobs:
           os_name=$(echo "${{ runner.os }}" | tr '[:upper:]' '[:lower:]')
           arch_name=$(echo "${{ runner.arch }}" | tr '[:upper:]' '[:lower:]')
           tag="${{ needs.detect-version.outputs.tag }}"
-          archive="walrus-${tag}-${os_name}-${arch_name}.tar.gz"
 
           mkdir -p dist
           cp "target/release/${bin}" "dist/${bin}"
-          tar -C dist -czf "${archive}" "${bin}"
+
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            archive="walrus-${tag}-${os_name}-${arch_name}.zip"
+            pwsh -NoProfile -Command "Compress-Archive -Path \"dist/${bin}\" -DestinationPath \"${archive}\" -Force"
+          else
+            archive="walrus-${tag}-${os_name}-${arch_name}.tar.gz"
+            tar -C dist -czf "${archive}" "${bin}"
+          fi
 
           echo "archive=${archive}" >> "${GITHUB_OUTPUT}"
 
@@ -139,7 +145,6 @@ jobs:
             echo "Walrus ${tag}"
             echo
             if [[ -n "${previous_tag}" ]]; then
-              echo "Changes: ${previous_tag}...${tag}"
               echo "Compare: https://github.com/${GITHUB_REPOSITORY}/compare/${previous_tag}...${tag}"
             else
               echo "Changes: initial release (${tag})"
