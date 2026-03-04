@@ -70,6 +70,21 @@ impl<'a> VM<'a> {
                 let func_value = self.get_heap_mut().push(HeapValue::Function(method_clone));
                 self.push(func_value);
             }
+            (Value::String(member_name_sym), Value::Module(module_key)) => {
+                let module = self.get_heap().get_module(module_key)?;
+                if let Some(&value) = module.get(&Value::String(member_name_sym)) {
+                    self.push(value);
+                } else {
+                    let member_name = self.get_heap().get_string(member_name_sym)?;
+                    return Err(WalrusError::MemberNotFound {
+                        type_name: "module".to_string(),
+                        member: member_name.to_string(),
+                        span,
+                        src: self.source_ref.source().into(),
+                        filename: self.source_ref.filename().into(),
+                    });
+                }
+            }
             (Value::String(member_name_sym), Value::Dict(dict_key)) => {
                 let dict = self.get_heap().get_dict(dict_key)?;
                 if let Some(&value) = dict.get(&Value::String(member_name_sym)) {
@@ -77,7 +92,7 @@ impl<'a> VM<'a> {
                 } else {
                     let member_name = self.get_heap().get_string(member_name_sym)?;
                     return Err(WalrusError::MemberNotFound {
-                        type_name: "module/dict".to_string(),
+                        type_name: "dict".to_string(),
                         member: member_name.to_string(),
                         span,
                         src: self.source_ref.source().into(),
@@ -124,7 +139,7 @@ impl<'a> VM<'a> {
         let src = self.source_ref.source().to_string();
         let filename = self.source_ref.filename().to_string();
 
-        let result = match object {
+        match object {
             Value::List(key) => {
                 let r = methods::dispatch_list_method(
                     self.get_heap_mut(),
@@ -156,14 +171,22 @@ impl<'a> VM<'a> {
                 let dict = self.get_heap().get_dict(key)?;
 
                 if let Some(func_val) = dict.get(&method_key).copied() {
-                    if let Value::Function(func_key) = func_val {
-                        let func = self.get_heap().get_function(func_key)?.clone();
-                        if let WalrusFunction::Native(native) = func {
-                            let result = self.call_native(native, args, span)?;
-                            self.push(result);
-                            return Ok(MethodCallResult::Pushed);
-                        }
+                    let Value::Function(func_key) = func_val else {
+                        return Err(WalrusError::NotCallable {
+                            value: func_val.get_type().to_string(),
+                            span,
+                            src: self.source_ref.source().into(),
+                            filename: self.source_ref.filename().into(),
+                        });
+                    };
+
+                    let func = self.get_heap().get_function(func_key)?.clone();
+                    if let Some(result) = self.call_exported_function(func, args, span)? {
+                        self.push(result);
+                        return Ok(MethodCallResult::Pushed);
                     }
+
+                    return Ok(MethodCallResult::FrameCreated);
                 }
 
                 let r = methods::dispatch_dict_method(
@@ -177,6 +200,37 @@ impl<'a> VM<'a> {
                 )?;
                 self.push(r);
                 return Ok(MethodCallResult::Pushed);
+            }
+            Value::Module(key) => {
+                let method_key = Value::String(method_name_sym);
+                let module = self.get_heap().get_module(key)?;
+                let Some(func_val) = module.get(&method_key).copied() else {
+                    let method_name = self.get_heap().get_string(method_name_sym)?;
+                    return Err(WalrusError::MemberNotFound {
+                        type_name: "module".to_string(),
+                        member: method_name.to_string(),
+                        span,
+                        src: self.source_ref.source().into(),
+                        filename: self.source_ref.filename().into(),
+                    });
+                };
+
+                let Value::Function(func_key) = func_val else {
+                    return Err(WalrusError::NotCallable {
+                        value: func_val.get_type().to_string(),
+                        span,
+                        src: self.source_ref.source().into(),
+                        filename: self.source_ref.filename().into(),
+                    });
+                };
+
+                let func = self.get_heap().get_function(func_key)?.clone();
+                if let Some(result) = self.call_exported_function(func, args, span)? {
+                    self.push(result);
+                    return Ok(MethodCallResult::Pushed);
+                }
+
+                return Ok(MethodCallResult::FrameCreated);
             }
             Value::StructDef(key) => {
                 let method_name = self.get_heap().get_string(method_name_sym)?;
@@ -241,6 +295,6 @@ impl<'a> VM<'a> {
                     filename: self.source_ref.filename().into(),
                 });
             }
-        };
+        }
     }
 }

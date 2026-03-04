@@ -61,7 +61,7 @@ Walrus is a dynamically-typed, interpreted programming language that combines si
 
 | Function              | Description                         |
 | --------------------- | ----------------------------------- |
-| `len(x)`              | Get length of string, list, or dict |
+| `len(x)`              | Get length of string, list, dict, or module |
 | `str(x)`              | Convert value to string             |
 | `type(x)`             | Get type name of a value            |
 | `input(prompt)`       | Read user input with prompt         |
@@ -71,7 +71,7 @@ Walrus is a dynamically-typed, interpreted programming language that combines si
 
 ### Standard Library
 
-Walrus provides a standard library through an import system. Modules are imported using the `import` statement and return a dictionary of functions.
+Walrus provides a standard library through an import system. Modules are imported using the `import` statement and return a `module` value backed internally by a hash map.
 
 ```walrus
 import "std/io";
@@ -123,7 +123,7 @@ println(g.message);
 println(g.double(21));
 ```
 
-Imported modules/packages are dictionary-backed objects:
+Imported modules/packages are `module` values (map-backed internally):
 - Preferred: dot access (`g.message`, `g.double(21)`).
 - Use indexing (`g["name"]`) only when the member name is dynamic or not a valid identifier.
 

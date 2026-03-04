@@ -96,6 +96,7 @@ impl WalrusType {
             Value::List(_) => WalrusType::List(None), // Element type tracked separately
             Value::Tuple(_) => WalrusType::Tuple,
             Value::Dict(_) => WalrusType::Dict,
+            Value::Module(_) => WalrusType::Dict,
             Value::Range(_) => WalrusType::Range,
             Value::Function(_) => WalrusType::Function,
             Value::Iter(_) => WalrusType::Iter,

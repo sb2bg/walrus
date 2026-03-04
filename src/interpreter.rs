@@ -639,6 +639,14 @@ impl<'a> Interpreter<'a> {
                     None => Ok(Value::Void), // todo: maybe return an error? and let the function return void if it wants to
                 }
             }
+            Value::Module(d) => {
+                let dict = d.resolve()?;
+
+                match dict.get(&index) {
+                    Some(value) => Ok(*value),
+                    None => Ok(Value::Void),
+                }
+            }
             Value::String(s) => {
                 let string = s.resolve()?;
 
@@ -724,13 +732,27 @@ impl<'a> Interpreter<'a> {
         let member_key = HeapValue::String(&member).alloc();
 
         match object {
+            Value::Module(module_key) => {
+                let module = module_key.resolve()?;
+                if let Some(found) = module.get(&member_key).copied() {
+                    Ok(found)
+                } else {
+                    Err(WalrusError::MemberNotFound {
+                        type_name: "module".to_string(),
+                        member,
+                        span,
+                        src: self.source_ref.source().into(),
+                        filename: self.source_ref.filename().into(),
+                    })
+                }
+            }
             Value::Dict(dict_key) => {
                 let dict = dict_key.resolve()?;
                 if let Some(found) = dict.get(&member_key).copied() {
                     Ok(found)
                 } else {
                     Err(WalrusError::MemberNotFound {
-                        type_name: "module/dict".to_string(),
+                        type_name: "dict".to_string(),
                         member,
                         span,
                         src: self.source_ref.source().into(),
@@ -1124,6 +1146,12 @@ impl<'a> Interpreter<'a> {
 
                 Ok(Value::Bool(a_dict == b_dict))
             }
+            (Value::Module(a), Value::Module(b)) => {
+                let a_dict = a.resolve()?;
+                let b_dict = b.resolve()?;
+
+                Ok(Value::Bool(a_dict == b_dict))
+            }
             (Value::List(a), Value::List(b)) => {
                 let a_list = a.resolve()?;
                 let b_list = b.resolve()?;
@@ -1145,6 +1173,12 @@ impl<'a> Interpreter<'a> {
     fn not_equal(&self, left: Value, right: Value) -> InterpreterResult {
         match (left, right) {
             (Value::Dict(a), Value::Dict(b)) => {
+                let a_dict = a.resolve()?;
+                let b_dict = b.resolve()?;
+
+                Ok(Value::Bool(a_dict != b_dict))
+            }
+            (Value::Module(a), Value::Module(b)) => {
                 let a_dict = a.resolve()?;
                 let b_dict = b.resolve()?;
 
@@ -1263,7 +1297,7 @@ impl<'a> Interpreter<'a> {
             exports.insert(key, *value);
         }
 
-        Ok(HeapValue::Dict(exports).alloc())
+        Ok(HeapValue::Module(exports).alloc())
     }
 }
 

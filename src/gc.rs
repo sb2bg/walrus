@@ -179,6 +179,7 @@ impl GcState {
             Value::List(key) => self.marked_lists.insert(key),
             Value::Tuple(key) => self.marked_tuples.insert(key),
             Value::Dict(key) => self.marked_dicts.insert(key),
+            Value::Module(key) => self.marked_dicts.insert(key),
             Value::Function(key) => self.marked_functions.insert(key),
             Value::Iter(key) => self.marked_iters.insert(key),
             Value::StructDef(key) => self.marked_struct_defs.insert(key),

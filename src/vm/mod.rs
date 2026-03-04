@@ -271,7 +271,7 @@ impl<'a> VM<'a> {
             exports.insert(key, value);
         }
 
-        Ok(self.get_heap_mut().push(HeapValue::Dict(exports)))
+        Ok(self.get_heap_mut().push(HeapValue::Module(exports)))
     }
 
     /// Collect all root values that the GC needs to trace from
@@ -379,6 +379,66 @@ impl<'a> VM<'a> {
         span: Span,
     ) -> WalrusResult<Value> {
         crate::native_registry::dispatch_native(self, native_fn, args, span)
+    }
+
+    fn call_exported_function(
+        &mut self,
+        function: WalrusFunction,
+        args: Vec<Value>,
+        span: Span,
+    ) -> WalrusResult<Option<Value>> {
+        match function {
+            WalrusFunction::Native(native) => {
+                let result = self.call_native(native, args, span)?;
+                Ok(Some(result))
+            }
+            WalrusFunction::Rust(rust_fn) => {
+                if args.len() != rust_fn.args {
+                    return Err(WalrusError::InvalidArgCount {
+                        name: rust_fn.name.clone(),
+                        expected: rust_fn.args,
+                        got: args.len(),
+                        span,
+                        src: self.source_ref.source().into(),
+                        filename: self.source_ref.filename().into(),
+                    });
+                }
+
+                let result = rust_fn.call(args, self.source_ref, span)?;
+                Ok(Some(result))
+            }
+            WalrusFunction::Vm(func) => {
+                if args.len() != func.arity {
+                    return Err(WalrusError::InvalidArgCount {
+                        name: func.name.clone(),
+                        expected: func.arity,
+                        got: args.len(),
+                        span,
+                        src: self.source_ref.source().into(),
+                        filename: self.source_ref.filename().into(),
+                    });
+                }
+
+                let new_frame = CallFrame {
+                    return_ip: self.ip,
+                    frame_pointer: self.locals.len(),
+                    stack_pointer: self.stack.len(),
+                    instructions: Rc::clone(&func.code),
+                    function_name: func.name.clone(),
+                    return_override: None,
+                };
+
+                self.call_stack.push(new_frame);
+                self.locals.extend(args);
+                self.ip = 0;
+                Ok(None)
+            }
+            WalrusFunction::TreeWalk(_) => Err(WalrusError::NodeFunctionNotSupportedInVm {
+                span,
+                src: self.source_ref.source().into(),
+                filename: self.source_ref.filename().into(),
+            }),
+        }
     }
 
     /// Helper to extract string from Value
@@ -1703,6 +1763,12 @@ impl<'a> VM<'a> {
 
                             self.push(Value::Bool(a == b));
                         }
+                        (Value::Module(a), Value::Module(b)) => {
+                            let a = self.get_heap().get_module(a)?;
+                            let b = self.get_heap().get_module(b)?;
+
+                            self.push(Value::Bool(a == b));
+                        }
                         (Value::Function(a), Value::Function(b)) => {
                             let a_func = self.get_heap().get_function(a)?;
                             let b_func = self.get_heap().get_function(b)?;
@@ -1732,6 +1798,12 @@ impl<'a> VM<'a> {
                         (Value::Dict(a), Value::Dict(b)) => {
                             let a = self.get_heap().get_dict(a)?;
                             let b = self.get_heap().get_dict(b)?;
+
+                            self.push(Value::Bool(a != b));
+                        }
+                        (Value::Module(a), Value::Module(b)) => {
+                            let a = self.get_heap().get_module(a)?;
+                            let b = self.get_heap().get_module(b)?;
 
                             self.push(Value::Bool(a != b));
                         }
@@ -1913,6 +1985,22 @@ impl<'a> VM<'a> {
                                 return Err(WalrusError::KeyNotFound {
                                     key: b_str,
                                     span: span,
+                                    src: self.source_ref.source().to_string(),
+                                    filename: self.source_ref.filename().to_string(),
+                                });
+                            }
+                        }
+                        (Value::Module(a), b) => {
+                            let a = self.get_heap().get_module(a)?;
+
+                            if let Some(value) = a.get(&b) {
+                                self.push(*value);
+                            } else {
+                                let b_str = b.stringify()?;
+
+                                return Err(WalrusError::KeyNotFound {
+                                    key: b_str,
+                                    span,
                                     src: self.source_ref.source().to_string(),
                                     filename: self.source_ref.filename().to_string(),
                                 });
@@ -2125,6 +2213,10 @@ impl<'a> VM<'a> {
                             let dict = self.get_heap().get_dict(key)?;
                             self.push(Value::Int(dict.len() as i64));
                         }
+                        Value::Module(key) => {
+                            let module = self.get_heap().get_module(key)?;
+                            self.push(Value::Int(module.len() as i64));
+                        }
                         _ => {
                             return Err(WalrusError::NoLength {
                                 type_name: a.get_type().to_string(),
@@ -2243,14 +2335,14 @@ impl<'a> VM<'a> {
                         }
                     }
                 }
-                // Import system - returns a module dict with native functions
+                // Import system - returns a module namespace with native functions
                 Opcode::Import => {
                     let module_name = self.pop(opcode, span)?;
                     match module_name {
                         Value::String(name_key) => {
                             let name_str = self.get_heap().get_string(name_key)?;
                             if let Some(functions) = crate::stdlib::get_module_functions(name_str) {
-                                // Build a dict where keys are function names and values are the functions
+                                // Build a module where keys are function names and values are the functions
                                 let mut dict = FxHashMap::default();
                                 for native_fn in functions {
                                     let key = self
@@ -2261,7 +2353,7 @@ impl<'a> VM<'a> {
                                     ));
                                     dict.insert(key, func);
                                 }
-                                let module = self.get_heap_mut().push(HeapValue::Dict(dict));
+                                let module = self.get_heap_mut().push(HeapValue::Module(dict));
                                 self.push(module);
                             } else {
                                 let module = crate::program::load_module_for_vm(
@@ -2429,16 +2521,29 @@ impl<'a> VM<'a> {
                                 }
                             }
                         }
-                        // Dict/Module member access (for imported modules)
+                        (Value::String(member_name_sym), Value::Module(module_key)) => {
+                            let module = self.get_heap().get_module(module_key)?;
+                            if let Some(&value) = module.get(&Value::String(member_name_sym)) {
+                                self.push(value);
+                            } else {
+                                let member_name = self.get_heap().get_string(member_name_sym)?;
+                                return Err(WalrusError::MemberNotFound {
+                                    type_name: "module".to_string(),
+                                    member: member_name.to_string(),
+                                    span,
+                                    src: self.source_ref.source().into(),
+                                    filename: self.source_ref.filename().into(),
+                                });
+                            }
+                        }
                         (Value::String(member_name_sym), Value::Dict(dict_key)) => {
                             let dict = self.get_heap().get_dict(dict_key)?;
-                            // Look up by the string key
                             if let Some(&value) = dict.get(&Value::String(member_name_sym)) {
                                 self.push(value);
                             } else {
                                 let member_name = self.get_heap().get_string(member_name_sym)?;
                                 return Err(WalrusError::MemberNotFound {
-                                    type_name: "module/dict".to_string(),
+                                    type_name: "dict".to_string(),
                                     member: member_name.to_string(),
                                     span,
                                     src: self.source_ref.source().into(),
@@ -2641,9 +2746,7 @@ impl<'a> VM<'a> {
                             filename,
                         )?,
                         Value::Dict(key) => {
-                            // First, check if this dict contains a native function with this name
                             let method_key = Value::String(method_name_sym);
-
                             let dict = self.get_heap().get_dict(key)?;
 
                             if let Some(func_val) = dict.get(&method_key).copied() {
@@ -2657,66 +2760,14 @@ impl<'a> VM<'a> {
                                 };
 
                                 let function = self.get_heap().get_function(func_key)?.clone();
-
-                                match function {
-                                    WalrusFunction::Native(native) => {
-                                        let result = self.call_native(native, args, span)?;
-                                        self.push(result);
-                                        continue;
-                                    }
-                                    WalrusFunction::Rust(rust_fn) => {
-                                        if args.len() != rust_fn.args {
-                                            return Err(WalrusError::InvalidArgCount {
-                                                name: rust_fn.name.clone(),
-                                                expected: rust_fn.args,
-                                                got: args.len(),
-                                                span,
-                                                src: self.source_ref.source().into(),
-                                                filename: self.source_ref.filename().into(),
-                                            });
-                                        }
-
-                                        let result = rust_fn.call(args, self.source_ref, span)?;
-                                        self.push(result);
-                                        continue;
-                                    }
-                                    WalrusFunction::Vm(func) => {
-                                        if args.len() != func.arity {
-                                            return Err(WalrusError::InvalidArgCount {
-                                                name: func.name.clone(),
-                                                expected: func.arity,
-                                                got: args.len(),
-                                                span,
-                                                src: self.source_ref.source().into(),
-                                                filename: self.source_ref.filename().into(),
-                                            });
-                                        }
-
-                                        let new_frame = CallFrame {
-                                            return_ip: self.ip,
-                                            frame_pointer: self.locals.len(),
-                                            stack_pointer: self.stack.len(),
-                                            instructions: Rc::clone(&func.code),
-                                            function_name: func.name.clone(),
-                                            return_override: None,
-                                        };
-
-                                        self.call_stack.push(new_frame);
-                                        self.locals.extend(args);
-                                        self.ip = 0;
-                                        continue;
-                                    }
-                                    WalrusFunction::TreeWalk(_) => {
-                                        return Err(WalrusError::NodeFunctionNotSupportedInVm {
-                                            span,
-                                            src: self.source_ref.source().into(),
-                                            filename: self.source_ref.filename().into(),
-                                        });
-                                    }
+                                if let Some(result) =
+                                    self.call_exported_function(function, args, span)?
+                                {
+                                    self.push(result);
                                 }
+                                continue;
                             }
 
-                            // Otherwise, use regular dict method dispatch
                             methods::dispatch_dict_method(
                                 self.get_heap_mut(),
                                 key,
@@ -2726,6 +2777,37 @@ impl<'a> VM<'a> {
                                 src,
                                 filename,
                             )?
+                        }
+                        Value::Module(key) => {
+                            let method_key = Value::String(method_name_sym);
+                            let module = self.get_heap().get_module(key)?;
+                            let Some(func_val) = module.get(&method_key).copied() else {
+                                let method_name = self.get_heap().get_string(method_name_sym)?;
+                                return Err(WalrusError::MemberNotFound {
+                                    type_name: "module".to_string(),
+                                    member: method_name.to_string(),
+                                    span,
+                                    src: self.source_ref.source().into(),
+                                    filename: self.source_ref.filename().into(),
+                                });
+                            };
+
+                            let Value::Function(func_key) = func_val else {
+                                return Err(WalrusError::NotCallable {
+                                    value: func_val.get_type().to_string(),
+                                    span,
+                                    src: self.source_ref.source().into(),
+                                    filename: self.source_ref.filename().into(),
+                                });
+                            };
+
+                            let function = self.get_heap().get_function(func_key)?.clone();
+                            if let Some(result) =
+                                self.call_exported_function(function, args, span)?
+                            {
+                                self.push(result);
+                            }
+                            continue;
                         }
                         Value::Iter(iter_key) => {
                             let method_name =

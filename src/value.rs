@@ -53,6 +53,7 @@ pub enum Value {
     List(ListKey),
     Tuple(TupleKey),
     Dict(DictKey),
+    Module(DictKey),
     Function(FuncKey),
     Iter(IterKey),
     StructDef(StructDefKey),
@@ -71,6 +72,7 @@ impl Value {
             Value::List(_) => "list",
             Value::Tuple(_) => "tuple",
             Value::Dict(_) => "dict",
+            Value::Module(_) => "module",
             Value::Function(_) => "function",
             Value::Iter(_) => "iter",
             Value::StructDef(_) => "struct",
@@ -89,6 +91,7 @@ impl Value {
             Value::List(l) => !l.resolve()?.is_empty(),
             Value::Tuple(t) => !t.resolve()?.is_empty(),
             Value::Dict(d) => !d.resolve()?.is_empty(),
+            Value::Module(d) => !d.resolve()?.is_empty(),
             Value::Range(r) => !r.is_empty(),
             Value::Function(_) => true,
             Value::Iter(_) => true,
@@ -154,6 +157,24 @@ impl Value {
                 s.push('}');
                 s
             }
+            Value::Module(d) => {
+                let dict = d.resolve()?;
+                let mut s = String::new();
+
+                s.push('{');
+
+                for (i, (key, value)) in dict.iter().enumerate() {
+                    if i > 0 {
+                        s.push_str(", ");
+                    }
+                    s.push_str(&key.stringify()?);
+                    s.push_str(": ");
+                    s.push_str(&value.stringify()?);
+                }
+
+                s.push('}');
+                s
+            }
             Value::Function(f) => {
                 let func = f.resolve()?;
                 func.to_string()
@@ -184,6 +205,7 @@ impl Display for Value {
             Value::List(list) => write!(f, "{:?}", list),
             Value::Tuple(tuple) => write!(f, "{:?}", tuple),
             Value::Dict(dict) => write!(f, "{:?}", dict),
+            Value::Module(module) => write!(f, "{:?}", module),
             Value::Function(func) => write!(f, "{:?}", func),
             Value::Iter(iter) => write!(f, "{:?}", iter),
             Value::StructDef(s) => write!(f, "{:?}", s),

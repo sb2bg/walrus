@@ -99,6 +99,7 @@ impl ValueHolder {
     pub fn free(&mut self, key: Value) -> bool {
         match key {
             Value::Dict(key) => self.dicts.remove(key).is_some(),
+            Value::Module(key) => self.dicts.remove(key).is_some(),
             Value::List(key) => self.lists.remove(key).is_some(),
             Value::String(key) => {
                 // Also remove from intern table
@@ -123,6 +124,7 @@ impl ValueHolder {
             HeapValue::List(list) => estimate_list_size(list.len(), list.capacity()),
             HeapValue::Tuple(tuple) => estimate_tuple_size(tuple.len()),
             HeapValue::Dict(dict) => estimate_dict_size(dict.len()),
+            HeapValue::Module(dict) => estimate_dict_size(dict.len()),
             HeapValue::Function(func) => {
                 let (bc_len, const_len) = match func {
                     WalrusFunction::Vm(f) => (f.code.instructions.len(), f.code.constants.len()),
@@ -141,6 +143,7 @@ impl ValueHolder {
             HeapValue::List(list) => Value::List(self.lists.insert(list)),
             HeapValue::Tuple(tuple) => Value::Tuple(self.tuples.insert(tuple.to_vec())),
             HeapValue::Dict(dict) => Value::Dict(self.dicts.insert(dict)),
+            HeapValue::Module(dict) => Value::Module(self.dicts.insert(dict)),
             HeapValue::Function(func) => Value::Function(self.functions.insert(func)),
             HeapValue::String(string) => {
                 // String interning: return existing key if string already exists
@@ -197,6 +200,15 @@ impl ValueHolder {
                 }
             }
             Value::Dict(key) => {
+                if let Some(dict) = self.dicts.get(key) {
+                    let entries: Vec<(Value, Value)> = dict.iter().map(|(&k, &v)| (k, v)).collect();
+                    for (k, v) in entries {
+                        self.mark(k);
+                        self.mark(v);
+                    }
+                }
+            }
+            Value::Module(key) => {
                 if let Some(dict) = self.dicts.get(key) {
                     let entries: Vec<(Value, Value)> = dict.iter().map(|(&k, &v)| (k, v)).collect();
                     for (k, v) in entries {
@@ -419,6 +431,7 @@ impl ValueHolder {
             Value::String(s) => !self.get_string(s)?.is_empty(),
             Value::List(l) => !self.get_list(l)?.is_empty(),
             Value::Dict(d) => !self.get_dict(d)?.is_empty(),
+            Value::Module(d) => !self.get_module(d)?.is_empty(),
             Value::Tuple(t) => !self.get_tuple(t)?.is_empty(),
             Value::Range(range) => !range.is_empty(),
             Value::Function(_) => true,
@@ -438,6 +451,14 @@ impl ValueHolder {
     }
 
     pub fn get_dict(&self, key: DictKey) -> WalrusResult<&FxHashMap<Value, Value>> {
+        Self::check(self.dicts.get(key))
+    }
+
+    pub fn get_mut_module(&mut self, key: DictKey) -> WalrusResult<&mut FxHashMap<Value, Value>> {
+        Self::check(self.dicts.get_mut(key))
+    }
+
+    pub fn get_module(&self, key: DictKey) -> WalrusResult<&FxHashMap<Value, Value>> {
         Self::check(self.dicts.get(key))
     }
 
@@ -578,6 +599,24 @@ impl ValueHolder {
                 s.push('}');
                 s
             }
+            Value::Module(d) => {
+                let dict = self.get_module(d)?;
+                let mut s = String::new();
+
+                s.push('{');
+
+                for (i, (&key, &value)) in dict.iter().enumerate() {
+                    if i > 0 {
+                        s.push_str(", ");
+                    }
+                    s.push_str(&self.stringify(key)?);
+                    s.push_str(": ");
+                    s.push_str(&self.stringify(value)?);
+                }
+
+                s.push('}');
+                s
+            }
             Value::Function(f) => {
                 let func = self.get_function(f)?;
                 func.to_string()
@@ -646,6 +685,7 @@ pub enum HeapValue<'a> {
     List(Vec<Value>),
     Tuple(&'a [Value]),
     Dict(FxHashMap<Value, Value>),
+    Module(FxHashMap<Value, Value>),
     Function(WalrusFunction),
     String(&'a str),
     Iter(ValueIter),

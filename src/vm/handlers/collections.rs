@@ -151,6 +151,22 @@ impl<'a> VM<'a> {
                     });
                 }
             }
+            (Value::Module(a), b) => {
+                let a = self.get_heap().get_module(a)?;
+
+                if let Some(value) = a.get(&b) {
+                    self.push(*value);
+                } else {
+                    let b_str = b.stringify()?;
+
+                    return Err(WalrusError::KeyNotFound {
+                        key: b_str,
+                        span,
+                        src: self.source_ref.source().to_string(),
+                        filename: self.source_ref.filename().to_string(),
+                    });
+                }
+            }
             (Value::String(a), Value::Range(range)) => {
                 let a = self.get_heap().get_string(a)?;
                 let a_len = a.chars().count();

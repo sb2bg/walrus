@@ -26,6 +26,11 @@ impl<'a> VM<'a> {
                 let b = self.get_heap().get_dict(b)?;
                 self.push(Value::Bool(a == b));
             }
+            (Value::Module(a), Value::Module(b)) => {
+                let a = self.get_heap().get_module(a)?;
+                let b = self.get_heap().get_module(b)?;
+                self.push(Value::Bool(a == b));
+            }
             (Value::Function(a), Value::Function(b)) => {
                 let a_func = self.get_heap().get_function(a)?;
                 let b_func = self.get_heap().get_function(b)?;
@@ -56,6 +61,11 @@ impl<'a> VM<'a> {
             (Value::Dict(a), Value::Dict(b)) => {
                 let a = self.get_heap().get_dict(a)?;
                 let b = self.get_heap().get_dict(b)?;
+                self.push(Value::Bool(a != b));
+            }
+            (Value::Module(a), Value::Module(b)) => {
+                let a = self.get_heap().get_module(a)?;
+                let b = self.get_heap().get_module(b)?;
                 self.push(Value::Bool(a != b));
             }
             (Value::Function(a), Value::Function(b)) => {

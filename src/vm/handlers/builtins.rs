@@ -43,6 +43,10 @@ impl<'a> VM<'a> {
                 let dict = self.get_heap().get_dict(key)?;
                 self.push(Value::Int(dict.len() as i64));
             }
+            Value::Module(key) => {
+                let module = self.get_heap().get_module(key)?;
+                self.push(Value::Int(module.len() as i64));
+            }
             _ => {
                 return Err(WalrusError::NoLength {
                     type_name: a.get_type().to_string(),
@@ -185,7 +189,7 @@ impl<'a> VM<'a> {
                             .push(HeapValue::Function(WalrusFunction::Native(native_fn)));
                         dict.insert(key, func);
                     }
-                    let module = self.get_heap_mut().push(HeapValue::Dict(dict));
+                    let module = self.get_heap_mut().push(HeapValue::Module(dict));
                     self.push(module);
                     Ok(())
                 } else {

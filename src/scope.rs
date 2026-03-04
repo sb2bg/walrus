@@ -61,6 +61,7 @@ impl Scope {
                     Value::String(key) => Ok(Value::Int(key.resolve()?.len() as i64)),
                     Value::List(key) => Ok(Value::Int(key.resolve()?.len() as i64)),
                     Value::Dict(key) => Ok(Value::Int(key.resolve()?.len() as i64)),
+                    Value::Module(key) => Ok(Value::Int(key.resolve()?.len() as i64)),
                     _ => Err(WalrusError::NoLength {
                         type_name: args[0].get_type().to_string(),
                         span,
