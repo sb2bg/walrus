@@ -10,8 +10,14 @@ permissions:
   contents: write
 
 jobs:
-  release:
+  detect-version:
     runs-on: ubuntu-latest
+    outputs:
+      current_version: ${{ steps.version.outputs.current_version }}
+      previous_version: ${{ steps.version.outputs.previous_version }}
+      previous_tag: ${{ steps.version.outputs.previous_tag }}
+      tag: ${{ steps.version.outputs.tag }}
+      should_release: ${{ steps.version.outputs.should_release }}
 
     steps:
       - uses: actions/checkout@v4
@@ -43,6 +49,9 @@ jobs:
             tag_exists="true"
           fi
 
+          git fetch --tags --force
+          previous_tag=$(git tag --list 'v*' --sort=-version:refname | grep -Fxv "${tag}" | head -n 1 || true)
+
           should_release="false"
           if [[ -n "${current_version}" && "${current_version}" != "${previous_version}" && "${tag_exists}" != "true" ]]; then
             should_release="true"
@@ -50,22 +59,111 @@ jobs:
 
           echo "current_version=${current_version}" >> "${GITHUB_OUTPUT}"
           echo "previous_version=${previous_version}" >> "${GITHUB_OUTPUT}"
+          echo "previous_tag=${previous_tag}" >> "${GITHUB_OUTPUT}"
           echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
           echo "should_release=${should_release}" >> "${GITHUB_OUTPUT}"
 
+  build-binaries:
+    needs: detect-version
+    if: needs.detect-version.outputs.should_release == 'true'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build release binary
+        run: cargo build --release --locked
+
+      - name: Package binary
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          bin="walrus"
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            bin="walrus.exe"
+          fi
+
+          os_name=$(echo "${{ runner.os }}" | tr '[:upper:]' '[:lower:]')
+          arch_name=$(echo "${{ runner.arch }}" | tr '[:upper:]' '[:lower:]')
+          tag="${{ needs.detect-version.outputs.tag }}"
+          archive="walrus-${tag}-${os_name}-${arch_name}.tar.gz"
+
+          mkdir -p dist
+          cp "target/release/${bin}" "dist/${bin}"
+          tar -C dist -czf "${archive}" "${bin}"
+
+          echo "archive=${archive}" >> "${GITHUB_OUTPUT}"
+
+      - name: Upload packaged binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.archive }}
+          path: ${{ steps.package.outputs.archive }}
+          if-no-files-found: error
+
+  publish-release:
+    needs: [detect-version, build-binaries]
+    if: needs.detect-version.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download binaries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: walrus-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Generate release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          tag="${{ needs.detect-version.outputs.tag }}"
+          previous_tag="${{ needs.detect-version.outputs.previous_tag }}"
+
+          {
+            echo "Walrus ${tag}"
+            echo
+            if [[ -n "${previous_tag}" ]]; then
+              echo "Changes: ${previous_tag}...${tag}"
+              echo "Compare: https://github.com/${GITHUB_REPOSITORY}/compare/${previous_tag}...${tag}"
+            else
+              echo "Changes: initial release (${tag})"
+            fi
+          } > release-notes.md
+
       - name: Create GitHub release
-        if: steps.version.outputs.should_release == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create "${{ steps.version.outputs.tag }}" \
-            --title "${{ steps.version.outputs.tag }}" \
+          gh release create "${{ needs.detect-version.outputs.tag }}" \
+            release-assets/* \
+            --title "${{ needs.detect-version.outputs.tag }}" \
             --target "${GITHUB_SHA}" \
-            --generate-notes
+            --notes-file release-notes.md
 
+  skip-release:
+    needs: detect-version
+    if: needs.detect-version.outputs.should_release != 'true'
+    runs-on: ubuntu-latest
+
+    steps:
       - name: Skip release
-        if: steps.version.outputs.should_release != 'true'
         run: |
           echo "Skipping release."
-          echo "current=${{ steps.version.outputs.current_version }}"
-          echo "previous=${{ steps.version.outputs.previous_version }}"
+          echo "current=${{ needs.detect-version.outputs.current_version }}"
+          echo "previous=${{ needs.detect-version.outputs.previous_version }}"
