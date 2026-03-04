@@ -649,15 +649,16 @@ impl<'a> Interpreter<'a> {
             }
             Value::String(s) => {
                 let string = s.resolve()?;
+                let char_len = string.chars().count();
 
                 match index {
                     Value::Int(n) => {
-                        let index = if n < 0 { n + string.len() as i64 } else { n };
+                        let index = if n < 0 { n + char_len as i64 } else { n };
 
-                        if index < 0 || index as usize >= string.len() {
+                        if index < 0 || index as usize >= char_len {
                             Err(WalrusError::IndexOutOfBounds {
-                                index: n, // fixme: lossy conversion
-                                len: string.len(),
+                                index: n,
+                                len: char_len,
                                 span: index_span,
                                 src: self.source_ref.source().into(),
                                 filename: self.source_ref.filename().into(),
@@ -665,43 +666,91 @@ impl<'a> Interpreter<'a> {
                         }
 
                         let index = index as usize;
+                        let start = Self::char_to_byte_offset(&string, index).ok_or_else(|| {
+                            WalrusError::IndexOutOfBounds {
+                                index: n,
+                                len: char_len,
+                                span: index_span,
+                                src: self.source_ref.source().into(),
+                                filename: self.source_ref.filename().into(),
+                            }
+                        })?;
+                        let end =
+                            Self::char_to_byte_offset(&string, index + 1).ok_or_else(|| {
+                                WalrusError::IndexOutOfBounds {
+                                    index: n,
+                                    len: char_len,
+                                    span: index_span,
+                                    src: self.source_ref.source().into(),
+                                    filename: self.source_ref.filename().into(),
+                                }
+                            })?;
 
-                        Ok(HeapValue::String(&string[index..index + 1]).alloc())
+                        Ok(HeapValue::String(&string[start..end]).alloc())
                     }
-                    // fixme: this is a exact copy of the above code, make a function for this
                     Value::Range(range) => {
                         let start = range.start();
                         let end = range.end();
                         let start_span = range.start_span();
                         let end_span = range.end_span();
 
-                        let end = if end < 0 {
-                            end + string.len() as i64
-                        } else {
-                            end
-                        };
+                        let end = if end < 0 { end + char_len as i64 } else { end };
 
-                        if start < 0 || start as usize >= string.len() {
+                        if start < 0 || start as usize >= char_len {
                             Err(WalrusError::IndexOutOfBounds {
                                 index: start,
-                                len: string.len(),
+                                len: char_len,
                                 span: start_span,
                                 src: self.source_ref.source().into(),
                                 filename: self.source_ref.filename().into(),
                             })?
                         }
 
-                        if end < 0 || end as usize >= string.len() {
+                        if end < 0 || end as usize >= char_len {
                             Err(WalrusError::IndexOutOfBounds {
                                 index: end,
-                                len: string.len(),
+                                len: char_len,
                                 span: end_span,
                                 src: self.source_ref.source().into(),
                                 filename: self.source_ref.filename().into(),
                             })?
                         }
 
-                        let substring = &string[start as usize..(end + 1) as usize];
+                        if start > end {
+                            Err(WalrusError::InvalidRange {
+                                start,
+                                end,
+                                span: index_span,
+                                src: self.source_ref.source().into(),
+                                filename: self.source_ref.filename().into(),
+                            })?
+                        }
+
+                        let start = start as usize;
+                        let end = (end + 1) as usize;
+
+                        let start_byte =
+                            Self::char_to_byte_offset(&string, start).ok_or_else(|| {
+                                WalrusError::IndexOutOfBounds {
+                                    index: range.start(),
+                                    len: char_len,
+                                    span: start_span,
+                                    src: self.source_ref.source().into(),
+                                    filename: self.source_ref.filename().into(),
+                                }
+                            })?;
+                        let end_byte =
+                            Self::char_to_byte_offset(&string, end).ok_or_else(|| {
+                                WalrusError::IndexOutOfBounds {
+                                    index: range.end(),
+                                    len: char_len,
+                                    span: end_span,
+                                    src: self.source_ref.source().into(),
+                                    filename: self.source_ref.filename().into(),
+                                }
+                            })?;
+
+                        let substring = &string[start_byte..end_byte];
                         Ok(HeapValue::String(substring).alloc())
                     }
                     _ => Err(WalrusError::InvalidIndexType {
@@ -1272,6 +1321,19 @@ impl<'a> Interpreter<'a> {
                 filename: self.source_ref.filename().to_string(),
             }),
         }
+    }
+
+    fn char_to_byte_offset(s: &str, char_index: usize) -> Option<usize> {
+        if char_index == 0 {
+            return Some(0);
+        }
+        if char_index == s.chars().count() {
+            return Some(s.len());
+        }
+
+        s.char_indices()
+            .nth(char_index)
+            .map(|(byte_idx, _)| byte_idx)
     }
 
     fn construct_err(&self, op: Opcode, left: Value, right: Value, span: Span) -> WalrusError {
