@@ -25,10 +25,10 @@ Walrus is a dynamically-typed, interpreted programming language that combines si
 
 - **First-Class Functions**: Functions as values with nested function support
 - **Structs & Methods**: Object-oriented programming with struct definitions and static methods
-- **Comprehensive Data Types**: integers, floats, strings, booleans, lists, tuples, dictionaries, ranges
+- **Comprehensive Data Types**: integers, floats, strings, booleans, lists, dictionaries, ranges
 - **Control Flow**: if/else conditionals, while loops, for loops with iterators, break/continue
 - **Format Strings**: Embedded expressions within string literals (f-strings)
-- **Short-Circuit Evaluation**: Optimized boolean logic with `and`/`or` operators
+- **Short-Circuit Evaluation**: Truthiness-based `and`/`or` operators with short-circuit semantics
 - **Recursion**: Full support for recursive functions with tail call optimization
 - **String Manipulation**: Slicing, indexing, and string operations
 - **Collection Operations**: List/dict concatenation, negative indexing, in-place modification
@@ -525,6 +525,26 @@ let items = [1, 2, 3, 4, 5];
 let data = {"key": "value", "count": 10};
 ```
 
+Tuple values exist at runtime (for example, dictionary iteration yields key/value pairs as tuples),
+but tuple literals are not yet part of the surface syntax.
+
+### Truthiness
+
+Walrus conditions and short-circuit logic are truthiness-based.
+
+Falsy values:
+
+- `false`
+- `void`
+- `0` and `0.0`
+- Empty string/list/dict/module/tuple/range
+
+Truthy values:
+
+- Everything else
+
+`and`/`or` short-circuit and return operand values. `not` returns a boolean.
+
 ### Format Strings
 
 ```walrus
@@ -763,6 +783,7 @@ cargo run -- showcase.walrus
 Additional example projects:
 
 - `examples/json_parser/` - A simple recursive-descent JSON parser project in Walrus.
+- `examples/pathfinding_visualizer/` - A deterministic A* maze pathfinding demo with ASCII search snapshots.
 - `examples/terminal_roguelike/` - A simulation-style ASCII roguelike demo using structs, RNG, file I/O, and VM `try/catch`.
 
 ## Contributing
