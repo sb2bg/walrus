@@ -378,13 +378,22 @@ println(parsed);
 println("");
 
 let maintainer = parsed["maintainer"];
-println(f"Project: {parsed["project"]}");
-println(f"Version: {core.str(parsed["version"])}");
-println(f"First feature: {parsed["features"][0]}");
-println(f"Maintainer: {maintainer["name"]}");
-println(f"Maintainer active: {core.str(maintainer["active"])}");
-println(f"Maintainer contact email: {maintainer["contact"]["email"]}");
-println(f"Maintainer contact phone: {maintainer["contact"]["phone"]}");
+let project_name = parsed["project"];
+let version = parsed["version"];
+let first_feature = parsed["features"][0];
+let maintainer_name = maintainer["name"];
+let maintainer_active = maintainer["active"];
+let maintainer_contact = maintainer["contact"];
+let maintainer_email = maintainer_contact["email"];
+let maintainer_phone = maintainer_contact["phone"];
+
+println(f"Project: {project_name}");
+println(f"Version: {core.str(version)}");
+println(f"First feature: {first_feature}");
+println(f"Maintainer: {maintainer_name}");
+println(f"Maintainer active: {core.str(maintainer_active)}");
+println(f"Maintainer contact email: {maintainer_email}");
+println(f"Maintainer contact phone: {maintainer_phone}");
 
 println("");
 let inline = "{\"nums\": [1, 2, 3], \"ok\": true, \"missing\": null}";
