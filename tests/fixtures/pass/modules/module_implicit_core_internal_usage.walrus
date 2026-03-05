@@ -1,4 +1,4 @@
-import "../modules/internal_core_struct.walrus" as m;
+import "../../modules/internal_core_struct.walrus" as m;
 
 println(core.len(m));
 println(m.answer);

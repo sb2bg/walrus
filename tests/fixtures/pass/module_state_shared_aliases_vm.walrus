@@ -1,8 +1,0 @@
-import "../modules/edge_counter.walrus" as a;
-import "../modules/edge_counter.walrus" as b;
-
-println(a.get());
-a.inc();
-println(b.get());
-b.inc();
-println(a.get());
