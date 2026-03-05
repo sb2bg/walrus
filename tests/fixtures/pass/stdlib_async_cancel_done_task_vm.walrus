@@ -1,0 +1,10 @@
+import "std/async" as asyncx;
+
+async fn quick : {
+    return 1;
+}
+
+let task = quick();
+println(await task);
+println(asyncx.cancel(task));
+println(asyncx.cancelled(task));

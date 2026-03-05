@@ -80,6 +80,7 @@ enum TaskResolution {
     Pending,
     Ready(Value),
     Failed(Value),
+    Cancelled,
 }
 
 /// The Walrus Virtual Machine executes compiled bytecode.
@@ -720,6 +721,52 @@ impl<'a> VM<'a> {
         self.create_non_runnable_task(AsyncTask::Gather { tasks })
     }
 
+    fn cancelled_task_error_value(&mut self) -> Value {
+        self.get_heap_mut()
+            .push(HeapValue::String("task cancelled"))
+    }
+
+    fn cancel_task_recursive_internal(
+        &mut self,
+        task_key: crate::arenas::TaskKey,
+        visited: &mut FxHashSet<crate::arenas::TaskKey>,
+    ) -> WalrusResult<bool> {
+        if !visited.insert(task_key) {
+            return Ok(false);
+        }
+
+        let task = self.get_heap().get_task(task_key)?.clone();
+        match task {
+            AsyncTask::Pending { .. } | AsyncTask::Sleep { .. } => {
+                *self.get_heap_mut().get_mut_task(task_key)? = AsyncTask::Cancelled;
+                Ok(true)
+            }
+            AsyncTask::Timeout { task, .. } => {
+                let _ = self.cancel_task_recursive_internal(task, visited)?;
+                *self.get_heap_mut().get_mut_task(task_key)? = AsyncTask::Cancelled;
+                Ok(true)
+            }
+            AsyncTask::Gather { tasks } => {
+                for child in tasks {
+                    let _ = self.cancel_task_recursive_internal(child, visited)?;
+                }
+                *self.get_heap_mut().get_mut_task(task_key)? = AsyncTask::Cancelled;
+                Ok(true)
+            }
+            AsyncTask::Ready(_) | AsyncTask::Failed(_) | AsyncTask::Cancelled => Ok(false),
+        }
+    }
+
+    pub(crate) fn cancel_task(&mut self, task_key: crate::arenas::TaskKey) -> WalrusResult<bool> {
+        let mut visited = FxHashSet::default();
+        self.cancel_task_recursive_internal(task_key, &mut visited)
+    }
+
+    pub(crate) fn task_is_cancelled(&self, task_key: crate::arenas::TaskKey) -> WalrusResult<bool> {
+        let task = self.get_heap().get_task(task_key)?;
+        Ok(matches!(task, AsyncTask::Cancelled))
+    }
+
     fn complete_task_on_frame_return(
         &mut self,
         task_key: Option<crate::arenas::TaskKey>,
@@ -793,6 +840,7 @@ impl<'a> VM<'a> {
             AsyncTask::Pending { .. } => Ok(TaskResolution::Pending),
             AsyncTask::Ready(value) => Ok(TaskResolution::Ready(value)),
             AsyncTask::Failed(value) => Ok(TaskResolution::Failed(value)),
+            AsyncTask::Cancelled => Ok(TaskResolution::Cancelled),
             AsyncTask::Sleep { wake_at } => {
                 if Instant::now() >= wake_at {
                     *self.get_heap_mut().get_mut_task(task_key)? = AsyncTask::Ready(Value::Void);
@@ -809,6 +857,10 @@ impl<'a> VM<'a> {
                 TaskResolution::Failed(value) => {
                     *self.get_heap_mut().get_mut_task(task_key)? = AsyncTask::Failed(value);
                     Ok(TaskResolution::Failed(value))
+                }
+                TaskResolution::Cancelled => {
+                    *self.get_heap_mut().get_mut_task(task_key)? = AsyncTask::Cancelled;
+                    Ok(TaskResolution::Cancelled)
                 }
                 TaskResolution::Pending => {
                     if Instant::now() >= deadline {
@@ -830,6 +882,10 @@ impl<'a> VM<'a> {
                         TaskResolution::Failed(value) => {
                             *self.get_heap_mut().get_mut_task(task_key)? = AsyncTask::Failed(value);
                             return Ok(TaskResolution::Failed(value));
+                        }
+                        TaskResolution::Cancelled => {
+                            *self.get_heap_mut().get_mut_task(task_key)? = AsyncTask::Cancelled;
+                            return Ok(TaskResolution::Cancelled);
                         }
                         TaskResolution::Pending => {
                             return Ok(TaskResolution::Pending);
@@ -875,7 +931,10 @@ impl<'a> VM<'a> {
                 }
                 Ok(soonest)
             }
-            AsyncTask::Pending { .. } | AsyncTask::Ready(_) | AsyncTask::Failed(_) => Ok(None),
+            AsyncTask::Pending { .. }
+            | AsyncTask::Ready(_)
+            | AsyncTask::Failed(_)
+            | AsyncTask::Cancelled => Ok(None),
         }
     }
 
@@ -3066,6 +3125,15 @@ impl<'a> VM<'a> {
                             TaskResolution::Failed(error_value) => {
                                 self.await_task_roots.pop();
                                 self.throw_value(error_value, span)?;
+                                if self.call_stack.len() != caller_depth || self.ip != resume_ip {
+                                    continue 'vm;
+                                }
+                                break;
+                            }
+                            TaskResolution::Cancelled => {
+                                self.await_task_roots.pop();
+                                let cancelled = self.cancelled_task_error_value();
+                                self.throw_value(cancelled, span)?;
                                 if self.call_stack.len() != caller_depth || self.ip != resume_ip {
                                     continue 'vm;
                                 }

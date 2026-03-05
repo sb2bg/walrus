@@ -173,6 +173,7 @@ impl ValueHolder {
                     AsyncTask::Sleep { .. } => 0,
                     AsyncTask::Timeout { .. } => 1,
                     AsyncTask::Failed(_) => 0,
+                    AsyncTask::Cancelled => 0,
                 };
                 estimate_task_size(arg_count)
             }
@@ -304,6 +305,7 @@ impl ValueHolder {
                         AsyncTask::Failed(value) => {
                             self.mark(value);
                         }
+                        AsyncTask::Cancelled => {}
                     }
                 }
             }
@@ -755,6 +757,7 @@ impl ValueHolder {
                     AsyncTask::Gather { .. } => "<task:pending>".to_string(),
                     AsyncTask::Ready(_) => "<task:ready>".to_string(),
                     AsyncTask::Failed(_) => "<task:failed>".to_string(),
+                    AsyncTask::Cancelled => "<task:cancelled>".to_string(),
                 }
             }
             Value::StructDef(s) => {

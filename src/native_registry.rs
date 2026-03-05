@@ -142,6 +142,22 @@ pub static NATIVE_SPECS: &[NativeSpec] = &[
         native_async_gather
     ),
     native_spec!(
+        AsyncCancel,
+        "std/async",
+        "cancel",
+        ["task"],
+        "Request cancellation for a task. Returns true when cancellation was applied.",
+        native_async_cancel
+    ),
+    native_spec!(
+        AsyncCancelled,
+        "std/async",
+        "cancelled",
+        ["task"],
+        "Return true if a task is in the cancelled state.",
+        native_async_cancelled
+    ),
+    native_spec!(
         FileOpen,
         "std/io",
         "file_open",
@@ -912,6 +928,23 @@ fn non_negative_millis(vm: &VM<'_>, value: Value, span: Span, name: &str) -> Wal
     Ok(ms as u64)
 }
 
+fn task_key_from_value(
+    vm: &VM<'_>,
+    value: Value,
+    span: Span,
+) -> WalrusResult<crate::arenas::TaskKey> {
+    match value {
+        Value::Task(task_key) => Ok(task_key),
+        other => Err(WalrusError::TypeMismatch {
+            expected: "task".to_string(),
+            found: other.get_type().to_string(),
+            span,
+            src: vm.source_ref().source().into(),
+            filename: vm.source_ref().filename().into(),
+        }),
+    }
+}
+
 fn native_async_spawn(vm: &mut VM<'_>, args: &[Value], span: Span) -> WalrusResult<Value> {
     let call_args = value_sequence_or_void(vm, args[1], span)?;
     vm.spawn_task_from_callable(args[0], call_args, span)
@@ -923,18 +956,7 @@ fn native_async_sleep(vm: &mut VM<'_>, args: &[Value], span: Span) -> WalrusResu
 }
 
 fn native_async_timeout(vm: &mut VM<'_>, args: &[Value], span: Span) -> WalrusResult<Value> {
-    let task_key = match args[0] {
-        Value::Task(task_key) => task_key,
-        other => {
-            return Err(WalrusError::TypeMismatch {
-                expected: "task".to_string(),
-                found: other.get_type().to_string(),
-                span,
-                src: vm.source_ref().source().into(),
-                filename: vm.source_ref().filename().into(),
-            });
-        }
-    };
+    let task_key = task_key_from_value(vm, args[0], span)?;
     let timeout_ms = non_negative_millis(vm, args[1], span, "timeout milliseconds")?;
     Ok(vm.create_timeout_task(task_key, timeout_ms))
 }
@@ -957,6 +979,16 @@ fn native_async_gather(vm: &mut VM<'_>, args: &[Value], span: Span) -> WalrusRes
         }
     }
     Ok(vm.create_gather_task(tasks))
+}
+
+fn native_async_cancel(vm: &mut VM<'_>, args: &[Value], span: Span) -> WalrusResult<Value> {
+    let task_key = task_key_from_value(vm, args[0], span)?;
+    Ok(Value::Bool(vm.cancel_task(task_key)?))
+}
+
+fn native_async_cancelled(vm: &mut VM<'_>, args: &[Value], span: Span) -> WalrusResult<Value> {
+    let task_key = task_key_from_value(vm, args[0], span)?;
+    Ok(Value::Bool(vm.task_is_cancelled(task_key)?))
 }
 
 fn native_file_open(vm: &mut VM<'_>, args: &[Value], span: Span) -> WalrusResult<Value> {

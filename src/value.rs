@@ -51,6 +51,7 @@ pub enum AsyncTask {
     Gather { tasks: Vec<TaskKey> },
     Ready(Value),
     Failed(Value),
+    Cancelled,
 }
 
 #[derive(Debug, PartialEq, Eq, Copy, Clone, Hash)]
@@ -217,6 +218,7 @@ impl Value {
                         AsyncTask::Gather { .. } => "pending",
                         AsyncTask::Ready(_) => "ready",
                         AsyncTask::Failed(_) => "failed",
+                        AsyncTask::Cancelled => "cancelled",
                     };
                     Ok(format!("<task:{state}>"))
                 })?

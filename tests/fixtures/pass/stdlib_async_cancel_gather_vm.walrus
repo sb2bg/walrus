@@ -1,0 +1,16 @@
+import "std/async" as asyncx;
+
+let left = asyncx.sleep(20);
+let right = asyncx.sleep(20);
+let both = asyncx.gather([left, right]);
+
+println(asyncx.cancel(both));
+println(asyncx.cancelled(both));
+println(asyncx.cancelled(left));
+println(asyncx.cancelled(right));
+
+try {
+    await both;
+} catch err {
+    println(err);
+};

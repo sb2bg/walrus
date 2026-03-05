@@ -612,6 +612,12 @@ impl<'a> Interpreter<'a> {
                 src: self.source_ref.source().into(),
                 filename: self.source_ref.filename().into(),
             }),
+            AsyncTask::Cancelled => Err(WalrusError::ThrownValue {
+                message: "task cancelled".to_string(),
+                span,
+                src: self.source_ref.source().into(),
+                filename: self.source_ref.filename().into(),
+            }),
             AsyncTask::Sleep { .. } | AsyncTask::Timeout { .. } | AsyncTask::Gather { .. } => {
                 Err(WalrusError::GenericError {
                     message: "std/async task wrappers are only supported in VM mode".to_string(),
