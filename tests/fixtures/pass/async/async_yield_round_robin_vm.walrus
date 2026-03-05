@@ -6,7 +6,7 @@ async fn counter: id, n {
     let i = 0;
     while i < n {
         log = log + [f"{id}:{i}"];
-        yield;
+        asyncx.yield();
         i = i + 1;
     }
     return id;
