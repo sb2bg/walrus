@@ -232,6 +232,80 @@ impl<'a> VM<'a> {
 
                 return Ok(MethodCallResult::FrameCreated);
             }
+            Value::StructInst(inst_key) => {
+                let method_name = self.get_heap().get_string(method_name_sym)?.to_string();
+
+                // Check fields first — a field holding a function is callable
+                let field_value = {
+                    let inst = self.get_heap().get_struct_inst(inst_key)?;
+                    inst.get_field(&method_name).copied()
+                };
+
+                if let Some(Value::Function(func_key)) = field_value {
+                    let func = self.get_heap().get_function(func_key)?.clone();
+                    if let Some(result) = self.call_exported_function(func, args, span)? {
+                        self.push(result);
+                        return Ok(MethodCallResult::Pushed);
+                    }
+                    return Ok(MethodCallResult::FrameCreated);
+                }
+
+                // Then check struct methods (prepend self as first arg)
+                let method = {
+                    let inst = self.get_heap().get_struct_inst(inst_key)?;
+                    let struct_def = self.get_heap().get_struct_def(inst.struct_def())?;
+                    struct_def.get_method(&method_name).cloned()
+                };
+
+                if let Some(method) = method {
+                    if let WalrusFunction::Vm(func) = method {
+                        let mut full_args = Vec::with_capacity(args.len() + 1);
+                        full_args.push(object);
+                        full_args.extend(args);
+
+                        if full_args.len() != func.arity {
+                            return Err(WalrusError::InvalidArgCount {
+                                name: func.name.clone(),
+                                expected: func.arity,
+                                got: full_args.len(),
+                                span,
+                                src: self.source_ref.source().into(),
+                                filename: self.source_ref.filename().into(),
+                            });
+                        }
+
+                        let new_frame = CallFrame {
+                            return_ip: self.ip,
+                            frame_pointer: self.locals.len(),
+                            stack_pointer: self.stack.len(),
+                            instructions: Rc::clone(&func.code),
+                            function_name: format!("fn<{}>", func.name),
+                            return_override: None,
+                            module_binding: func.module_binding.clone(),
+                            awaiting_task: None,
+                        };
+
+                        self.call_stack.push(new_frame);
+                        for arg in full_args {
+                            self.locals.push(arg);
+                        }
+                        self.ip = 0;
+                        return Ok(MethodCallResult::FrameCreated);
+                    }
+                }
+
+                return Err(WalrusError::MemberNotFound {
+                    type_name: self
+                        .get_heap()
+                        .get_struct_inst(inst_key)?
+                        .struct_name()
+                        .to_string(),
+                    member: method_name,
+                    span,
+                    src: self.source_ref.source().into(),
+                    filename: self.source_ref.filename().into(),
+                });
+            }
             Value::StructDef(key) => {
                 let method_name = self.get_heap().get_string(method_name_sym)?;
                 let method = {

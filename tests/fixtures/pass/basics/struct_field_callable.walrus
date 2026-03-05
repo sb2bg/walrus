@@ -1,0 +1,30 @@
+// Regression: struct fields holding functions should be callable via method syntax
+
+struct Handler {
+    fn init : self {
+        self.callback = void;
+    }
+
+    fn set_callback : self, cb {
+        self.callback = cb;
+    }
+
+    fn run : self {
+        if self.callback != void {
+            return self.callback("hello");
+        }
+        return "no callback";
+    }
+}
+
+let h = Handler();
+println(h.run());
+
+h.set_callback(: msg {
+    return f"got: {msg}";
+});
+
+println(h.run());
+
+// Direct call on field
+println(h.callback("world"));

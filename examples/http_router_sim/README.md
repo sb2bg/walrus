@@ -1,30 +1,48 @@
-# HTTP Router Server
+# HTTP Server
 
-A small real HTTP server demo written in Walrus using `std/net` and `std/http`.
+A real, concurrent HTTP server written in Walrus — Express-style routing with
+non-blocking I/O and async connection handling.
 
-What it demonstrates:
-- Express-style `App` API (`get`, `post`, `put`, `patch`, `delete`)
-- First-class handler functions stored in routes
-- Native `std/http.match_route` path matching with `:params` and `*` wildcard
-- Native `std/http.read_request` request parsing (line, headers, query, body)
-- Native `std/http.response_with_headers` response building
+## Features
+
+- **Express-style API** — `app.get()`, `app.post()`, `app.put()`, `app.delete()`, `app.all()`
+- **Route parameters** — `/users/:id`, `/users/:id/posts/:post_id`
+- **Wildcard routes** — `/assets/*`
+- **Middleware** — `app.use()` runs handlers before every route
+- **Custom error handling** — `app.set_not_found()`, `app.set_error_handler()` with try/catch
+- **Concurrent connections** — each request handled as an async task
+- **Non-blocking I/O** — TCP accept, read, write all run on background threads
+- **Slow endpoints don't block** — `await asyncx.sleep(1000)` yields to other handlers
 
 ## Files
 
-- `router.walrus`: lightweight router/app library
-- `main.walrus`: runnable HTTP server (handles 4 requests, then exits)
+- `router.walrus` — Express-style router/app framework (~250 lines)
+- `main.walrus` — Example server with routes, middleware, and error handling
 
 ## Run
 
 ```bash
-./target/debug/walrus examples/http_router_sim/main.walrus
+cargo build && ./target/debug/walrus examples/http_router_sim/main.walrus
 ```
 
 Then in another terminal:
 
 ```bash
-curl -i http://127.0.0.1:8081/health
-curl -i http://127.0.0.1:8081/users/42
-curl -i http://127.0.0.1:8081/assets/js/app.js
-curl -i -X POST http://127.0.0.1:8081/echo -d 'hello'
+curl http://127.0.0.1:8081/
+curl http://127.0.0.1:8081/health
+curl http://127.0.0.1:8081/users/42
+curl http://127.0.0.1:8081/users/42/posts/7
+curl -X POST http://127.0.0.1:8081/echo -d 'hello walrus'
+curl http://127.0.0.1:8081/slow          # takes 1s, doesn't block other requests
+curl http://127.0.0.1:8081/assets/js/app.js
+curl http://127.0.0.1:8081/nonexistent   # custom 404
+```
+
+## Concurrency demo
+
+```bash
+# Start the slow request and health check at the same time:
+curl http://127.0.0.1:8081/slow &
+curl http://127.0.0.1:8081/health
+# Both return in ~1s — the health check isn't blocked by the slow endpoint
 ```

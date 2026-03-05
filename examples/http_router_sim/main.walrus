@@ -1,88 +1,94 @@
 import "std/net" as net;
 import "std/http" as http;
-import "./router.walrus" as router_lib;
+import "std/async" as asyncx;
+import "std/json" as json;
+import "./router.walrus" as router;
 
-let app = router_lib.new_app();
+let app = router.new_app();
+
+// --- Middleware ---
+
+// Request logger middleware (runs before every route)
+app.use(: req {
+    let method = req["method"];
+    let path = req["path"];
+});
+
+// --- Routes ---
+
+app.get("/", : req {
+    let body = "Welcome to Walrus HTTP!\n\nRoutes:\n"
+        + "  GET  /health\n"
+        + "  GET  /users/:id\n"
+        + "  GET  /users/:id/posts/:post_id\n"
+        + "  POST /echo\n"
+        + "  GET  /slow\n"
+        + "  GET  /assets/*\n";
+    return router.text(200, body);
+});
 
 app.get("/health", : req {
-    return router_lib.text(200, "ok\n");
+    return router.json(200, json.encode({"status": "ok", "uptime": core.timestamp()}));
 });
 
 app.get("/users/:id", : req {
     let id = req["params"]["id"];
-    let body = "user show\nid=" + id + "\n";
-    return router_lib.text(200, body);
+    return router.json(200, json.encode({"id": id, "name": f"User {id}"}));
 });
 
 app.get("/users/:id/posts/:post_id", : req {
-    let id = req["params"]["id"];
+    let user_id = req["params"]["id"];
     let post_id = req["params"]["post_id"];
-    let body = "user post show\nuser_id=" + id + "\npost_id=" + post_id + "\n";
-    return router_lib.text(200, body);
+    return router.json(200, json.encode({
+        "user_id": user_id,
+        "post_id": post_id
+    }));
+});
+
+app.post("/echo", : req {
+    let body = req["body"];
+    let parsed = json.decode(body);
+    let response = {"echo": parsed, "timestamp": core.timestamp()};
+    return router.json(200, json.encode(response));
+});
+
+// Simulate a slow endpoint — other requests are served concurrently
+app.get("/slow", : req {
+    await asyncx.sleep(1000);
+    return router.text(200, "done (after 1s delay)\n");
 });
 
 app.get("/assets/*", : req {
     let suffix = req["wildcard"];
-    let body = "asset path\nsuffix=" + core.str(suffix) + "\n";
-    return router_lib.text(200, body);
+    return router.text(200, f"serving asset: {suffix}\n");
 });
 
-app.post("/echo", : req {
-    let body = "echo\n" + req["body"] + "\n";
-    return router_lib.text_with_headers(
-        200,
-        body,
-        {"x-walrus-demo": "echo"}
-    );
+// Custom 404
+app.set_not_found(: req {
+    let method = req["method"];
+    let path = req["path"];
+    return router.text(404, f"404 - nothing here: {method} {path}\n");
 });
 
-let listener = net.tcp_bind("127.0.0.1", 8081);
-let max_requests = 4;
-let served = 0;
+// Custom error handler
+app.set_error_handler(: err, req {
+    return router.text(500, f"500 - server error: {err}\n");
+});
 
-println("HTTP Router Server (Express-style)");
-println("==================================");
-println("Listening on http://127.0.0.1:8081");
-println("This demo handles 4 requests, then exits.");
-println("Try:");
-println("  curl -i http://127.0.0.1:8081/health");
-println("  curl -i http://127.0.0.1:8081/users/42");
-println("  curl -i http://127.0.0.1:8081/assets/js/app.js");
-println("  curl -i -X POST http://127.0.0.1:8081/echo -d 'hello'");
-println("");
+// --- Start ---
 
-while served < max_requests {
-    let stream = net.tcp_accept(listener);
-    let request = http.read_request(stream, 16384);
+println "=== Walrus HTTP Server ===";
+println "Express-style routing with concurrent connection handling";
+println "";
+println "Try in another terminal:";
+println "  curl http://127.0.0.1:8081/";
+println "  curl http://127.0.0.1:8081/health";
+println "  curl http://127.0.0.1:8081/users/42";
+println "  curl http://127.0.0.1:8081/users/42/posts/7";
+println "  curl -X POST http://127.0.0.1:8081/echo -d 'hello walrus'";
+println "  curl http://127.0.0.1:8081/slow  (takes 1s, doesn't block others)";
+println "  curl http://127.0.0.1:8081/assets/js/app.js";
+println "";
 
-    if request == void {
-        net.tcp_close(stream);
-        served = served + 1;
-        continue;
-    }
-
-    if request["ok"] == false {
-        let body = "bad request\n" + request["error"] + "\n";
-        net.tcp_write(stream, http.response(400, body));
-        net.tcp_close(stream);
-        served = served + 1;
-        continue;
-    }
-
-    let response = app.dispatch(request);
-    let status = response["status"];
-    let body = response["body"];
-    let headers = response["headers"];
-
-    net.tcp_write(stream, http.response_with_headers(status, body, headers));
-
-    let method = request["method"];
-    let path = request["path"];
-    println(f"{method} {path} -> {status}");
-
-    net.tcp_close(stream);
-    served = served + 1;
-}
-
-net.tcp_close_listener(listener);
-println("Server stopped.");
+// Serve 8 requests then exit (use app.listen for unlimited)
+app.listen_for("127.0.0.1", 8081, 8);

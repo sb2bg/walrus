@@ -1,0 +1,38 @@
+import "std/json" as json;
+
+// Encode primitives
+println(json.encode(42));
+println(json.encode(3.14));
+println(json.encode("hello"));
+println(json.encode(true));
+println(json.encode(false));
+println(json.encode(void));
+
+// Encode list
+println(json.encode([1, 2, 3]));
+
+// Encode dict
+println(json.encode({"name": "walrus", "version": 1}));
+
+// Encode nested
+let data = {"users": [{"id": 1, "active": true}, {"id": 2, "active": false}]};
+let encoded = json.encode(data);
+println encoded;
+
+// Decode and re-encode roundtrip
+let decoded = json.decode(encoded);
+println(json.encode(decoded));
+
+// Decode primitives
+println(json.decode("42"));
+println(json.decode("3.14"));
+println(json.decode("true"));
+println(json.decode("false"));
+println(json.decode("null"));
+println(json.decode("\"hello world\""));
+
+// Decode with whitespace
+let obj = json.decode("  { \"a\" : 1 , \"b\" : [2, 3] }  ");
+println(obj["a"]);
+println(obj["b"][0]);
+println(obj["b"][1]);
