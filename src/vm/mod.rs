@@ -721,6 +721,10 @@ impl<'a> VM<'a> {
         self.create_non_runnable_task(AsyncTask::Gather { tasks })
     }
 
+    pub(crate) fn create_race_task(&mut self, tasks: Vec<crate::arenas::TaskKey>) -> Value {
+        self.create_non_runnable_task(AsyncTask::Race { tasks })
+    }
+
     fn cancelled_task_error_value(&mut self) -> Value {
         self.get_heap_mut()
             .push(HeapValue::String("task cancelled"))
@@ -746,7 +750,7 @@ impl<'a> VM<'a> {
                 *self.get_heap_mut().get_mut_task(task_key)? = AsyncTask::Cancelled;
                 Ok(true)
             }
-            AsyncTask::Gather { tasks } => {
+            AsyncTask::Gather { tasks } | AsyncTask::Race { tasks } => {
                 for child in tasks {
                     let _ = self.cancel_task_recursive_internal(child, visited)?;
                 }
@@ -760,6 +764,23 @@ impl<'a> VM<'a> {
     pub(crate) fn cancel_task(&mut self, task_key: crate::arenas::TaskKey) -> WalrusResult<bool> {
         let mut visited = FxHashSet::default();
         self.cancel_task_recursive_internal(task_key, &mut visited)
+    }
+
+    pub(crate) fn task_status_string(
+        &self,
+        task_key: crate::arenas::TaskKey,
+    ) -> WalrusResult<&'static str> {
+        let task = self.get_heap().get_task(task_key)?;
+        Ok(match task {
+            AsyncTask::Pending { .. }
+            | AsyncTask::Sleep { .. }
+            | AsyncTask::Timeout { .. }
+            | AsyncTask::Gather { .. }
+            | AsyncTask::Race { .. } => "pending",
+            AsyncTask::Ready(_) => "ready",
+            AsyncTask::Failed(_) => "failed",
+            AsyncTask::Cancelled => "cancelled",
+        })
     }
 
     pub(crate) fn task_is_cancelled(&self, task_key: crate::arenas::TaskKey) -> WalrusResult<bool> {
@@ -897,6 +918,36 @@ impl<'a> VM<'a> {
                 *self.get_heap_mut().get_mut_task(task_key)? = AsyncTask::Ready(list);
                 Ok(TaskResolution::Ready(list))
             }
+            AsyncTask::Race { tasks } => {
+                let mut all_failed = true;
+                let mut last_failure = None;
+                for child in tasks {
+                    match self.poll_task_resolution(child)? {
+                        TaskResolution::Ready(value) => {
+                            *self.get_heap_mut().get_mut_task(task_key)? = AsyncTask::Ready(value);
+                            return Ok(TaskResolution::Ready(value));
+                        }
+                        TaskResolution::Failed(value) => {
+                            last_failure = Some(value);
+                        }
+                        TaskResolution::Cancelled => {}
+                        TaskResolution::Pending => {
+                            all_failed = false;
+                        }
+                    }
+                }
+                if all_failed {
+                    if let Some(failure) = last_failure {
+                        *self.get_heap_mut().get_mut_task(task_key)? = AsyncTask::Failed(failure);
+                        Ok(TaskResolution::Failed(failure))
+                    } else {
+                        *self.get_heap_mut().get_mut_task(task_key)? = AsyncTask::Cancelled;
+                        Ok(TaskResolution::Cancelled)
+                    }
+                } else {
+                    Ok(TaskResolution::Pending)
+                }
+            }
         }
     }
 
@@ -919,7 +970,7 @@ impl<'a> VM<'a> {
                     None => Some(*deadline),
                 })
             }
-            AsyncTask::Gather { tasks } => {
+            AsyncTask::Gather { tasks } | AsyncTask::Race { tasks } => {
                 let mut soonest: Option<Instant> = None;
                 for &child in tasks {
                     if let Some(deadline) = self.next_deadline_for_task(child, visited)? {

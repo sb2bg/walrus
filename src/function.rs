@@ -139,6 +139,8 @@ pub enum NativeFunction {
     AsyncSleep,
     AsyncTimeout,
     AsyncGather,
+    AsyncRace,
+    AsyncStatus,
     AsyncCancel,
     AsyncCancelled,
     // File I/O

@@ -1,0 +1,2 @@
+import "std/async" as asyncx;
+println(await asyncx.race([1, 2]));

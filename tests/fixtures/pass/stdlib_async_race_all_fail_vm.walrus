@@ -1,0 +1,10 @@
+import "std/async" as asyncx;
+
+async fn boom1 : { throw "error1"; }
+async fn boom2 : { throw "error2"; }
+
+try {
+    await asyncx.race([boom1(), boom2()]);
+} catch err {
+    println(err);
+};

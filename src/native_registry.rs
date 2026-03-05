@@ -142,6 +142,22 @@ pub static NATIVE_SPECS: &[NativeSpec] = &[
         native_async_gather
     ),
     native_spec!(
+        AsyncRace,
+        "std/async",
+        "race",
+        ["tasks"],
+        "Return a task that resolves to the first completed result from a list of tasks.",
+        native_async_race
+    ),
+    native_spec!(
+        AsyncStatus,
+        "std/async",
+        "status",
+        ["task"],
+        "Return the status of a task as a string: pending, ready, failed, or cancelled.",
+        native_async_status
+    ),
+    native_spec!(
         AsyncCancel,
         "std/async",
         "cancel",
@@ -979,6 +995,32 @@ fn native_async_gather(vm: &mut VM<'_>, args: &[Value], span: Span) -> WalrusRes
         }
     }
     Ok(vm.create_gather_task(tasks))
+}
+
+fn native_async_race(vm: &mut VM<'_>, args: &[Value], span: Span) -> WalrusResult<Value> {
+    let items = value_sequence(vm, args[0], span)?;
+    let mut tasks = Vec::with_capacity(items.len());
+    for value in items {
+        match value {
+            Value::Task(task_key) => tasks.push(task_key),
+            other => {
+                return Err(WalrusError::TypeMismatch {
+                    expected: "task".to_string(),
+                    found: other.get_type().to_string(),
+                    span,
+                    src: vm.source_ref().source().into(),
+                    filename: vm.source_ref().filename().into(),
+                });
+            }
+        }
+    }
+    Ok(vm.create_race_task(tasks))
+}
+
+fn native_async_status(vm: &mut VM<'_>, args: &[Value], span: Span) -> WalrusResult<Value> {
+    let task_key = task_key_from_value(vm, args[0], span)?;
+    let status = vm.task_status_string(task_key)?;
+    Ok(vm.get_heap_mut().push(HeapValue::String(status)))
 }
 
 fn native_async_cancel(vm: &mut VM<'_>, args: &[Value], span: Span) -> WalrusResult<Value> {

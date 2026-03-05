@@ -169,6 +169,7 @@ impl ValueHolder {
                 let arg_count = match task {
                     AsyncTask::Pending { args, .. } => args.len(),
                     AsyncTask::Gather { tasks } => tasks.len(),
+                    AsyncTask::Race { tasks } => tasks.len(),
                     AsyncTask::Ready(_) => 0,
                     AsyncTask::Sleep { .. } => 0,
                     AsyncTask::Timeout { .. } => 1,
@@ -294,7 +295,7 @@ impl ValueHolder {
                         AsyncTask::Timeout { task, .. } => {
                             self.mark(Value::Task(task));
                         }
-                        AsyncTask::Gather { tasks } => {
+                        AsyncTask::Gather { tasks } | AsyncTask::Race { tasks } => {
                             for task in tasks {
                                 self.mark(Value::Task(task));
                             }
@@ -755,6 +756,7 @@ impl ValueHolder {
                     AsyncTask::Sleep { .. } => "<task:pending>".to_string(),
                     AsyncTask::Timeout { .. } => "<task:pending>".to_string(),
                     AsyncTask::Gather { .. } => "<task:pending>".to_string(),
+                    AsyncTask::Race { .. } => "<task:pending>".to_string(),
                     AsyncTask::Ready(_) => "<task:ready>".to_string(),
                     AsyncTask::Failed(_) => "<task:failed>".to_string(),
                     AsyncTask::Cancelled => "<task:cancelled>".to_string(),
