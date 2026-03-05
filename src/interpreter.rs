@@ -629,7 +629,8 @@ impl<'a> Interpreter<'a> {
             AsyncTask::Sleep { .. }
             | AsyncTask::Timeout { .. }
             | AsyncTask::Gather { .. }
-            | AsyncTask::Race { .. } => Err(WalrusError::GenericError {
+            | AsyncTask::Race { .. }
+            | AsyncTask::Channel(_) => Err(WalrusError::GenericError {
                 message: "std/async task wrappers are only supported in VM mode".to_string(),
             }),
             AsyncTask::Pending { function, args } => {

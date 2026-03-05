@@ -1,6 +1,8 @@
 use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::Hash;
+use std::rc::Rc;
+use std::sync::mpsc;
 use std::time::Instant;
 
 use float_ord::FloatOrd;
@@ -12,6 +14,58 @@ use crate::arenas::{
 };
 use crate::iter::{CollectionIter, DictIter, RangeIter, StrIter, ValueIterator};
 use crate::range::RangeValue;
+
+/// HTTP request data parsed from a background I/O read.
+#[derive(Debug, Clone)]
+pub struct IoHttpRequest {
+    pub method: String,
+    pub target: String,
+    pub path: String,
+    pub query: String,
+    pub version: String,
+    pub headers: Vec<(String, String)>,
+    pub body: String,
+    pub content_length: i64,
+}
+
+/// Outcome of reading an HTTP request from a stream on a worker thread.
+#[derive(Debug, Clone)]
+pub enum IoHttpOutcome {
+    Eof,
+    BadRequest(String),
+    Request(IoHttpRequest),
+}
+
+/// Result of a background I/O operation, sent from a worker thread back to the VM thread.
+pub enum IoResult {
+    Stream(std::net::TcpStream),
+    Listener(std::net::TcpListener),
+    Bytes(Vec<u8>),
+    ByteCount(usize),
+    HttpOutcome(IoHttpOutcome),
+    Void,
+}
+
+/// A channel receiver wrapped in Rc for cheap cloning within the single-threaded VM.
+/// mpsc::Receiver::try_recv takes &self, so shared access through Rc is safe.
+#[derive(Clone)]
+pub struct IoChannel(Rc<mpsc::Receiver<Result<IoResult, String>>>);
+
+impl IoChannel {
+    pub fn new(receiver: mpsc::Receiver<Result<IoResult, String>>) -> Self {
+        Self(Rc::new(receiver))
+    }
+
+    pub fn try_recv(&self) -> Result<Result<IoResult, String>, mpsc::TryRecvError> {
+        self.0.try_recv()
+    }
+}
+
+impl Debug for IoChannel {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "IoChannel(..)")
+    }
+}
 
 #[derive(Debug, Clone)]
 pub enum ValueIter {
@@ -45,11 +99,26 @@ impl ValueIterator for ValueIter {
 
 #[derive(Debug, Clone)]
 pub enum AsyncTask {
-    Pending { function: FuncKey, args: Vec<Value> },
-    Sleep { wake_at: Instant },
-    Timeout { task: TaskKey, deadline: Instant },
-    Gather { tasks: Vec<TaskKey> },
-    Race { tasks: Vec<TaskKey> },
+    Pending {
+        function: FuncKey,
+        args: Vec<Value>,
+    },
+    Sleep {
+        wake_at: Instant,
+    },
+    Timeout {
+        task: TaskKey,
+        deadline: Instant,
+    },
+    Gather {
+        tasks: Vec<TaskKey>,
+    },
+    Race {
+        tasks: Vec<TaskKey>,
+    },
+    /// A background I/O operation running on a worker thread.
+    /// Resolves when the worker sends a result through the channel.
+    Channel(IoChannel),
     Ready(Value),
     Failed(Value),
     Cancelled,
@@ -218,6 +287,7 @@ impl Value {
                         AsyncTask::Timeout { .. } => "pending",
                         AsyncTask::Gather { .. } => "pending",
                         AsyncTask::Race { .. } => "pending",
+                        AsyncTask::Channel(_) => "pending",
                         AsyncTask::Ready(_) => "ready",
                         AsyncTask::Failed(_) => "failed",
                         AsyncTask::Cancelled => "cancelled",

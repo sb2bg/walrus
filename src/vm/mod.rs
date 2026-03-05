@@ -1,6 +1,7 @@
 use std::collections::VecDeque;
 use std::ptr::NonNull;
 use std::rc::Rc;
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use float_ord::FloatOrd;
@@ -18,7 +19,7 @@ use crate::jit::{HotSpotDetector, TypeProfile, WalrusType};
 use crate::range::RangeValue;
 use crate::source_ref::SourceRef;
 use crate::span::Span;
-use crate::value::{AsyncTask, Value};
+use crate::value::{AsyncTask, IoChannel, IoResult, Value};
 use crate::vm::opcode::Opcode;
 
 pub mod compiler;
@@ -135,6 +136,9 @@ pub struct VM<'a> {
     task_exception_floor_stack: Vec<usize>,
     await_task_roots: Vec<crate::arenas::TaskKey>,
     source_ref: SourceRef<'a>,
+    // I/O wakeup channel: worker threads send () to wake the event loop
+    io_wakeup_tx: mpsc::Sender<()>,
+    io_wakeup_rx: mpsc::Receiver<()>,
     // Debugger state
     debugger: Option<debugger::Debugger>,
     debug_mode: bool,
@@ -181,6 +185,8 @@ impl<'a> VM<'a> {
             awaiting_task: None,
         };
 
+        let (io_wakeup_tx, io_wakeup_rx) = mpsc::channel();
+
         Self {
             stack: Vec::new(),
             locals: Vec::new(),
@@ -196,6 +202,8 @@ impl<'a> VM<'a> {
             task_exception_floor_stack: Vec::new(),
             await_task_roots: Vec::new(),
             source_ref,
+            io_wakeup_tx,
+            io_wakeup_rx,
             debugger: None,
             debug_mode: false,
             // Profiling is opt-in (enabled by Program when requested)
@@ -717,6 +725,141 @@ impl<'a> VM<'a> {
         })
     }
 
+    /// Spawn a background I/O operation on a worker thread.
+    /// Returns a Task value backed by a Channel that resolves when the worker completes.
+    pub(crate) fn spawn_io<F>(&mut self, work: F) -> Value
+    where
+        F: FnOnce() -> Result<IoResult, String> + Send + 'static,
+    {
+        let (tx, rx) = mpsc::channel();
+        let wakeup = self.io_wakeup_tx.clone();
+        std::thread::spawn(move || {
+            let result = work();
+            let _ = tx.send(result);
+            let _ = wakeup.send(());
+        });
+        self.create_non_runnable_task(AsyncTask::Channel(IoChannel::new(rx)))
+    }
+
+    /// Convert an IoResult from a worker thread into a Value on the VM thread.
+    fn io_result_to_value(&mut self, result: IoResult) -> WalrusResult<Value> {
+        match result {
+            IoResult::Stream(stream) => {
+                let handle = crate::stdlib::store_tcp_stream(stream);
+                Ok(Value::Int(handle))
+            }
+            IoResult::Listener(listener) => {
+                let handle = crate::stdlib::store_tcp_listener(listener);
+                Ok(Value::Int(handle))
+            }
+            IoResult::Bytes(bytes) => {
+                let text = String::from_utf8(bytes).map_err(|e| WalrusError::GenericError {
+                    message: format!("I/O result contains non-UTF8 data: {e}"),
+                })?;
+                Ok(self.get_heap_mut().push(HeapValue::String(&text)))
+            }
+            IoResult::ByteCount(n) => Ok(Value::Int(n as i64)),
+            IoResult::HttpOutcome(outcome) => self.http_outcome_to_value(outcome),
+            IoResult::Void => Ok(Value::Void),
+        }
+    }
+
+    /// Convert an IoHttpOutcome into a Value (dict or Void).
+    fn http_outcome_to_value(
+        &mut self,
+        outcome: crate::value::IoHttpOutcome,
+    ) -> WalrusResult<Value> {
+        use crate::value::IoHttpOutcome;
+
+        match outcome {
+            IoHttpOutcome::Eof => Ok(Value::Void),
+            IoHttpOutcome::BadRequest(message) => {
+                let mut dict = FxHashMap::default();
+                let ok_key = self.get_heap_mut().push(HeapValue::String("ok"));
+                dict.insert(ok_key, Value::Bool(false));
+                let err_key = self.get_heap_mut().push(HeapValue::String("error"));
+                let err_val = self.get_heap_mut().push(HeapValue::String(&message));
+                dict.insert(err_key, err_val);
+                Ok(self.get_heap_mut().push(HeapValue::Dict(dict)))
+            }
+            IoHttpOutcome::Request(req) => {
+                let mut headers = FxHashMap::default();
+                for (name, value) in &req.headers {
+                    let key = self.get_heap_mut().push(HeapValue::String(name));
+                    let val = self.get_heap_mut().push(HeapValue::String(value));
+                    headers.insert(key, val);
+                }
+                let headers_value = self.get_heap_mut().push(HeapValue::Dict(headers));
+
+                let query_pairs = crate::stdlib::http_parse_query(&req.query);
+                let mut query = FxHashMap::default();
+                for (name, value) in query_pairs {
+                    let key = self.get_heap_mut().push(HeapValue::String(&name));
+                    let val = self.get_heap_mut().push(HeapValue::String(&value));
+                    query.insert(key, val);
+                }
+                let query_value = self.get_heap_mut().push(HeapValue::Dict(query));
+
+                let mut dict = FxHashMap::default();
+                let ok_key = self.get_heap_mut().push(HeapValue::String("ok"));
+                dict.insert(ok_key, Value::Bool(true));
+                let method_key = self.get_heap_mut().push(HeapValue::String("method"));
+                let method_val = self.get_heap_mut().push(HeapValue::String(&req.method));
+                dict.insert(method_key, method_val);
+                let target_key = self.get_heap_mut().push(HeapValue::String("target"));
+                let target_val = self.get_heap_mut().push(HeapValue::String(&req.target));
+                dict.insert(target_key, target_val);
+                let path_key = self.get_heap_mut().push(HeapValue::String("path"));
+                let path_val = self.get_heap_mut().push(HeapValue::String(&req.path));
+                dict.insert(path_key, path_val);
+                let query_key = self.get_heap_mut().push(HeapValue::String("query"));
+                let query_text_val = self.get_heap_mut().push(HeapValue::String(&req.query));
+                dict.insert(query_key, query_text_val);
+                let qp_key = self.get_heap_mut().push(HeapValue::String("query_params"));
+                dict.insert(qp_key, query_value);
+                let ver_key = self.get_heap_mut().push(HeapValue::String("version"));
+                let ver_val = self.get_heap_mut().push(HeapValue::String(&req.version));
+                dict.insert(ver_key, ver_val);
+                let hdr_key = self.get_heap_mut().push(HeapValue::String("headers"));
+                dict.insert(hdr_key, headers_value);
+                let body_key = self.get_heap_mut().push(HeapValue::String("body"));
+                let body_val = self.get_heap_mut().push(HeapValue::String(&req.body));
+                dict.insert(body_key, body_val);
+                let cl_key = self
+                    .get_heap_mut()
+                    .push(HeapValue::String("content_length"));
+                dict.insert(cl_key, Value::Int(req.content_length));
+
+                Ok(self.get_heap_mut().push(HeapValue::Dict(dict)))
+            }
+        }
+    }
+
+    /// Check if a task tree has any pending I/O (Channel) tasks.
+    fn task_has_pending_io(
+        &self,
+        task_key: crate::arenas::TaskKey,
+        visited: &mut FxHashSet<crate::arenas::TaskKey>,
+    ) -> WalrusResult<bool> {
+        if !visited.insert(task_key) {
+            return Ok(false);
+        }
+        let task = self.get_heap().get_task(task_key)?;
+        match task {
+            AsyncTask::Channel(_) => Ok(true),
+            AsyncTask::Timeout { task, .. } => self.task_has_pending_io(*task, visited),
+            AsyncTask::Gather { tasks } | AsyncTask::Race { tasks } => {
+                for &child in tasks {
+                    if self.task_has_pending_io(child, visited)? {
+                        return Ok(true);
+                    }
+                }
+                Ok(false)
+            }
+            _ => Ok(false),
+        }
+    }
+
     pub(crate) fn create_gather_task(&mut self, tasks: Vec<crate::arenas::TaskKey>) -> Value {
         self.create_non_runnable_task(AsyncTask::Gather { tasks })
     }
@@ -741,7 +884,7 @@ impl<'a> VM<'a> {
 
         let task = self.get_heap().get_task(task_key)?.clone();
         match task {
-            AsyncTask::Pending { .. } | AsyncTask::Sleep { .. } => {
+            AsyncTask::Pending { .. } | AsyncTask::Sleep { .. } | AsyncTask::Channel(_) => {
                 *self.get_heap_mut().get_mut_task(task_key)? = AsyncTask::Cancelled;
                 Ok(true)
             }
@@ -792,7 +935,8 @@ impl<'a> VM<'a> {
             | AsyncTask::Sleep { .. }
             | AsyncTask::Timeout { .. }
             | AsyncTask::Gather { .. }
-            | AsyncTask::Race { .. } => "pending",
+            | AsyncTask::Race { .. }
+            | AsyncTask::Channel(_) => "pending",
             AsyncTask::Ready(_) => "ready",
             AsyncTask::Failed(_) => "failed",
             AsyncTask::Cancelled => "cancelled",
@@ -911,6 +1055,26 @@ impl<'a> VM<'a> {
                     }
                 }
             },
+            AsyncTask::Channel(ref channel) => match channel.try_recv() {
+                Ok(Ok(io_result)) => {
+                    let value = self.io_result_to_value(io_result)?;
+                    *self.get_heap_mut().get_mut_task(task_key)? = AsyncTask::Ready(value);
+                    Ok(TaskResolution::Ready(value))
+                }
+                Ok(Err(error_msg)) => {
+                    let error = self.get_heap_mut().push(HeapValue::String(&error_msg));
+                    *self.get_heap_mut().get_mut_task(task_key)? = AsyncTask::Failed(error);
+                    Ok(TaskResolution::Failed(error))
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => Ok(TaskResolution::Pending),
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    let error = self
+                        .get_heap_mut()
+                        .push(HeapValue::String("I/O worker thread disconnected"));
+                    *self.get_heap_mut().get_mut_task(task_key)? = AsyncTask::Failed(error);
+                    Ok(TaskResolution::Failed(error))
+                }
+            },
             AsyncTask::Gather { tasks } => {
                 let mut values = Vec::with_capacity(tasks.len());
                 for child in tasks {
@@ -999,6 +1163,7 @@ impl<'a> VM<'a> {
                 Ok(soonest)
             }
             AsyncTask::Pending { .. }
+            | AsyncTask::Channel(_)
             | AsyncTask::Ready(_)
             | AsyncTask::Failed(_)
             | AsyncTask::Cancelled => Ok(None),
@@ -3210,20 +3375,32 @@ impl<'a> VM<'a> {
                         }
 
                         let Some(next_task) = self.next_runnable_task(task_key)? else {
+                            // No runnable tasks — check for timers or pending I/O
                             let mut visited = FxHashSet::default();
-                            if let Some(deadline) =
-                                self.next_deadline_for_task(task_key, &mut visited)?
-                            {
+                            let deadline = self.next_deadline_for_task(task_key, &mut visited)?;
+                            visited.clear();
+                            let has_io = self.task_has_pending_io(task_key, &mut visited)?;
+
+                            if deadline.is_none() && !has_io {
+                                self.await_task_roots.pop();
+                                return Err(WalrusError::GenericError {
+                                    message: "Event loop deadlock: awaited task is pending with no runnable tasks".to_string(),
+                                });
+                            }
+
+                            // Wait for either I/O completion or timer expiry
+                            if let Some(deadline) = deadline {
                                 let now = Instant::now();
                                 if deadline > now {
-                                    std::thread::sleep(deadline.duration_since(now));
+                                    let timeout = deadline.duration_since(now);
+                                    // Block until wakeup signal or timeout
+                                    let _ = self.io_wakeup_rx.recv_timeout(timeout);
                                 }
-                                continue;
+                            } else {
+                                // Only I/O pending, no timer — block until wakeup
+                                let _ = self.io_wakeup_rx.recv();
                             }
-                            self.await_task_roots.pop();
-                            return Err(WalrusError::GenericError {
-                                message: "Event loop deadlock: awaited task is pending with no runnable tasks".to_string(),
-                            });
+                            continue;
                         };
 
                         let keep_result = next_task == task_key;
