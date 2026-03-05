@@ -766,6 +766,22 @@ impl<'a> VM<'a> {
         self.cancel_task_recursive_internal(task_key, &mut visited)
     }
 
+    pub(crate) fn run_queued_tasks(&mut self, span: Span) -> WalrusResult<()> {
+        while let Some(task_key) = self.async_task_queue.pop_front() {
+            if !self.is_task_runnable(task_key)? {
+                continue;
+            }
+            self.run_pending_task_to_completion(task_key, span)?;
+            if matches!(
+                self.poll_task_resolution(task_key)?,
+                TaskResolution::Ready(_)
+            ) {
+                let _ = self.stack.pop();
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn task_status_string(
         &self,
         task_key: crate::arenas::TaskKey,
@@ -3228,27 +3244,6 @@ impl<'a> VM<'a> {
                             }
                         }
                     }
-                }
-                Opcode::Yield => {
-                    let caller_depth = self.call_stack.len();
-                    let resume_ip = self.ip;
-
-                    while let Some(task_key) = self.async_task_queue.pop_front() {
-                        if !self.is_task_runnable(task_key)? {
-                            continue;
-                        }
-                        self.run_pending_task_to_completion(task_key, span)?;
-                        if self.call_stack.len() != caller_depth || self.ip != resume_ip {
-                            continue 'vm;
-                        }
-                        if matches!(
-                            self.poll_task_resolution(task_key)?,
-                            TaskResolution::Ready(_)
-                        ) {
-                            let _ = self.pop(opcode, span)?;
-                        }
-                    }
-                    self.push(Value::Void);
                 }
                 Opcode::Return => {
                     let mut return_value = self.pop(opcode, span)?;

@@ -62,7 +62,6 @@ pub enum NodeKind {
     Defer(Box<Node>),
     Await(Box<Node>),
     MemberAccess(Box<Node>, String),
-    Yield,
     Break,
     Continue,
     Void,
@@ -135,7 +134,6 @@ impl Display for NodeKind {
             NodeKind::Range(_, _) => write!(f, "Range"),
             NodeKind::Defer(_) => write!(f, "Defer"),
             NodeKind::Await(_) => write!(f, "Await"),
-            NodeKind::Yield => write!(f, "Yield"),
             NodeKind::MemberAccess(_, _) => write!(f, "MemberAccess"),
             NodeKind::Void => write!(f, "Void"),
         }
@@ -303,7 +301,6 @@ fn collect_free_vars_recursive(
         | NodeKind::Bool(_)
         | NodeKind::Break
         | NodeKind::Continue
-        | NodeKind::Yield
         | NodeKind::Void
         | NodeKind::PackageImport(_, _)
         | NodeKind::ModuleImport(_, _)

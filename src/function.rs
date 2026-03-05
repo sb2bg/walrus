@@ -143,6 +143,7 @@ pub enum NativeFunction {
     AsyncStatus,
     AsyncCancel,
     AsyncCancelled,
+    AsyncYield,
     // File I/O
     FileOpen,
     FileRead,

@@ -62,7 +62,6 @@ pub enum Opcode {
     False,
     Void,
     Await,
-    Yield,
     Return,
     Pop,
     Add,

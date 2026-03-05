@@ -174,6 +174,14 @@ pub static NATIVE_SPECS: &[NativeSpec] = &[
         native_async_cancelled
     ),
     native_spec!(
+        AsyncYield,
+        "std/async",
+        "yield",
+        [],
+        "Give other queued tasks a turn to run, then resume.",
+        native_async_yield
+    ),
+    native_spec!(
         FileOpen,
         "std/io",
         "file_open",
@@ -1031,6 +1039,11 @@ fn native_async_cancel(vm: &mut VM<'_>, args: &[Value], span: Span) -> WalrusRes
 fn native_async_cancelled(vm: &mut VM<'_>, args: &[Value], span: Span) -> WalrusResult<Value> {
     let task_key = task_key_from_value(vm, args[0], span)?;
     Ok(Value::Bool(vm.task_is_cancelled(task_key)?))
+}
+
+fn native_async_yield(vm: &mut VM<'_>, _args: &[Value], span: Span) -> WalrusResult<Value> {
+    vm.run_queued_tasks(span)?;
+    Ok(Value::Void)
 }
 
 fn native_file_open(vm: &mut VM<'_>, args: &[Value], span: Span) -> WalrusResult<Value> {
