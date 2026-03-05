@@ -168,12 +168,14 @@ impl ValueHolder {
             HeapValue::Task(task) => {
                 let arg_count = match task {
                     AsyncTask::Pending { args, .. } => args.len(),
-                    AsyncTask::Gather { tasks } => tasks.len(),
-                    AsyncTask::Race { tasks } => tasks.len(),
+                    AsyncTask::Gather { tasks }
+                    | AsyncTask::Race { tasks }
+                    | AsyncTask::AllSettled { tasks } => tasks.len(),
                     AsyncTask::Ready(_) => 0,
                     AsyncTask::Sleep { .. } => 0,
                     AsyncTask::Timeout { .. } => 1,
                     AsyncTask::Channel(_) => 0,
+                    AsyncTask::UserRecv { .. } => 0,
                     AsyncTask::Failed(_) => 0,
                     AsyncTask::Cancelled => 0,
                 };
@@ -296,12 +298,15 @@ impl ValueHolder {
                         AsyncTask::Timeout { task, .. } => {
                             self.mark(Value::Task(task));
                         }
-                        AsyncTask::Gather { tasks } | AsyncTask::Race { tasks } => {
+                        AsyncTask::Gather { tasks }
+                        | AsyncTask::Race { tasks }
+                        | AsyncTask::AllSettled { tasks } => {
                             for task in tasks {
                                 self.mark(Value::Task(task));
                             }
                         }
                         AsyncTask::Channel(_) => {}
+                        AsyncTask::UserRecv { .. } => {}
                         AsyncTask::Ready(value) => {
                             self.mark(value);
                         }
@@ -759,7 +764,9 @@ impl ValueHolder {
                     AsyncTask::Timeout { .. } => "<task:pending>".to_string(),
                     AsyncTask::Gather { .. } => "<task:pending>".to_string(),
                     AsyncTask::Race { .. } => "<task:pending>".to_string(),
+                    AsyncTask::AllSettled { .. } => "<task:pending>".to_string(),
                     AsyncTask::Channel(_) => "<task:pending>".to_string(),
+                    AsyncTask::UserRecv { .. } => "<task:pending>".to_string(),
                     AsyncTask::Ready(_) => "<task:ready>".to_string(),
                     AsyncTask::Failed(_) => "<task:failed>".to_string(),
                     AsyncTask::Cancelled => "<task:cancelled>".to_string(),

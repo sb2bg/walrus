@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::ptr::NonNull;
 use std::rc::Rc;
@@ -116,6 +117,13 @@ enum TaskResolution {
 /// only keys that index into the arena.
 ///
 /// ## JIT Compilation (Phase 2)
+/// A user-facing async channel for task-to-task communication.
+/// Single-threaded: uses Rc<RefCell<...>> since the VM is not Send.
+struct UserChannel {
+    buffer: Rc<RefCell<VecDeque<Value>>>,
+    closed: Rc<RefCell<bool>>,
+}
+
 /// The VM tracks type information and execution counts at key points:
 /// - Loop headers (for hot loop detection)
 /// - Function calls (for hot function detection)
@@ -139,6 +147,8 @@ pub struct VM<'a> {
     // I/O wakeup channel: worker threads send () to wake the event loop
     io_wakeup_tx: mpsc::Sender<()>,
     io_wakeup_rx: mpsc::Receiver<()>,
+    // User-facing async channels for task-to-task communication
+    user_channels: Vec<UserChannel>,
     // Debugger state
     debugger: Option<debugger::Debugger>,
     debug_mode: bool,
@@ -204,6 +214,7 @@ impl<'a> VM<'a> {
             source_ref,
             io_wakeup_tx,
             io_wakeup_rx,
+            user_channels: Vec::new(),
             debugger: None,
             debug_mode: false,
             // Profiling is opt-in (enabled by Program when requested)
@@ -847,8 +858,11 @@ impl<'a> VM<'a> {
         let task = self.get_heap().get_task(task_key)?;
         match task {
             AsyncTask::Channel(_) => Ok(true),
+            AsyncTask::UserRecv { .. } => Ok(false),
             AsyncTask::Timeout { task, .. } => self.task_has_pending_io(*task, visited),
-            AsyncTask::Gather { tasks } | AsyncTask::Race { tasks } => {
+            AsyncTask::Gather { tasks }
+            | AsyncTask::Race { tasks }
+            | AsyncTask::AllSettled { tasks } => {
                 for &child in tasks {
                     if self.task_has_pending_io(child, visited)? {
                         return Ok(true);
@@ -868,6 +882,79 @@ impl<'a> VM<'a> {
         self.create_non_runnable_task(AsyncTask::Race { tasks })
     }
 
+    pub(crate) fn create_all_settled_task(&mut self, tasks: Vec<crate::arenas::TaskKey>) -> Value {
+        self.create_non_runnable_task(AsyncTask::AllSettled { tasks })
+    }
+
+    pub(crate) fn create_user_channel(&mut self) -> (Value, Value) {
+        let id = self.user_channels.len();
+        self.user_channels.push(UserChannel {
+            buffer: Rc::new(RefCell::new(VecDeque::new())),
+            closed: Rc::new(RefCell::new(false)),
+        });
+        // Sender and receiver are dicts with a magic __channel_id field
+        let type_key = self.get_heap_mut().push(HeapValue::String("__type"));
+        let id_key = self.get_heap_mut().push(HeapValue::String("__channel_id"));
+        let id_val = Value::Int(id as i64);
+
+        let sender_type = self.get_heap_mut().push(HeapValue::String("sender"));
+        let mut sender_dict = FxHashMap::default();
+        sender_dict.insert(type_key, sender_type);
+        sender_dict.insert(id_key, id_val);
+        let sender = self.get_heap_mut().push(HeapValue::Dict(sender_dict));
+
+        let receiver_type = self.get_heap_mut().push(HeapValue::String("receiver"));
+        let mut receiver_dict = FxHashMap::default();
+        receiver_dict.insert(type_key, receiver_type);
+        receiver_dict.insert(id_key, id_val);
+        let receiver = self.get_heap_mut().push(HeapValue::Dict(receiver_dict));
+
+        (sender, receiver)
+    }
+
+    pub(crate) fn channel_send(
+        &mut self,
+        sender_key: crate::arenas::DictKey,
+        value: Value,
+    ) -> WalrusResult<bool> {
+        let dict = self.get_heap().get_dict(sender_key)?.clone();
+        let id_key_str = self.get_heap_mut().push(HeapValue::String("__channel_id"));
+        if let Some(Value::Int(id)) = dict.get(&id_key_str) {
+            let id = *id as usize;
+            if id < self.user_channels.len() {
+                if *self.user_channels[id].closed.borrow() {
+                    return Ok(false);
+                }
+                self.user_channels[id].buffer.borrow_mut().push_back(value);
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    pub(crate) fn channel_recv(
+        &mut self,
+        receiver_key: crate::arenas::DictKey,
+    ) -> WalrusResult<Value> {
+        let dict = self.get_heap().get_dict(receiver_key)?.clone();
+        let id_key_str = self.get_heap_mut().push(HeapValue::String("__channel_id"));
+        if let Some(Value::Int(id)) = dict.get(&id_key_str) {
+            let id = *id as usize;
+            if id < self.user_channels.len() {
+                // Check buffer first — if data is already available, return Ready task
+                let buffered = self.user_channels[id].buffer.borrow_mut().pop_front();
+                if let Some(value) = buffered {
+                    return Ok(self.create_non_runnable_task(AsyncTask::Ready(value)));
+                }
+                // No data yet — create a pending recv task
+                return Ok(self.create_non_runnable_task(AsyncTask::UserRecv { channel_id: id }));
+            }
+        }
+        Err(WalrusError::GenericError {
+            message: "asyncx.recv: invalid receiver".to_string(),
+        })
+    }
+
     fn cancelled_task_error_value(&mut self) -> Value {
         self.get_heap_mut()
             .push(HeapValue::String("task cancelled"))
@@ -884,7 +971,10 @@ impl<'a> VM<'a> {
 
         let task = self.get_heap().get_task(task_key)?.clone();
         match task {
-            AsyncTask::Pending { .. } | AsyncTask::Sleep { .. } | AsyncTask::Channel(_) => {
+            AsyncTask::Pending { .. }
+            | AsyncTask::Sleep { .. }
+            | AsyncTask::Channel(_)
+            | AsyncTask::UserRecv { .. } => {
                 *self.get_heap_mut().get_mut_task(task_key)? = AsyncTask::Cancelled;
                 Ok(true)
             }
@@ -893,7 +983,9 @@ impl<'a> VM<'a> {
                 *self.get_heap_mut().get_mut_task(task_key)? = AsyncTask::Cancelled;
                 Ok(true)
             }
-            AsyncTask::Gather { tasks } | AsyncTask::Race { tasks } => {
+            AsyncTask::Gather { tasks }
+            | AsyncTask::Race { tasks }
+            | AsyncTask::AllSettled { tasks } => {
                 for child in tasks {
                     let _ = self.cancel_task_recursive_internal(child, visited)?;
                 }
@@ -936,7 +1028,9 @@ impl<'a> VM<'a> {
             | AsyncTask::Timeout { .. }
             | AsyncTask::Gather { .. }
             | AsyncTask::Race { .. }
-            | AsyncTask::Channel(_) => "pending",
+            | AsyncTask::AllSettled { .. }
+            | AsyncTask::Channel(_)
+            | AsyncTask::UserRecv { .. } => "pending",
             AsyncTask::Ready(_) => "ready",
             AsyncTask::Failed(_) => "failed",
             AsyncTask::Cancelled => "cancelled",
@@ -1128,6 +1222,63 @@ impl<'a> VM<'a> {
                     Ok(TaskResolution::Pending)
                 }
             }
+            AsyncTask::AllSettled { tasks } => {
+                let mut results = Vec::with_capacity(tasks.len());
+                for child in tasks {
+                    match self.poll_task_resolution(child)? {
+                        TaskResolution::Ready(value) => {
+                            let status_str = self.get_heap_mut().push(HeapValue::String("ok"));
+                            let value_str = self.get_heap_mut().push(HeapValue::String("value"));
+                            let status_key = self.get_heap_mut().push(HeapValue::String("status"));
+                            let mut dict = FxHashMap::default();
+                            dict.insert(status_key, status_str);
+                            dict.insert(value_str, value);
+                            results.push(self.get_heap_mut().push(HeapValue::Dict(dict)));
+                        }
+                        TaskResolution::Failed(value) => {
+                            let status_str = self.get_heap_mut().push(HeapValue::String("error"));
+                            let error_str = self.get_heap_mut().push(HeapValue::String("error"));
+                            let status_key = self.get_heap_mut().push(HeapValue::String("status"));
+                            let mut dict = FxHashMap::default();
+                            dict.insert(status_key, status_str);
+                            dict.insert(error_str, value);
+                            results.push(self.get_heap_mut().push(HeapValue::Dict(dict)));
+                        }
+                        TaskResolution::Cancelled => {
+                            let status_str =
+                                self.get_heap_mut().push(HeapValue::String("cancelled"));
+                            let status_key = self.get_heap_mut().push(HeapValue::String("status"));
+                            let mut dict = FxHashMap::default();
+                            dict.insert(status_key, status_str);
+                            results.push(self.get_heap_mut().push(HeapValue::Dict(dict)));
+                        }
+                        TaskResolution::Pending => {
+                            return Ok(TaskResolution::Pending);
+                        }
+                    }
+                }
+                let list = self.get_heap_mut().push(HeapValue::List(results));
+                *self.get_heap_mut().get_mut_task(task_key)? = AsyncTask::Ready(list);
+                Ok(TaskResolution::Ready(list))
+            }
+            AsyncTask::UserRecv { channel_id } => {
+                if channel_id < self.user_channels.len() {
+                    let mut buf = self.user_channels[channel_id].buffer.borrow_mut();
+                    if let Some(value) = buf.pop_front() {
+                        drop(buf);
+                        *self.get_heap_mut().get_mut_task(task_key)? = AsyncTask::Ready(value);
+                        return Ok(TaskResolution::Ready(value));
+                    }
+                    drop(buf);
+                    // Check if channel is closed with empty buffer
+                    if *self.user_channels[channel_id].closed.borrow() {
+                        *self.get_heap_mut().get_mut_task(task_key)? =
+                            AsyncTask::Ready(Value::Void);
+                        return Ok(TaskResolution::Ready(Value::Void));
+                    }
+                }
+                Ok(TaskResolution::Pending)
+            }
         }
     }
 
@@ -1150,7 +1301,9 @@ impl<'a> VM<'a> {
                     None => Some(*deadline),
                 })
             }
-            AsyncTask::Gather { tasks } | AsyncTask::Race { tasks } => {
+            AsyncTask::Gather { tasks }
+            | AsyncTask::Race { tasks }
+            | AsyncTask::AllSettled { tasks } => {
                 let mut soonest: Option<Instant> = None;
                 for &child in tasks {
                     if let Some(deadline) = self.next_deadline_for_task(child, visited)? {
@@ -1164,6 +1317,7 @@ impl<'a> VM<'a> {
             }
             AsyncTask::Pending { .. }
             | AsyncTask::Channel(_)
+            | AsyncTask::UserRecv { .. }
             | AsyncTask::Ready(_)
             | AsyncTask::Failed(_)
             | AsyncTask::Cancelled => Ok(None),

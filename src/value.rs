@@ -116,9 +116,16 @@ pub enum AsyncTask {
     Race {
         tasks: Vec<TaskKey>,
     },
+    AllSettled {
+        tasks: Vec<TaskKey>,
+    },
     /// A background I/O operation running on a worker thread.
     /// Resolves when the worker sends a result through the channel.
     Channel(IoChannel),
+    /// Waiting for a value from a user-facing async channel.
+    UserRecv {
+        channel_id: usize,
+    },
     Ready(Value),
     Failed(Value),
     Cancelled,
@@ -287,7 +294,9 @@ impl Value {
                         AsyncTask::Timeout { .. } => "pending",
                         AsyncTask::Gather { .. } => "pending",
                         AsyncTask::Race { .. } => "pending",
+                        AsyncTask::AllSettled { .. } => "pending",
                         AsyncTask::Channel(_) => "pending",
+                        AsyncTask::UserRecv { .. } => "pending",
                         AsyncTask::Ready(_) => "ready",
                         AsyncTask::Failed(_) => "failed",
                         AsyncTask::Cancelled => "cancelled",

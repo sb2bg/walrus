@@ -159,6 +159,38 @@ pub static NATIVE_SPECS: &[NativeSpec] = &[
         native_async_race
     ),
     native_spec!(
+        AsyncAllSettled,
+        "std/async",
+        "all_settled",
+        ["tasks"],
+        "Return a task that resolves to a list of {status, value/error} dicts once all tasks settle.",
+        native_async_all_settled
+    ),
+    native_spec!(
+        AsyncChannel,
+        "std/async",
+        "channel",
+        [],
+        "Create a channel and return [sender, receiver] for task-to-task communication.",
+        native_async_channel
+    ),
+    native_spec!(
+        AsyncSend,
+        "std/async",
+        "send",
+        ["sender", "value"],
+        "Send a value into a channel. Returns true on success, false if receiver is closed.",
+        native_async_send
+    ),
+    native_spec!(
+        AsyncRecv,
+        "std/async",
+        "recv",
+        ["receiver"],
+        "Return a task that resolves to the next value from a channel.",
+        native_async_recv
+    ),
+    native_spec!(
         AsyncStatus,
         "std/async",
         "status",
@@ -1057,6 +1089,67 @@ fn native_async_race(vm: &mut VM<'_>, args: &[Value], span: Span) -> WalrusResul
         }
     }
     Ok(vm.create_race_task(tasks))
+}
+
+fn native_async_all_settled(vm: &mut VM<'_>, args: &[Value], span: Span) -> WalrusResult<Value> {
+    let items = value_sequence(vm, args[0], span)?;
+    let mut tasks = Vec::with_capacity(items.len());
+    for value in items {
+        match value {
+            Value::Task(task_key) => tasks.push(task_key),
+            other => {
+                return Err(WalrusError::TypeMismatch {
+                    expected: "task".to_string(),
+                    found: other.get_type().to_string(),
+                    span,
+                    src: vm.source_ref().source().into(),
+                    filename: vm.source_ref().filename().into(),
+                });
+            }
+        }
+    }
+    Ok(vm.create_all_settled_task(tasks))
+}
+
+fn native_async_channel(vm: &mut VM<'_>, _args: &[Value], _span: Span) -> WalrusResult<Value> {
+    let (sender, receiver) = vm.create_user_channel();
+    let list = vm
+        .get_heap_mut()
+        .push(HeapValue::List(vec![sender, receiver]));
+    Ok(list)
+}
+
+fn native_async_send(vm: &mut VM<'_>, args: &[Value], span: Span) -> WalrusResult<Value> {
+    let sender_key = match args[0] {
+        Value::Dict(key) => key,
+        other => {
+            return Err(WalrusError::TypeMismatch {
+                expected: "channel sender".to_string(),
+                found: other.get_type().to_string(),
+                span,
+                src: vm.source_ref().source().into(),
+                filename: vm.source_ref().filename().into(),
+            });
+        }
+    };
+    let value = args[1];
+    Ok(Value::Bool(vm.channel_send(sender_key, value)?))
+}
+
+fn native_async_recv(vm: &mut VM<'_>, args: &[Value], span: Span) -> WalrusResult<Value> {
+    let receiver_key = match args[0] {
+        Value::Dict(key) => key,
+        other => {
+            return Err(WalrusError::TypeMismatch {
+                expected: "channel receiver".to_string(),
+                found: other.get_type().to_string(),
+                span,
+                src: vm.source_ref().source().into(),
+                filename: vm.source_ref().filename().into(),
+            });
+        }
+    };
+    Ok(vm.channel_recv(receiver_key)?)
 }
 
 fn native_async_status(vm: &mut VM<'_>, args: &[Value], span: Span) -> WalrusResult<Value> {
