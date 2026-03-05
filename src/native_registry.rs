@@ -1848,43 +1848,20 @@ fn native_math_rand_range(vm: &mut VM<'_>, args: &[Value], span: Span) -> Walrus
 
 // ── JSON ──────────────────────────────────────────────────────────────────
 
-fn json_encode_value(vm: &VM<'_>, value: Value, out: &mut String) -> Result<(), String> {
+fn value_to_serde_json(vm: &VM<'_>, value: Value) -> Result<serde_json::Value, String> {
     match value {
-        Value::Int(n) => {
-            out.push_str(&n.to_string());
-        }
+        Value::Int(n) => Ok(serde_json::Value::Number(n.into())),
         Value::Float(f) => {
             let f = f.0;
-            if f.is_nan() || f.is_infinite() {
-                return Err("json.encode: cannot encode NaN or Infinity".to_string());
-            }
-            // Format nicely: if it's a whole number, keep the decimal
-            let s = format!("{}", f);
-            out.push_str(&s);
+            serde_json::Number::from_f64(f)
+                .map(serde_json::Value::Number)
+                .ok_or_else(|| "json.encode: cannot encode NaN or Infinity".to_string())
         }
-        Value::Bool(b) => {
-            out.push_str(if b { "true" } else { "false" });
-        }
-        Value::Void => {
-            out.push_str("null");
-        }
+        Value::Bool(b) => Ok(serde_json::Value::Bool(b)),
+        Value::Void => Ok(serde_json::Value::Null),
         Value::String(key) => {
             let s = vm.get_heap().get_string(key).map_err(|e| format!("{e}"))?;
-            out.push('"');
-            for ch in s.chars() {
-                match ch {
-                    '"' => out.push_str("\\\""),
-                    '\\' => out.push_str("\\\\"),
-                    '\n' => out.push_str("\\n"),
-                    '\r' => out.push_str("\\r"),
-                    '\t' => out.push_str("\\t"),
-                    c if (c as u32) < 0x20 => {
-                        out.push_str(&format!("\\u{:04x}", c as u32));
-                    }
-                    c => out.push(c),
-                }
-            }
-            out.push('"');
+            Ok(serde_json::Value::String(s.to_string()))
         }
         Value::List(key) => {
             let items = vm
@@ -1892,14 +1869,9 @@ fn json_encode_value(vm: &VM<'_>, value: Value, out: &mut String) -> Result<(), 
                 .get_list(key)
                 .map_err(|e| format!("{e}"))?
                 .clone();
-            out.push('[');
-            for (i, item) in items.iter().enumerate() {
-                if i > 0 {
-                    out.push(',');
-                }
-                json_encode_value(vm, *item, out)?;
-            }
-            out.push(']');
+            let arr: Result<Vec<_>, _> =
+                items.iter().map(|v| value_to_serde_json(vm, *v)).collect();
+            Ok(serde_json::Value::Array(arr?))
         }
         Value::Tuple(key) => {
             let items = vm
@@ -1907,14 +1879,9 @@ fn json_encode_value(vm: &VM<'_>, value: Value, out: &mut String) -> Result<(), 
                 .get_tuple(key)
                 .map_err(|e| format!("{e}"))?
                 .clone();
-            out.push('[');
-            for (i, item) in items.iter().enumerate() {
-                if i > 0 {
-                    out.push(',');
-                }
-                json_encode_value(vm, *item, out)?;
-            }
-            out.push(']');
+            let arr: Result<Vec<_>, _> =
+                items.iter().map(|v| value_to_serde_json(vm, *v)).collect();
+            Ok(serde_json::Value::Array(arr?))
         }
         Value::Dict(key) => {
             let dict = vm
@@ -1922,47 +1889,11 @@ fn json_encode_value(vm: &VM<'_>, value: Value, out: &mut String) -> Result<(), 
                 .get_dict(key)
                 .map_err(|e| format!("{e}"))?
                 .clone();
-            out.push('{');
-            let mut first = true;
-            // Sort keys for deterministic output
-            let mut entries: Vec<(Value, Value)> = dict.into_iter().collect();
-            entries.sort_by(|(a, _), (b, _)| {
-                let a_str = if let Value::String(k) = a {
-                    vm.get_heap().get_string(*k).unwrap_or("").to_string()
-                } else {
-                    String::new()
-                };
-                let b_str = if let Value::String(k) = b {
-                    vm.get_heap().get_string(*k).unwrap_or("").to_string()
-                } else {
-                    String::new()
-                };
-                a_str.cmp(&b_str)
-            });
-            for (k, v) in &entries {
+            let mut map = serde_json::Map::new();
+            for (k, v) in &dict {
                 if let Value::String(sk) = k {
-                    if !first {
-                        out.push(',');
-                    }
-                    first = false;
                     let key_str = vm.get_heap().get_string(*sk).map_err(|e| format!("{e}"))?;
-                    out.push('"');
-                    for ch in key_str.chars() {
-                        match ch {
-                            '"' => out.push_str("\\\""),
-                            '\\' => out.push_str("\\\\"),
-                            '\n' => out.push_str("\\n"),
-                            '\r' => out.push_str("\\r"),
-                            '\t' => out.push_str("\\t"),
-                            c if (c as u32) < 0x20 => {
-                                out.push_str(&format!("\\u{:04x}", c as u32));
-                            }
-                            c => out.push(c),
-                        }
-                    }
-                    out.push('"');
-                    out.push(':');
-                    json_encode_value(vm, *v, out)?;
+                    map.insert(key_str.to_string(), value_to_serde_json(vm, *v)?);
                 } else {
                     return Err(format!(
                         "json.encode: dict keys must be strings, found '{}'",
@@ -1970,268 +1901,62 @@ fn json_encode_value(vm: &VM<'_>, value: Value, out: &mut String) -> Result<(), 
                     ));
                 }
             }
-            out.push('}');
+            Ok(serde_json::Value::Object(map))
         }
-        other => {
-            return Err(format!(
-                "json.encode: cannot encode type '{}'",
-                other.get_type()
-            ));
-        }
+        other => Err(format!(
+            "json.encode: cannot encode type '{}'",
+            other.get_type()
+        )),
     }
-    Ok(())
 }
 
-fn native_json_encode(vm: &mut VM<'_>, args: &[Value], span: Span) -> WalrusResult<Value> {
-    let mut out = String::new();
-    json_encode_value(vm, args[0], &mut out)
+fn native_json_encode(vm: &mut VM<'_>, args: &[Value], _span: Span) -> WalrusResult<Value> {
+    let json_value = value_to_serde_json(vm, args[0])
         .map_err(|msg| WalrusError::GenericError { message: msg })?;
+    let out = serde_json::to_string(&json_value).map_err(|e| WalrusError::GenericError {
+        message: format!("json.encode: {e}"),
+    })?;
     Ok(heap_string(vm, &out))
 }
 
-// ── JSON Decode ───────────────────────────────────────────────────────────
-
-struct JsonParser {
-    chars: Vec<char>,
-    pos: usize,
-}
-
-impl JsonParser {
-    fn new(input: &str) -> Self {
-        Self {
-            chars: input.chars().collect(),
-            pos: 0,
-        }
-    }
-
-    fn peek(&self) -> Option<char> {
-        self.chars.get(self.pos).copied()
-    }
-
-    fn advance(&mut self) -> Option<char> {
-        let ch = self.chars.get(self.pos).copied();
-        if ch.is_some() {
-            self.pos += 1;
-        }
-        ch
-    }
-
-    fn skip_whitespace(&mut self) {
-        while let Some(ch) = self.peek() {
-            if ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r' {
-                self.advance();
+fn serde_json_to_value(vm: &mut VM<'_>, json: serde_json::Value) -> Value {
+    match json {
+        serde_json::Value::Null => Value::Void,
+        serde_json::Value::Bool(b) => Value::Bool(b),
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                Value::Int(i)
             } else {
-                break;
+                Value::Float(FloatOrd(n.as_f64().unwrap_or(0.0)))
             }
         }
-    }
-
-    fn parse_value(&mut self, vm: &mut VM<'_>) -> Result<Value, String> {
-        self.skip_whitespace();
-        match self.peek() {
-            None => Err("json.decode: unexpected end of input".to_string()),
-            Some('"') => self.parse_string(vm),
-            Some('[') => self.parse_array(vm),
-            Some('{') => self.parse_object(vm),
-            Some('t') => self.parse_literal("true", Value::Bool(true)),
-            Some('f') => self.parse_literal("false", Value::Bool(false)),
-            Some('n') => self.parse_literal("null", Value::Void),
-            Some(ch) if ch == '-' || ch.is_ascii_digit() => self.parse_number(),
-            Some(ch) => Err(format!("json.decode: unexpected character '{ch}'")),
+        serde_json::Value::String(s) => heap_string(vm, &s),
+        serde_json::Value::Array(arr) => {
+            let items: Vec<Value> = arr
+                .into_iter()
+                .map(|v| serde_json_to_value(vm, v))
+                .collect();
+            vm.get_heap_mut().push(HeapValue::List(items))
         }
-    }
-
-    fn parse_literal(&mut self, expected: &str, value: Value) -> Result<Value, String> {
-        for expected_ch in expected.chars() {
-            match self.advance() {
-                Some(ch) if ch == expected_ch => {}
-                _ => {
-                    return Err(format!("json.decode: expected '{expected}'"));
-                }
+        serde_json::Value::Object(map) => {
+            let mut dict = rustc_hash::FxHashMap::default();
+            for (k, v) in map {
+                let key_val = heap_string(vm, &k);
+                let val = serde_json_to_value(vm, v);
+                dict.insert(key_val, val);
             }
-        }
-        Ok(value)
-    }
-
-    fn parse_number(&mut self) -> Result<Value, String> {
-        let start = self.pos;
-        if self.peek() == Some('-') {
-            self.advance();
-        }
-        while let Some(ch) = self.peek() {
-            if ch.is_ascii_digit() {
-                self.advance();
-            } else {
-                break;
-            }
-        }
-        let mut is_float = false;
-        if self.peek() == Some('.') {
-            is_float = true;
-            self.advance();
-            while let Some(ch) = self.peek() {
-                if ch.is_ascii_digit() {
-                    self.advance();
-                } else {
-                    break;
-                }
-            }
-        }
-        if let Some('e' | 'E') = self.peek() {
-            is_float = true;
-            self.advance();
-            if let Some('+' | '-') = self.peek() {
-                self.advance();
-            }
-            while let Some(ch) = self.peek() {
-                if ch.is_ascii_digit() {
-                    self.advance();
-                } else {
-                    break;
-                }
-            }
-        }
-        let num_str: String = self.chars[start..self.pos].iter().collect();
-        if is_float {
-            let f: f64 = num_str
-                .parse()
-                .map_err(|_| format!("json.decode: invalid number '{num_str}'"))?;
-            Ok(Value::Float(FloatOrd(f)))
-        } else {
-            match num_str.parse::<i64>() {
-                Ok(n) => Ok(Value::Int(n)),
-                Err(_) => {
-                    // Fallback to float for very large numbers
-                    let f: f64 = num_str
-                        .parse()
-                        .map_err(|_| format!("json.decode: invalid number '{num_str}'"))?;
-                    Ok(Value::Float(FloatOrd(f)))
-                }
-            }
-        }
-    }
-
-    fn parse_string_raw(&mut self) -> Result<String, String> {
-        // consume opening quote
-        match self.advance() {
-            Some('"') => {}
-            _ => return Err("json.decode: expected '\"'".to_string()),
-        }
-        let mut s = String::new();
-        loop {
-            match self.advance() {
-                None => return Err("json.decode: unterminated string".to_string()),
-                Some('"') => return Ok(s),
-                Some('\\') => match self.advance() {
-                    Some('"') => s.push('"'),
-                    Some('\\') => s.push('\\'),
-                    Some('/') => s.push('/'),
-                    Some('n') => s.push('\n'),
-                    Some('r') => s.push('\r'),
-                    Some('t') => s.push('\t'),
-                    Some('b') => s.push('\u{0008}'),
-                    Some('f') => s.push('\u{000C}'),
-                    Some('u') => {
-                        let mut hex = String::with_capacity(4);
-                        for _ in 0..4 {
-                            match self.advance() {
-                                Some(ch) if ch.is_ascii_hexdigit() => hex.push(ch),
-                                _ => return Err("json.decode: invalid unicode escape".to_string()),
-                            }
-                        }
-                        let code = u32::from_str_radix(&hex, 16)
-                            .map_err(|_| "json.decode: invalid unicode escape".to_string())?;
-                        match char::from_u32(code) {
-                            Some(ch) => s.push(ch),
-                            None => {
-                                return Err("json.decode: invalid unicode code point".to_string());
-                            }
-                        }
-                    }
-                    _ => return Err("json.decode: invalid escape sequence".to_string()),
-                },
-                Some(ch) => s.push(ch),
-            }
-        }
-    }
-
-    fn parse_string(&mut self, vm: &mut VM<'_>) -> Result<Value, String> {
-        let s = self.parse_string_raw()?;
-        Ok(heap_string(vm, &s))
-    }
-
-    fn parse_array(&mut self, vm: &mut VM<'_>) -> Result<Value, String> {
-        self.advance(); // consume '['
-        self.skip_whitespace();
-        let mut items = Vec::new();
-        if self.peek() == Some(']') {
-            self.advance();
-            return Ok(vm.get_heap_mut().push(HeapValue::List(items)));
-        }
-        loop {
-            let val = self.parse_value(vm)?;
-            items.push(val);
-            self.skip_whitespace();
-            match self.peek() {
-                Some(',') => {
-                    self.advance();
-                }
-                Some(']') => {
-                    self.advance();
-                    return Ok(vm.get_heap_mut().push(HeapValue::List(items)));
-                }
-                _ => return Err("json.decode: expected ',' or ']' in array".to_string()),
-            }
-        }
-    }
-
-    fn parse_object(&mut self, vm: &mut VM<'_>) -> Result<Value, String> {
-        self.advance(); // consume '{'
-        self.skip_whitespace();
-        let mut dict = rustc_hash::FxHashMap::default();
-        if self.peek() == Some('}') {
-            self.advance();
-            return Ok(vm.get_heap_mut().push(HeapValue::Dict(dict)));
-        }
-        loop {
-            self.skip_whitespace();
-            let key_str = self.parse_string_raw()?;
-            let key_val = heap_string(vm, &key_str);
-            self.skip_whitespace();
-            match self.advance() {
-                Some(':') => {}
-                _ => return Err("json.decode: expected ':' after key".to_string()),
-            }
-            let val = self.parse_value(vm)?;
-            dict.insert(key_val, val);
-            self.skip_whitespace();
-            match self.peek() {
-                Some(',') => {
-                    self.advance();
-                }
-                Some('}') => {
-                    self.advance();
-                    return Ok(vm.get_heap_mut().push(HeapValue::Dict(dict)));
-                }
-                _ => return Err("json.decode: expected ',' or '}}' in object".to_string()),
-            }
+            vm.get_heap_mut().push(HeapValue::Dict(dict))
         }
     }
 }
 
 fn native_json_decode(vm: &mut VM<'_>, args: &[Value], span: Span) -> WalrusResult<Value> {
     let input = vm.value_to_string(args[0], span)?;
-    let mut parser = JsonParser::new(&input);
-    let value = parser
-        .parse_value(vm)
-        .map_err(|msg| WalrusError::GenericError { message: msg })?;
-    parser.skip_whitespace();
-    if parser.pos != parser.chars.len() {
-        return Err(WalrusError::GenericError {
-            message: "json.decode: trailing data after JSON value".to_string(),
-        });
-    }
-    Ok(value)
+    let json_value: serde_json::Value =
+        serde_json::from_str(&input).map_err(|e| WalrusError::GenericError {
+            message: format!("json.decode: {e}"),
+        })?;
+    Ok(serde_json_to_value(vm, json_value))
 }
 
 #[cfg(test)]
