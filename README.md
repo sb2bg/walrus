@@ -84,6 +84,8 @@ Walrus provides a standard library through an import system. Modules are importe
 import "std/io";
 import "std/sys" as system;
 import "std/math";
+import "std/net";
+import "std/http";
 ```
 
 ### Package Imports (`@name`)
@@ -215,6 +217,77 @@ if core.len(args) < 2 {
     println("Usage: walrus script.walrus <args>");
     sys.exit(1);
 }
+```
+
+#### `std/net` - TCP Networking (VM mode)
+
+| Function                            | Description                                                    |
+| ----------------------------------- | -------------------------------------------------------------- |
+| `net.tcp_bind(host, port)`          | Bind a TCP listener and return a listener handle              |
+| `net.tcp_accept(listener)`          | Accept one incoming connection and return a stream handle     |
+| `net.tcp_connect(host, port)`       | Connect to a host/port and return a stream handle             |
+| `net.tcp_local_port(listener)`      | Return the listener's local bound port (useful with port `0`) |
+| `net.tcp_read(stream, max_bytes)`   | Read up to `max_bytes` bytes (returns `void` at EOF)          |
+| `net.tcp_read_line(stream)`         | Read one line (returns `void` at EOF)                         |
+| `net.tcp_write(stream, content)`    | Write UTF-8 content and return bytes written                  |
+| `net.tcp_close(stream)`             | Close a stream handle                                         |
+| `net.tcp_close_listener(listener)`  | Close a listener handle                                       |
+
+**Example: Loopback Round Trip**
+
+```walrus
+import "std/net" as net;
+
+let listener = net.tcp_bind("127.0.0.1", 0);
+let port = net.tcp_local_port(listener);
+
+let client = net.tcp_connect("127.0.0.1", port);
+let server = net.tcp_accept(listener);
+
+net.tcp_write(client, "ping\n");
+println(net.tcp_read_line(server)); // ping
+
+net.tcp_write(server, "pong\n");
+println(net.tcp_read_line(client)); // pong
+
+net.tcp_close(client);
+net.tcp_close(server);
+net.tcp_close_listener(listener);
+```
+
+#### `std/http` - HTTP Helpers (VM mode)
+
+`std/http` is backed by Hyper HTTP primitives (`hyper::http`) plus `httparse` for HTTP/1 request parsing.
+
+| Function                                           | Description                                                              |
+| -------------------------------------------------- | ------------------------------------------------------------------------ |
+| `http.parse_request_line(line)`                    | Parse request line into `{ ok, method, target, path, query, version }` |
+| `http.parse_query(query)`                          | Parse query string into a dict                                           |
+| `http.normalize_path(path)`                        | Normalize path (collapse repeated slashes, trim trailing slash)          |
+| `http.match_route(pattern, path)`                  | Route matching with `:param` segments and trailing `*` wildcard          |
+| `http.status_text(status)`                         | Return status reason phrase (for example `404 -> "Not Found"`)           |
+| `http.response(status, body)`                      | Build an HTTP/1.1 response string with default headers                   |
+| `http.response_with_headers(status, body, headers)`| Build response with caller-provided headers dict                         |
+| `http.read_request(stream, max_body_bytes)`        | Read/parse one HTTP request (`void` on EOF, `{ ok: false, error }` on malformed input) |
+
+**Example: Minimal HTTP Echo**
+
+```walrus
+import "std/net" as net;
+import "std/http" as http;
+
+let listener = net.tcp_bind("127.0.0.1", 8081);
+let stream = net.tcp_accept(listener);
+
+let req = http.read_request(stream, 8192);
+if req != void and req["ok"] {
+    let body = "echo\n" + req["body"] + "\n";
+    let response = http.response_with_headers(200, body, {"x-walrus": "http"});
+    net.tcp_write(stream, response);
+}
+
+net.tcp_close(stream);
+net.tcp_close_listener(listener);
 ```
 
 #### `std/math` - Math and Random Utilities

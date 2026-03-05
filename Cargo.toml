@@ -43,6 +43,8 @@ tokio = { version = "1.43.0", features = ["io-std", "macros", "rt-multi-thread",
 tower-lsp = "0.20.0"
 serde = { version = "1.0", features = ["derive"] }
 toml = "0.8"
+hyper = { version = "1.6", default-features = false, features = ["http1", "server"] }
+httparse = "1.10"
 
 # Cranelift JIT compilation (optional, enabled with --features jit)
 cranelift-codegen = { version = "0.112", optional = true }

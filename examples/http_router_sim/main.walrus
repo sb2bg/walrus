@@ -1,0 +1,88 @@
+import "std/net" as net;
+import "std/http" as http;
+import "./router.walrus" as router_lib;
+
+let app = router_lib.new_app();
+
+app.get("/health", : req {
+    return router_lib.text(200, "ok\n");
+});
+
+app.get("/users/:id", : req {
+    let id = req["params"]["id"];
+    let body = "user show\nid=" + id + "\n";
+    return router_lib.text(200, body);
+});
+
+app.get("/users/:id/posts/:post_id", : req {
+    let id = req["params"]["id"];
+    let post_id = req["params"]["post_id"];
+    let body = "user post show\nuser_id=" + id + "\npost_id=" + post_id + "\n";
+    return router_lib.text(200, body);
+});
+
+app.get("/assets/*", : req {
+    let suffix = req["wildcard"];
+    let body = "asset path\nsuffix=" + core.str(suffix) + "\n";
+    return router_lib.text(200, body);
+});
+
+app.post("/echo", : req {
+    let body = "echo\n" + req["body"] + "\n";
+    return router_lib.text_with_headers(
+        200,
+        body,
+        {"x-walrus-demo": "echo"}
+    );
+});
+
+let listener = net.tcp_bind("127.0.0.1", 8081);
+let max_requests = 4;
+let served = 0;
+
+println("HTTP Router Server (Express-style)");
+println("==================================");
+println("Listening on http://127.0.0.1:8081");
+println("This demo handles 4 requests, then exits.");
+println("Try:");
+println("  curl -i http://127.0.0.1:8081/health");
+println("  curl -i http://127.0.0.1:8081/users/42");
+println("  curl -i http://127.0.0.1:8081/assets/js/app.js");
+println("  curl -i -X POST http://127.0.0.1:8081/echo -d 'hello'");
+println("");
+
+while served < max_requests {
+    let stream = net.tcp_accept(listener);
+    let request = http.read_request(stream, 16384);
+
+    if request == void {
+        net.tcp_close(stream);
+        served = served + 1;
+        continue;
+    }
+
+    if request["ok"] == false {
+        let body = "bad request\n" + request["error"] + "\n";
+        net.tcp_write(stream, http.response(400, body));
+        net.tcp_close(stream);
+        served = served + 1;
+        continue;
+    }
+
+    let response = app.dispatch(request);
+    let status = response["status"];
+    let body = response["body"];
+    let headers = response["headers"];
+
+    net.tcp_write(stream, http.response_with_headers(status, body, headers));
+
+    let method = request["method"];
+    let path = request["path"];
+    println(f"{method} {path} -> {status}");
+
+    net.tcp_close(stream);
+    served = served + 1;
+}
+
+net.tcp_close_listener(listener);
+println("Server stopped.");

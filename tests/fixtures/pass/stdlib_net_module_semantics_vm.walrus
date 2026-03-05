@@ -1,0 +1,7 @@
+import "std/net" as net;
+import "std/core" as core;
+
+println(core.type(net));
+println(core.type(net.tcp_bind));
+println(core.len(net) >= 5);
+println(core.type(net["tcp_connect"]));

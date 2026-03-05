@@ -1,0 +1,3 @@
+import "std/http" as http;
+
+http.response_with_headers(200, "ok", {"x-bad": "line1\nline2"});

@@ -1,0 +1,3 @@
+import "std/http" as http;
+
+http.read_request(1, -1);

@@ -1,0 +1,82 @@
+import "std/http" as http;
+
+fn text : status, body {
+    return {
+        "status": status,
+        "body": body,
+        "headers": {}
+    };
+}
+
+fn text_with_headers : status, body, headers {
+    return {
+        "status": status,
+        "body": body,
+        "headers": headers
+    };
+}
+
+struct App {
+    fn init : self {
+        self.routes = [];
+    }
+
+    fn add : self, method, pattern, handler {
+        let route = {
+            "method": method,
+            "pattern": pattern,
+            "handler": handler
+        };
+
+        self.routes = self.routes + [route];
+    }
+
+    fn get : self, pattern, handler {
+        self.add("GET", pattern, handler);
+    }
+
+    fn post : self, pattern, handler {
+        self.add("POST", pattern, handler);
+    }
+
+    fn put : self, pattern, handler {
+        self.add("PUT", pattern, handler);
+    }
+
+    fn patch : self, pattern, handler {
+        self.add("PATCH", pattern, handler);
+    }
+
+    fn delete : self, pattern, handler {
+        self.add("DELETE", pattern, handler);
+    }
+
+    fn dispatch : self, request {
+        let i = 0;
+        let n = core.len(self.routes);
+
+        while i < n {
+            let route = self.routes[i];
+
+            if route["method"] == request["method"] {
+                let matched = http.match_route(route["pattern"], request["path"]);
+
+                if matched["found"] {
+                    request["params"] = matched["params"];
+                    request["wildcard"] = matched["wildcard"];
+                    return route["handler"](request);
+                }
+            }
+
+            i = i + 1;
+        }
+
+        let method = request["method"];
+        let path = request["path"];
+        return text(404, f"not found: {method} {path}\n");
+    }
+}
+
+fn new_app : {
+    return App();
+}
