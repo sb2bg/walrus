@@ -105,32 +105,44 @@ fn discover_cases() -> Vec<Case> {
 }
 
 fn load_cases(fixtures_root: &Path, directory: &Path, is_pass: bool) -> Vec<Case> {
-    let mut files = fs::read_dir(directory)
-        .unwrap_or_else(|err| {
-            panic!(
-                "failed to read fixture directory '{}': {err}",
-                directory.display()
-            )
-        })
-        .map(|entry| {
-            entry
-                .unwrap_or_else(|err| {
-                    panic!(
-                        "failed to read fixture entry in '{}': {err}",
-                        directory.display()
-                    )
-                })
-                .path()
-        })
-        .filter(|path| path.extension().is_some_and(|ext| ext == "walrus"))
-        .collect::<Vec<_>>();
-
+    let mut files = Vec::new();
+    let expect_ext = if is_pass { "stdout" } else { "stderr" };
+    collect_walrus_files(directory, &mut files, expect_ext);
     files.sort();
 
     files
         .into_iter()
         .map(|program| load_case(fixtures_root, &program, is_pass))
         .collect()
+}
+
+/// Recursively collect `.walrus` files that have a companion expectation file.
+fn collect_walrus_files(directory: &Path, files: &mut Vec<PathBuf>, expect_ext: &str) {
+    let entries = fs::read_dir(directory).unwrap_or_else(|err| {
+        panic!(
+            "failed to read fixture directory '{}': {err}",
+            directory.display()
+        )
+    });
+
+    for entry in entries {
+        let path = entry
+            .unwrap_or_else(|err| {
+                panic!(
+                    "failed to read fixture entry in '{}': {err}",
+                    directory.display()
+                )
+            })
+            .path();
+
+        if path.is_dir() {
+            collect_walrus_files(&path, files, expect_ext);
+        } else if path.extension().is_some_and(|ext| ext == "walrus")
+            && path.with_extension(expect_ext).exists()
+        {
+            files.push(path);
+        }
+    }
 }
 
 fn load_case(fixtures_root: &Path, program: &Path, is_pass: bool) -> Case {
