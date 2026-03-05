@@ -24,7 +24,7 @@ use crate::error::WalrusError;
 use crate::function::{NativeFunction, RustFunction, WalrusFunction};
 use crate::source_ref::SourceRef;
 use crate::span::Span;
-use crate::value::Value;
+use crate::value::{IoHttpOutcome, IoHttpRequest, Value};
 
 // File handle table - maps integer handles to open files
 thread_local! {
@@ -411,7 +411,7 @@ pub fn write_file(path: &str, content: &str, _span: Span) -> WalrusResult<()> {
     }
 }
 
-fn ensure_valid_port(port: i64, op: &str) -> WalrusResult<u16> {
+pub fn ensure_valid_port(port: i64, op: &str) -> WalrusResult<u16> {
     if !(0..=65535).contains(&port) {
         return Err(WalrusError::GenericError {
             message: format!("net.{op}: invalid port {port} (expected 0..65535)"),
@@ -630,6 +630,39 @@ pub fn tcp_close_listener(listener_handle: i64, _span: Span) -> WalrusResult<()>
                 ),
             })
         }
+    })
+}
+
+/// Store a TcpStream in the thread-local NET_TABLE and return its handle.
+/// Used by the VM to convert IoResult::Stream back into a handle on the VM thread.
+pub fn store_tcp_stream(stream: TcpStream) -> i64 {
+    NET_TABLE.with(|table| table.borrow_mut().insert_stream(stream))
+}
+
+/// Store a TcpListener in the thread-local NET_TABLE and return its handle.
+/// Used by the VM to convert IoResult::Listener back into a handle on the VM thread.
+pub fn store_tcp_listener(listener: TcpListener) -> i64 {
+    NET_TABLE.with(|table| table.borrow_mut().insert_listener(listener))
+}
+
+/// Clone a TcpListener for use in a background thread.
+/// Returns None if the handle is invalid.
+pub fn clone_tcp_listener(handle: i64) -> Option<TcpListener> {
+    NET_TABLE.with(|table| {
+        let table = table.borrow();
+        table
+            .listeners
+            .get(&handle)
+            .and_then(|l| l.try_clone().ok())
+    })
+}
+
+/// Clone a TcpStream for use in a background thread.
+/// Returns None if the handle is invalid.
+pub fn clone_tcp_stream(handle: i64) -> Option<TcpStream> {
+    NET_TABLE.with(|table| {
+        let table = table.borrow();
+        table.streams.get(&handle).and_then(|s| s.try_clone().ok())
     })
 }
 
@@ -952,108 +985,131 @@ pub fn http_read_request(
                     message: format!("http.read_request: invalid stream handle {stream_handle}"),
                 })?;
 
-        let mut buf = Vec::with_capacity(HTTP_READ_CHUNK_BYTES);
-        let mut temp = [0u8; HTTP_READ_CHUNK_BYTES];
-
-        let parsed_head = loop {
-            match parse_http_head(&buf) {
-                Ok(Some(head)) => break head,
-                Ok(None) => {
-                    if buf.len() >= HTTP_MAX_HEADER_BYTES {
-                        return Ok(HttpReadOutcome::BadRequest(
-                            "request headers too large".to_string(),
-                        ));
-                    }
-
-                    let read = stream
-                        .read(&mut temp)
-                        .map_err(|err| WalrusError::GenericError {
-                            message: format!("http.read_request: read failed: {err}"),
-                        })?;
-
-                    if read == 0 {
-                        if buf.is_empty() {
-                            return Ok(HttpReadOutcome::Eof);
-                        }
-                        return Ok(HttpReadOutcome::BadRequest(
-                            "unexpected EOF while reading request headers".to_string(),
-                        ));
-                    }
-
-                    buf.extend_from_slice(&temp[..read]);
-                }
-                Err(message) => return Ok(HttpReadOutcome::BadRequest(message)),
-            }
-        };
-
-        if parsed_head.content_length > max_body_bytes {
-            return Ok(HttpReadOutcome::BadRequest(format!(
-                "request body too large: {} > {}",
-                parsed_head.content_length, max_body_bytes
-            )));
-        }
-
-        let mut body_bytes = if parsed_head.bytes_consumed < buf.len() {
-            buf[parsed_head.bytes_consumed..].to_vec()
-        } else {
-            Vec::new()
-        };
-
-        if body_bytes.len() > parsed_head.content_length {
-            body_bytes.truncate(parsed_head.content_length);
-        }
-
-        while body_bytes.len() < parsed_head.content_length {
-            let remaining = parsed_head.content_length - body_bytes.len();
-            let to_read = remaining.min(HTTP_READ_CHUNK_BYTES);
-
-            let read =
-                stream
-                    .read(&mut temp[..to_read])
-                    .map_err(|err| WalrusError::GenericError {
-                        message: format!("http.read_request: read failed: {err}"),
-                    })?;
-
-            if read == 0 {
-                return Ok(HttpReadOutcome::BadRequest(
-                    "unexpected EOF while reading request body".to_string(),
-                ));
-            }
-
-            body_bytes.extend_from_slice(&temp[..read]);
-        }
-
-        let body = match String::from_utf8(body_bytes) {
-            Ok(body) => body,
-            Err(_) => {
-                return Ok(HttpReadOutcome::BadRequest(
-                    "request body is not valid UTF-8".to_string(),
-                ));
-            }
-        };
-
-        let content_length =
-            i64::try_from(parsed_head.content_length).map_err(|_| WalrusError::GenericError {
-                message: "http.read_request: content-length exceeds supported size".to_string(),
-            })?;
-
-        let path = if parsed_head.uri.path().is_empty() {
-            "/".to_string()
-        } else {
-            parsed_head.uri.path().to_string()
-        };
-
-        Ok(HttpReadOutcome::Request(HttpRequest {
-            method: parsed_head.method.as_str().to_string(),
-            target: parsed_head.target,
-            path,
-            query: parsed_head.uri.query().unwrap_or("").to_string(),
-            version: http_version_token(parsed_head.version).to_string(),
-            headers: parsed_head.header_pairs,
-            body,
-            content_length,
-        }))
+        http_read_request_from_stream(stream, max_body_bytes)
+            .map_err(|msg| WalrusError::GenericError { message: msg })
     })
+}
+
+/// Read and parse an HTTP request directly from a TcpStream.
+/// This is the thread-safe version that can be called from worker threads.
+pub fn http_read_request_from_stream(
+    stream: &mut TcpStream,
+    max_body_bytes: usize,
+) -> Result<HttpReadOutcome, String> {
+    use crate::value::{IoHttpOutcome, IoHttpRequest};
+
+    let mut buf = Vec::with_capacity(HTTP_READ_CHUNK_BYTES);
+    let mut temp = [0u8; HTTP_READ_CHUNK_BYTES];
+
+    let parsed_head = loop {
+        match parse_http_head(&buf) {
+            Ok(Some(head)) => break head,
+            Ok(None) => {
+                if buf.len() >= HTTP_MAX_HEADER_BYTES {
+                    return Ok(HttpReadOutcome::BadRequest(
+                        "request headers too large".to_string(),
+                    ));
+                }
+
+                let read = stream
+                    .read(&mut temp)
+                    .map_err(|err| format!("http.read_request: read failed: {err}"))?;
+
+                if read == 0 {
+                    if buf.is_empty() {
+                        return Ok(HttpReadOutcome::Eof);
+                    }
+                    return Ok(HttpReadOutcome::BadRequest(
+                        "unexpected EOF while reading request headers".to_string(),
+                    ));
+                }
+
+                buf.extend_from_slice(&temp[..read]);
+            }
+            Err(message) => return Ok(HttpReadOutcome::BadRequest(message)),
+        }
+    };
+
+    if parsed_head.content_length > max_body_bytes {
+        return Ok(HttpReadOutcome::BadRequest(format!(
+            "request body too large: {} > {}",
+            parsed_head.content_length, max_body_bytes
+        )));
+    }
+
+    let mut body_bytes = if parsed_head.bytes_consumed < buf.len() {
+        buf[parsed_head.bytes_consumed..].to_vec()
+    } else {
+        Vec::new()
+    };
+
+    if body_bytes.len() > parsed_head.content_length {
+        body_bytes.truncate(parsed_head.content_length);
+    }
+
+    while body_bytes.len() < parsed_head.content_length {
+        let remaining = parsed_head.content_length - body_bytes.len();
+        let to_read = remaining.min(HTTP_READ_CHUNK_BYTES);
+
+        let read = stream
+            .read(&mut temp[..to_read])
+            .map_err(|err| format!("http.read_request: read failed: {err}"))?;
+
+        if read == 0 {
+            return Ok(HttpReadOutcome::BadRequest(
+                "unexpected EOF while reading request body".to_string(),
+            ));
+        }
+
+        body_bytes.extend_from_slice(&temp[..read]);
+    }
+
+    let body = match String::from_utf8(body_bytes) {
+        Ok(body) => body,
+        Err(_) => {
+            return Ok(HttpReadOutcome::BadRequest(
+                "request body is not valid UTF-8".to_string(),
+            ));
+        }
+    };
+
+    let content_length = i64::try_from(parsed_head.content_length)
+        .map_err(|_| "http.read_request: content-length exceeds supported size".to_string())?;
+
+    let path = if parsed_head.uri.path().is_empty() {
+        "/".to_string()
+    } else {
+        parsed_head.uri.path().to_string()
+    };
+
+    Ok(HttpReadOutcome::Request(HttpRequest {
+        method: parsed_head.method.as_str().to_string(),
+        target: parsed_head.target,
+        path,
+        query: parsed_head.uri.query().unwrap_or("").to_string(),
+        version: http_version_token(parsed_head.version).to_string(),
+        headers: parsed_head.header_pairs,
+        body,
+        content_length,
+    }))
+}
+
+/// Convert an HttpReadOutcome to IoHttpOutcome for use with IoResult.
+pub fn http_outcome_to_io(outcome: HttpReadOutcome) -> IoHttpOutcome {
+    match outcome {
+        HttpReadOutcome::Eof => IoHttpOutcome::Eof,
+        HttpReadOutcome::BadRequest(msg) => IoHttpOutcome::BadRequest(msg),
+        HttpReadOutcome::Request(req) => IoHttpOutcome::Request(IoHttpRequest {
+            method: req.method,
+            target: req.target,
+            path: req.path,
+            query: req.query,
+            version: req.version,
+            headers: req.headers,
+            body: req.body,
+            content_length: req.content_length,
+        }),
+    }
 }
 
 fn split_segments(path: &str) -> Vec<&str> {

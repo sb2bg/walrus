@@ -1134,14 +1134,31 @@ fn native_net_tcp_bind(vm: &mut VM<'_>, args: &[Value], span: Span) -> WalrusRes
 }
 
 fn native_net_tcp_accept(vm: &mut VM<'_>, args: &[Value], span: Span) -> WalrusResult<Value> {
-    let listener = vm.value_to_int(args[0], span)?;
-    crate::stdlib::tcp_accept(listener, span)
+    let listener_handle = vm.value_to_int(args[0], span)?;
+    let listener = crate::stdlib::clone_tcp_listener(listener_handle).ok_or_else(|| {
+        crate::error::WalrusError::GenericError {
+            message: format!("net.tcp_accept: invalid listener handle {listener_handle}"),
+        }
+    })?;
+    Ok(vm.spawn_io(move || match listener.accept() {
+        Ok((stream, _addr)) => Ok(crate::value::IoResult::Stream(stream)),
+        Err(err) => Err(format!("net.tcp_accept: accept failed: {err}")),
+    }))
 }
 
 fn native_net_tcp_connect(vm: &mut VM<'_>, args: &[Value], span: Span) -> WalrusResult<Value> {
     let host = vm.value_to_string(args[0], span)?;
     let port = vm.value_to_int(args[1], span)?;
-    crate::stdlib::tcp_connect(&host, port, span)
+    crate::stdlib::ensure_valid_port(port, "tcp_connect")?;
+    let addr = format!("{host}:{port}");
+    Ok(
+        vm.spawn_io(move || match std::net::TcpStream::connect(&addr) {
+            Ok(stream) => Ok(crate::value::IoResult::Stream(stream)),
+            Err(err) => Err(format!(
+                "net.tcp_connect: failed to connect to '{addr}': {err}"
+            )),
+        }),
+    )
 }
 
 fn native_net_tcp_local_port(vm: &mut VM<'_>, args: &[Value], span: Span) -> WalrusResult<Value> {
@@ -1150,28 +1167,88 @@ fn native_net_tcp_local_port(vm: &mut VM<'_>, args: &[Value], span: Span) -> Wal
 }
 
 fn native_net_tcp_read(vm: &mut VM<'_>, args: &[Value], span: Span) -> WalrusResult<Value> {
-    let stream = vm.value_to_int(args[0], span)?;
+    let stream_handle = vm.value_to_int(args[0], span)?;
     let max_bytes = vm.value_to_int(args[1], span)?;
-    match crate::stdlib::tcp_read(stream, max_bytes, span)? {
-        Some(text) => Ok(vm.get_heap_mut().push(HeapValue::String(&text))),
-        None => Ok(Value::Void),
+    if max_bytes <= 0 {
+        return Err(crate::error::WalrusError::GenericError {
+            message: format!("net.tcp_read: max_bytes must be > 0, got {max_bytes}"),
+        });
     }
+    let stream = crate::stdlib::clone_tcp_stream(stream_handle).ok_or_else(|| {
+        crate::error::WalrusError::GenericError {
+            message: format!("net.tcp_read: invalid stream handle {stream_handle}"),
+        }
+    })?;
+    Ok(vm.spawn_io(move || {
+        use std::io::Read;
+        let mut stream = stream;
+        let mut buf = vec![0u8; max_bytes as usize];
+        match stream.read(&mut buf) {
+            Ok(0) => Ok(crate::value::IoResult::Void),
+            Ok(n) => {
+                buf.truncate(n);
+                Ok(crate::value::IoResult::Bytes(buf))
+            }
+            Err(err) => Err(format!("net.tcp_read: read failed: {err}")),
+        }
+    }))
 }
 
 fn native_net_tcp_read_line(vm: &mut VM<'_>, args: &[Value], span: Span) -> WalrusResult<Value> {
-    let stream = vm.value_to_int(args[0], span)?;
-    match crate::stdlib::tcp_read_line(stream, span)? {
-        Some(line) => Ok(vm.get_heap_mut().push(HeapValue::String(&line))),
-        None => Ok(Value::Void),
-    }
+    let stream_handle = vm.value_to_int(args[0], span)?;
+    let stream = crate::stdlib::clone_tcp_stream(stream_handle).ok_or_else(|| {
+        crate::error::WalrusError::GenericError {
+            message: format!("net.tcp_read_line: invalid stream handle {stream_handle}"),
+        }
+    })?;
+    Ok(vm.spawn_io(move || {
+        use std::io::Read;
+        let mut stream = stream;
+        let mut bytes = Vec::new();
+        let mut buf = [0u8; 1];
+        loop {
+            match stream.read(&mut buf) {
+                Ok(0) => {
+                    if bytes.is_empty() {
+                        return Ok(crate::value::IoResult::Void);
+                    }
+                    break;
+                }
+                Ok(_) => {
+                    if buf[0] == b'\n' {
+                        break;
+                    }
+                    bytes.push(buf[0]);
+                }
+                Err(err) => {
+                    return Err(format!("net.tcp_read_line: read failed: {err}"));
+                }
+            }
+        }
+        if bytes.last().copied() == Some(b'\r') {
+            bytes.pop();
+        }
+        Ok(crate::value::IoResult::Bytes(bytes))
+    }))
 }
 
 fn native_net_tcp_write(vm: &mut VM<'_>, args: &[Value], span: Span) -> WalrusResult<Value> {
-    let stream = vm.value_to_int(args[0], span)?;
+    let stream_handle = vm.value_to_int(args[0], span)?;
     let content = vm.value_to_string(args[1], span)?;
-    Ok(Value::Int(crate::stdlib::tcp_write(
-        stream, &content, span,
-    )?))
+    let stream = crate::stdlib::clone_tcp_stream(stream_handle).ok_or_else(|| {
+        crate::error::WalrusError::GenericError {
+            message: format!("net.tcp_write: invalid stream handle {stream_handle}"),
+        }
+    })?;
+    Ok(vm.spawn_io(move || {
+        use std::io::Write;
+        let mut stream = stream;
+        let len = content.len();
+        match stream.write_all(content.as_bytes()) {
+            Ok(()) => Ok(crate::value::IoResult::ByteCount(len)),
+            Err(err) => Err(format!("net.tcp_write: write failed: {err}")),
+        }
+    }))
 }
 
 fn native_net_tcp_close(vm: &mut VM<'_>, args: &[Value], span: Span) -> WalrusResult<Value> {
@@ -1344,56 +1421,31 @@ fn native_http_response_with_headers(
 }
 
 fn native_http_read_request(vm: &mut VM<'_>, args: &[Value], span: Span) -> WalrusResult<Value> {
-    let stream = vm.value_to_int(args[0], span)?;
+    let stream_handle = vm.value_to_int(args[0], span)?;
     let max_body_bytes = vm.value_to_int(args[1], span)?;
-
-    match crate::stdlib::http_read_request(stream, max_body_bytes, span)? {
-        crate::stdlib::HttpReadOutcome::Eof => Ok(Value::Void),
-        crate::stdlib::HttpReadOutcome::BadRequest(message) => Ok(http_error_dict(vm, &message)),
-        crate::stdlib::HttpReadOutcome::Request(request) => {
-            let mut headers = rustc_hash::FxHashMap::default();
-            for (name, value) in request.headers {
-                let key = heap_string(vm, &name);
-                let val = heap_string(vm, &value);
-                headers.insert(key, val);
-            }
-            let headers_value = vm.get_heap_mut().push(HeapValue::Dict(headers));
-
-            let query_pairs = crate::stdlib::http_parse_query(&request.query);
-            let mut query = rustc_hash::FxHashMap::default();
-            for (name, value) in query_pairs {
-                let key = heap_string(vm, &name);
-                let val = heap_string(vm, &value);
-                query.insert(key, val);
-            }
-            let query_value = vm.get_heap_mut().push(HeapValue::Dict(query));
-
-            let mut dict = rustc_hash::FxHashMap::default();
-            insert_key_value(vm, &mut dict, "ok", Value::Bool(true));
-            let method_value = heap_string(vm, &request.method);
-            insert_key_value(vm, &mut dict, "method", method_value);
-            let target_value = heap_string(vm, &request.target);
-            insert_key_value(vm, &mut dict, "target", target_value);
-            let path_value = heap_string(vm, &request.path);
-            insert_key_value(vm, &mut dict, "path", path_value);
-            let query_text_value = heap_string(vm, &request.query);
-            insert_key_value(vm, &mut dict, "query", query_text_value);
-            insert_key_value(vm, &mut dict, "query_params", query_value);
-            let version_value = heap_string(vm, &request.version);
-            insert_key_value(vm, &mut dict, "version", version_value);
-            insert_key_value(vm, &mut dict, "headers", headers_value);
-            let body_value = heap_string(vm, &request.body);
-            insert_key_value(vm, &mut dict, "body", body_value);
-            insert_key_value(
-                vm,
-                &mut dict,
-                "content_length",
-                Value::Int(request.content_length),
-            );
-
-            Ok(vm.get_heap_mut().push(HeapValue::Dict(dict)))
-        }
+    if max_body_bytes < 0 {
+        return Err(crate::error::WalrusError::GenericError {
+            message: format!(
+                "http.read_request: max_body_bytes must be >= 0, got {max_body_bytes}"
+            ),
+        });
     }
+    let max_body_bytes = max_body_bytes as usize;
+
+    let stream = crate::stdlib::clone_tcp_stream(stream_handle).ok_or_else(|| {
+        crate::error::WalrusError::GenericError {
+            message: format!("http.read_request: invalid stream handle {stream_handle}"),
+        }
+    })?;
+
+    Ok(vm.spawn_io(move || {
+        let mut stream = stream;
+        let outcome = crate::stdlib::http_read_request_from_stream(&mut stream, max_body_bytes)
+            .map_err(|e| e)?;
+        Ok(crate::value::IoResult::HttpOutcome(
+            crate::stdlib::http_outcome_to_io(outcome),
+        ))
+    }))
 }
 
 fn native_math_pi(_vm: &mut VM<'_>, _args: &[Value], _span: Span) -> WalrusResult<Value> {

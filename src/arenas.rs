@@ -173,6 +173,7 @@ impl ValueHolder {
                     AsyncTask::Ready(_) => 0,
                     AsyncTask::Sleep { .. } => 0,
                     AsyncTask::Timeout { .. } => 1,
+                    AsyncTask::Channel(_) => 0,
                     AsyncTask::Failed(_) => 0,
                     AsyncTask::Cancelled => 0,
                 };
@@ -300,6 +301,7 @@ impl ValueHolder {
                                 self.mark(Value::Task(task));
                             }
                         }
+                        AsyncTask::Channel(_) => {}
                         AsyncTask::Ready(value) => {
                             self.mark(value);
                         }
@@ -757,6 +759,7 @@ impl ValueHolder {
                     AsyncTask::Timeout { .. } => "<task:pending>".to_string(),
                     AsyncTask::Gather { .. } => "<task:pending>".to_string(),
                     AsyncTask::Race { .. } => "<task:pending>".to_string(),
+                    AsyncTask::Channel(_) => "<task:pending>".to_string(),
                     AsyncTask::Ready(_) => "<task:ready>".to_string(),
                     AsyncTask::Failed(_) => "<task:failed>".to_string(),
                     AsyncTask::Cancelled => "<task:cancelled>".to_string(),
