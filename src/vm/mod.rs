@@ -3726,9 +3726,30 @@ impl<'a> VM<'a> {
                                         });
                                     }
                                     None => {
-                                        return Err(WalrusError::MethodNotFound {
+                                        // No method found — check if there's a field holding a callable function
+                                        let field_func = {
+                                            let inst = self.get_heap().get_struct_inst(inst_key)?;
+                                            inst.get_field(&method_name).copied()
+                                        };
+
+                                        if let Some(Value::Function(func_key)) = field_func {
+                                            // Field holds a function — call it (no self prepended)
+                                            let args = self.pop_n(arg_count, opcode, span)?;
+                                            let _ = self.pop(opcode, span)?; // pop object
+
+                                            let func =
+                                                self.get_heap().get_function(func_key)?.clone();
+                                            if let Some(result) =
+                                                self.call_exported_function(func, args, span)?
+                                            {
+                                                self.push(result);
+                                            }
+                                            continue;
+                                        }
+
+                                        return Err(WalrusError::MemberNotFound {
                                             type_name,
-                                            method: method_name,
+                                            member: method_name,
                                             span,
                                             src: self.source_ref.source().into(),
                                             filename: self.source_ref.filename().into(),

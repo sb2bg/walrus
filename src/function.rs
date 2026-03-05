@@ -134,6 +134,7 @@ pub enum NativeFunction {
     CoreGc,
     CoreHeapStats,
     CoreGcThreshold,
+    CoreTimestamp,
     // Async primitives
     AsyncSpawn,
     AsyncSleep,
@@ -220,6 +221,9 @@ pub enum NativeFunction {
     MathRandBool,
     MathRandInt,
     MathRandRange,
+    // JSON
+    JsonEncode,
+    JsonDecode,
 }
 
 impl NativeFunction {

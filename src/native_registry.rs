@@ -1,5 +1,6 @@
 use float_ord::FloatOrd;
 use std::io::Write;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::WalrusResult;
 use crate::arenas::HeapValue;
@@ -108,6 +109,14 @@ pub static NATIVE_SPECS: &[NativeSpec] = &[
         ["threshold"],
         "Set GC allocation threshold and return previous value.",
         native_core_gc_threshold
+    ),
+    native_spec!(
+        CoreTimestamp,
+        "std/core",
+        "timestamp",
+        [],
+        "Return the current Unix epoch time in milliseconds.",
+        native_core_timestamp
     ),
     native_spec!(
         AsyncSpawn,
@@ -735,6 +744,23 @@ pub static NATIVE_SPECS: &[NativeSpec] = &[
         "Random float in [a,b).",
         native_math_rand_range
     ),
+    // JSON
+    native_spec!(
+        JsonEncode,
+        "std/json",
+        "encode",
+        ["value"],
+        "Encode a value as a JSON string.",
+        native_json_encode
+    ),
+    native_spec!(
+        JsonDecode,
+        "std/json",
+        "decode",
+        ["string"],
+        "Decode a JSON string into a value.",
+        native_json_decode
+    ),
 ];
 
 pub fn native_spec(function: NativeFunction) -> &'static NativeSpec {
@@ -919,6 +945,14 @@ fn native_core_gc_threshold(vm: &mut VM<'_>, args: &[Value], span: Span) -> Walr
 
     let old = crate::gc::set_allocation_threshold(n as usize);
     Ok(Value::Int(old as i64))
+}
+
+fn native_core_timestamp(_vm: &mut VM<'_>, _args: &[Value], _span: Span) -> WalrusResult<Value> {
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64;
+    Ok(Value::Int(millis))
 }
 
 fn value_sequence(vm: &VM<'_>, value: Value, span: Span) -> WalrusResult<Vec<Value>> {
@@ -1810,6 +1844,394 @@ fn native_math_rand_range(vm: &mut VM<'_>, args: &[Value], span: Span) -> Walrus
     Ok(Value::Float(FloatOrd(crate::stdlib::math_rand_range(
         min, max, span,
     )?)))
+}
+
+// ── JSON ──────────────────────────────────────────────────────────────────
+
+fn json_encode_value(vm: &VM<'_>, value: Value, out: &mut String) -> Result<(), String> {
+    match value {
+        Value::Int(n) => {
+            out.push_str(&n.to_string());
+        }
+        Value::Float(f) => {
+            let f = f.0;
+            if f.is_nan() || f.is_infinite() {
+                return Err("json.encode: cannot encode NaN or Infinity".to_string());
+            }
+            // Format nicely: if it's a whole number, keep the decimal
+            let s = format!("{}", f);
+            out.push_str(&s);
+        }
+        Value::Bool(b) => {
+            out.push_str(if b { "true" } else { "false" });
+        }
+        Value::Void => {
+            out.push_str("null");
+        }
+        Value::String(key) => {
+            let s = vm.get_heap().get_string(key).map_err(|e| format!("{e}"))?;
+            out.push('"');
+            for ch in s.chars() {
+                match ch {
+                    '"' => out.push_str("\\\""),
+                    '\\' => out.push_str("\\\\"),
+                    '\n' => out.push_str("\\n"),
+                    '\r' => out.push_str("\\r"),
+                    '\t' => out.push_str("\\t"),
+                    c if (c as u32) < 0x20 => {
+                        out.push_str(&format!("\\u{:04x}", c as u32));
+                    }
+                    c => out.push(c),
+                }
+            }
+            out.push('"');
+        }
+        Value::List(key) => {
+            let items = vm
+                .get_heap()
+                .get_list(key)
+                .map_err(|e| format!("{e}"))?
+                .clone();
+            out.push('[');
+            for (i, item) in items.iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                json_encode_value(vm, *item, out)?;
+            }
+            out.push(']');
+        }
+        Value::Tuple(key) => {
+            let items = vm
+                .get_heap()
+                .get_tuple(key)
+                .map_err(|e| format!("{e}"))?
+                .clone();
+            out.push('[');
+            for (i, item) in items.iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                json_encode_value(vm, *item, out)?;
+            }
+            out.push(']');
+        }
+        Value::Dict(key) => {
+            let dict = vm
+                .get_heap()
+                .get_dict(key)
+                .map_err(|e| format!("{e}"))?
+                .clone();
+            out.push('{');
+            let mut first = true;
+            // Sort keys for deterministic output
+            let mut entries: Vec<(Value, Value)> = dict.into_iter().collect();
+            entries.sort_by(|(a, _), (b, _)| {
+                let a_str = if let Value::String(k) = a {
+                    vm.get_heap().get_string(*k).unwrap_or("").to_string()
+                } else {
+                    String::new()
+                };
+                let b_str = if let Value::String(k) = b {
+                    vm.get_heap().get_string(*k).unwrap_or("").to_string()
+                } else {
+                    String::new()
+                };
+                a_str.cmp(&b_str)
+            });
+            for (k, v) in &entries {
+                if let Value::String(sk) = k {
+                    if !first {
+                        out.push(',');
+                    }
+                    first = false;
+                    let key_str = vm.get_heap().get_string(*sk).map_err(|e| format!("{e}"))?;
+                    out.push('"');
+                    for ch in key_str.chars() {
+                        match ch {
+                            '"' => out.push_str("\\\""),
+                            '\\' => out.push_str("\\\\"),
+                            '\n' => out.push_str("\\n"),
+                            '\r' => out.push_str("\\r"),
+                            '\t' => out.push_str("\\t"),
+                            c if (c as u32) < 0x20 => {
+                                out.push_str(&format!("\\u{:04x}", c as u32));
+                            }
+                            c => out.push(c),
+                        }
+                    }
+                    out.push('"');
+                    out.push(':');
+                    json_encode_value(vm, *v, out)?;
+                } else {
+                    return Err(format!(
+                        "json.encode: dict keys must be strings, found '{}'",
+                        k.get_type()
+                    ));
+                }
+            }
+            out.push('}');
+        }
+        other => {
+            return Err(format!(
+                "json.encode: cannot encode type '{}'",
+                other.get_type()
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn native_json_encode(vm: &mut VM<'_>, args: &[Value], span: Span) -> WalrusResult<Value> {
+    let mut out = String::new();
+    json_encode_value(vm, args[0], &mut out)
+        .map_err(|msg| WalrusError::GenericError { message: msg })?;
+    Ok(heap_string(vm, &out))
+}
+
+// ── JSON Decode ───────────────────────────────────────────────────────────
+
+struct JsonParser {
+    chars: Vec<char>,
+    pos: usize,
+}
+
+impl JsonParser {
+    fn new(input: &str) -> Self {
+        Self {
+            chars: input.chars().collect(),
+            pos: 0,
+        }
+    }
+
+    fn peek(&self) -> Option<char> {
+        self.chars.get(self.pos).copied()
+    }
+
+    fn advance(&mut self) -> Option<char> {
+        let ch = self.chars.get(self.pos).copied();
+        if ch.is_some() {
+            self.pos += 1;
+        }
+        ch
+    }
+
+    fn skip_whitespace(&mut self) {
+        while let Some(ch) = self.peek() {
+            if ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r' {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+    }
+
+    fn parse_value(&mut self, vm: &mut VM<'_>) -> Result<Value, String> {
+        self.skip_whitespace();
+        match self.peek() {
+            None => Err("json.decode: unexpected end of input".to_string()),
+            Some('"') => self.parse_string(vm),
+            Some('[') => self.parse_array(vm),
+            Some('{') => self.parse_object(vm),
+            Some('t') => self.parse_literal("true", Value::Bool(true)),
+            Some('f') => self.parse_literal("false", Value::Bool(false)),
+            Some('n') => self.parse_literal("null", Value::Void),
+            Some(ch) if ch == '-' || ch.is_ascii_digit() => self.parse_number(),
+            Some(ch) => Err(format!("json.decode: unexpected character '{ch}'")),
+        }
+    }
+
+    fn parse_literal(&mut self, expected: &str, value: Value) -> Result<Value, String> {
+        for expected_ch in expected.chars() {
+            match self.advance() {
+                Some(ch) if ch == expected_ch => {}
+                _ => {
+                    return Err(format!("json.decode: expected '{expected}'"));
+                }
+            }
+        }
+        Ok(value)
+    }
+
+    fn parse_number(&mut self) -> Result<Value, String> {
+        let start = self.pos;
+        if self.peek() == Some('-') {
+            self.advance();
+        }
+        while let Some(ch) = self.peek() {
+            if ch.is_ascii_digit() {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+        let mut is_float = false;
+        if self.peek() == Some('.') {
+            is_float = true;
+            self.advance();
+            while let Some(ch) = self.peek() {
+                if ch.is_ascii_digit() {
+                    self.advance();
+                } else {
+                    break;
+                }
+            }
+        }
+        if let Some('e' | 'E') = self.peek() {
+            is_float = true;
+            self.advance();
+            if let Some('+' | '-') = self.peek() {
+                self.advance();
+            }
+            while let Some(ch) = self.peek() {
+                if ch.is_ascii_digit() {
+                    self.advance();
+                } else {
+                    break;
+                }
+            }
+        }
+        let num_str: String = self.chars[start..self.pos].iter().collect();
+        if is_float {
+            let f: f64 = num_str
+                .parse()
+                .map_err(|_| format!("json.decode: invalid number '{num_str}'"))?;
+            Ok(Value::Float(FloatOrd(f)))
+        } else {
+            match num_str.parse::<i64>() {
+                Ok(n) => Ok(Value::Int(n)),
+                Err(_) => {
+                    // Fallback to float for very large numbers
+                    let f: f64 = num_str
+                        .parse()
+                        .map_err(|_| format!("json.decode: invalid number '{num_str}'"))?;
+                    Ok(Value::Float(FloatOrd(f)))
+                }
+            }
+        }
+    }
+
+    fn parse_string_raw(&mut self) -> Result<String, String> {
+        // consume opening quote
+        match self.advance() {
+            Some('"') => {}
+            _ => return Err("json.decode: expected '\"'".to_string()),
+        }
+        let mut s = String::new();
+        loop {
+            match self.advance() {
+                None => return Err("json.decode: unterminated string".to_string()),
+                Some('"') => return Ok(s),
+                Some('\\') => match self.advance() {
+                    Some('"') => s.push('"'),
+                    Some('\\') => s.push('\\'),
+                    Some('/') => s.push('/'),
+                    Some('n') => s.push('\n'),
+                    Some('r') => s.push('\r'),
+                    Some('t') => s.push('\t'),
+                    Some('b') => s.push('\u{0008}'),
+                    Some('f') => s.push('\u{000C}'),
+                    Some('u') => {
+                        let mut hex = String::with_capacity(4);
+                        for _ in 0..4 {
+                            match self.advance() {
+                                Some(ch) if ch.is_ascii_hexdigit() => hex.push(ch),
+                                _ => return Err("json.decode: invalid unicode escape".to_string()),
+                            }
+                        }
+                        let code = u32::from_str_radix(&hex, 16)
+                            .map_err(|_| "json.decode: invalid unicode escape".to_string())?;
+                        match char::from_u32(code) {
+                            Some(ch) => s.push(ch),
+                            None => {
+                                return Err("json.decode: invalid unicode code point".to_string());
+                            }
+                        }
+                    }
+                    _ => return Err("json.decode: invalid escape sequence".to_string()),
+                },
+                Some(ch) => s.push(ch),
+            }
+        }
+    }
+
+    fn parse_string(&mut self, vm: &mut VM<'_>) -> Result<Value, String> {
+        let s = self.parse_string_raw()?;
+        Ok(heap_string(vm, &s))
+    }
+
+    fn parse_array(&mut self, vm: &mut VM<'_>) -> Result<Value, String> {
+        self.advance(); // consume '['
+        self.skip_whitespace();
+        let mut items = Vec::new();
+        if self.peek() == Some(']') {
+            self.advance();
+            return Ok(vm.get_heap_mut().push(HeapValue::List(items)));
+        }
+        loop {
+            let val = self.parse_value(vm)?;
+            items.push(val);
+            self.skip_whitespace();
+            match self.peek() {
+                Some(',') => {
+                    self.advance();
+                }
+                Some(']') => {
+                    self.advance();
+                    return Ok(vm.get_heap_mut().push(HeapValue::List(items)));
+                }
+                _ => return Err("json.decode: expected ',' or ']' in array".to_string()),
+            }
+        }
+    }
+
+    fn parse_object(&mut self, vm: &mut VM<'_>) -> Result<Value, String> {
+        self.advance(); // consume '{'
+        self.skip_whitespace();
+        let mut dict = rustc_hash::FxHashMap::default();
+        if self.peek() == Some('}') {
+            self.advance();
+            return Ok(vm.get_heap_mut().push(HeapValue::Dict(dict)));
+        }
+        loop {
+            self.skip_whitespace();
+            let key_str = self.parse_string_raw()?;
+            let key_val = heap_string(vm, &key_str);
+            self.skip_whitespace();
+            match self.advance() {
+                Some(':') => {}
+                _ => return Err("json.decode: expected ':' after key".to_string()),
+            }
+            let val = self.parse_value(vm)?;
+            dict.insert(key_val, val);
+            self.skip_whitespace();
+            match self.peek() {
+                Some(',') => {
+                    self.advance();
+                }
+                Some('}') => {
+                    self.advance();
+                    return Ok(vm.get_heap_mut().push(HeapValue::Dict(dict)));
+                }
+                _ => return Err("json.decode: expected ',' or '}}' in object".to_string()),
+            }
+        }
+    }
+}
+
+fn native_json_decode(vm: &mut VM<'_>, args: &[Value], span: Span) -> WalrusResult<Value> {
+    let input = vm.value_to_string(args[0], span)?;
+    let mut parser = JsonParser::new(&input);
+    let value = parser
+        .parse_value(vm)
+        .map_err(|msg| WalrusError::GenericError { message: msg })?;
+    parser.skip_whitespace();
+    if parser.pos != parser.chars.len() {
+        return Err(WalrusError::GenericError {
+            message: "json.decode: trailing data after JSON value".to_string(),
+        });
+    }
+    Ok(value)
 }
 
 #[cfg(test)]

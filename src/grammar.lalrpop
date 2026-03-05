@@ -53,6 +53,7 @@ Statement: Node = {
     <RawSp<Import>> ";",
     <RawSp<Print>> ";",
     <RawSp<Throw>> ";",
+    RawSp<Try>,
     <RawSp<Try>> ";",
     <RawSp<Free>> ";",
     <RawSp<Defer>> ";",

@@ -941,7 +941,7 @@ pub fn http_build_response(
     }
 
     if !header_map.contains_key(CONNECTION) {
-        header_map.insert(CONNECTION, HeaderValue::from_static("close"));
+        header_map.insert(CONNECTION, HeaderValue::from_static("keep-alive"));
     }
 
     let mut builder = Response::builder().version(Version::HTTP_11).status(status);
