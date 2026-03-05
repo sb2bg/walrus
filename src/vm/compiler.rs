@@ -574,6 +574,10 @@ impl<'a> BytecodeEmitter<'a> {
                 self.instructions
                     .push(Instruction::new(Opcode::Await, span));
             }
+            NodeKind::Yield => {
+                self.instructions
+                    .push(Instruction::new(Opcode::Yield, span));
+            }
             NodeKind::AnonFunctionDefinition(args, body) => {
                 self.emit_anon_function_definition(args, *body, span, false)?;
             }

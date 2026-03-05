@@ -50,6 +50,7 @@ Statement: Node = {
     <RawSp<Return>> ";",
     <RawSp<Break>> ";",
     <RawSp<Continue>> ";",
+    <RawSp<Yield>> ";",
     <RawSp<Import>> ";",
     <RawSp<Print>> ";",
     <RawSp<Throw>> ";",
@@ -258,6 +259,10 @@ Break: NodeKind = {
 
 Continue: NodeKind = {
     "continue" => NodeKind::Continue,
+};
+
+Yield: NodeKind = {
+    "yield" => NodeKind::Yield,
 };
 
 Import: NodeKind = {

@@ -108,6 +108,7 @@ impl<'a> Interpreter<'a> {
             NodeKind::For(var, iter, body) => Ok(self.visit_for(var, *iter, *body)?),
             NodeKind::Return(value) => Ok(self.visit_return(*value)?),
             NodeKind::Await(value) => Ok(self.visit_await(*value, span)?),
+            NodeKind::Yield => Ok(Value::Void),
             NodeKind::IndexAssign(value, index, new_value) => {
                 Ok(self.visit_index_assign(*value, *index, *new_value)?)
             }
