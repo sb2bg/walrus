@@ -1,0 +1,6 @@
+async fn boom : {
+    throw "boom";
+}
+
+let task = boom();
+println(await task);

@@ -606,6 +606,12 @@ impl<'a> Interpreter<'a> {
         let task_snapshot = with_arena(|arena| arena.get_task(task_key).cloned())?;
         match task_snapshot {
             AsyncTask::Ready(value) => Ok(value),
+            AsyncTask::Failed(value) => Err(WalrusError::ThrownValue {
+                message: value.stringify()?,
+                span,
+                src: self.source_ref.source().into(),
+                filename: self.source_ref.filename().into(),
+            }),
             AsyncTask::Pending { function, args } => {
                 let function = with_arena(|arena| arena.get_function(function).cloned())?;
                 let result = match function {

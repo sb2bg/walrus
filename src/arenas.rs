@@ -169,6 +169,7 @@ impl ValueHolder {
                 let arg_count = match task {
                     AsyncTask::Pending { args, .. } => args.len(),
                     AsyncTask::Ready(_) => 0,
+                    AsyncTask::Failed(_) => 0,
                 };
                 estimate_task_size(arg_count)
             }
@@ -286,6 +287,9 @@ impl ValueHolder {
                             }
                         }
                         AsyncTask::Ready(value) => {
+                            self.mark(value);
+                        }
+                        AsyncTask::Failed(value) => {
                             self.mark(value);
                         }
                     }
@@ -735,6 +739,7 @@ impl ValueHolder {
                 match task {
                     AsyncTask::Pending { .. } => "<task:pending>".to_string(),
                     AsyncTask::Ready(_) => "<task:ready>".to_string(),
+                    AsyncTask::Failed(_) => "<task:failed>".to_string(),
                 }
             }
             Value::StructDef(s) => {

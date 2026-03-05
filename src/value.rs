@@ -46,6 +46,7 @@ impl ValueIterator for ValueIter {
 pub enum AsyncTask {
     Pending { function: FuncKey, args: Vec<Value> },
     Ready(Value),
+    Failed(Value),
 }
 
 #[derive(Debug, PartialEq, Eq, Copy, Clone, Hash)]
@@ -208,6 +209,7 @@ impl Value {
                     let state = match task {
                         AsyncTask::Pending { .. } => "pending",
                         AsyncTask::Ready(_) => "ready",
+                        AsyncTask::Failed(_) => "failed",
                     };
                     Ok(format!("<task:{state}>"))
                 })?

@@ -74,6 +74,13 @@ struct ExceptionHandler {
     locals_len: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TaskResolution {
+    Pending,
+    Ready(Value),
+    Failed(Value),
+}
+
 /// The Walrus Virtual Machine executes compiled bytecode.
 ///
 /// # Architecture
@@ -123,6 +130,7 @@ pub struct VM<'a> {
     global_names: Vec<String>,
     async_task_queue: VecDeque<crate::arenas::TaskKey>,
     run_until_depth_stack: Vec<usize>,
+    task_exception_floor_stack: Vec<usize>,
     source_ref: SourceRef<'a>,
     // Debugger state
     debugger: Option<debugger::Debugger>,
@@ -182,6 +190,7 @@ impl<'a> VM<'a> {
             global_names,
             async_task_queue: VecDeque::new(),
             run_until_depth_stack: Vec::new(),
+            task_exception_floor_stack: Vec::new(),
             source_ref,
             debugger: None,
             debug_mode: false,
@@ -626,9 +635,57 @@ impl<'a> VM<'a> {
         result: Value,
     ) -> WalrusResult<()> {
         if let Some(task_key) = task_key {
-            *self.get_heap_mut().get_mut_task(task_key)? = AsyncTask::Ready(result);
+            let task = self.get_heap_mut().get_mut_task(task_key)?;
+            if matches!(task, AsyncTask::Pending { .. }) {
+                *task = AsyncTask::Ready(result);
+            }
         }
         Ok(())
+    }
+
+    fn set_task_failed(
+        &mut self,
+        task_key: crate::arenas::TaskKey,
+        failure: Value,
+    ) -> WalrusResult<()> {
+        *self.get_heap_mut().get_mut_task(task_key)? = AsyncTask::Failed(failure);
+        Ok(())
+    }
+
+    fn task_failure_value_from_error(&mut self, err: WalrusError) -> Value {
+        let message = match err {
+            WalrusError::ThrownValue { message, .. } => message,
+            WalrusError::RuntimeErrorWithStackTrace { error, stack_trace } => {
+                format!("{error}\n{stack_trace}")
+            }
+            other => other.to_string(),
+        };
+        self.get_heap_mut().push(HeapValue::String(&message))
+    }
+
+    fn fail_task_with_error(
+        &mut self,
+        task_key: crate::arenas::TaskKey,
+        err: WalrusError,
+    ) -> WalrusResult<()> {
+        let failure = self.task_failure_value_from_error(err);
+        self.set_task_failed(task_key, failure)
+    }
+
+    fn recover_after_task_failure(
+        &mut self,
+        caller_depth: usize,
+        caller_locals_len: usize,
+        caller_stack_len: usize,
+        caller_ip: usize,
+    ) {
+        while self.call_stack.len() > caller_depth {
+            self.call_stack.pop();
+        }
+        self.clear_exception_handlers_from_frame(caller_depth);
+        self.locals.truncate(caller_locals_len);
+        self.stack.truncate(caller_stack_len);
+        self.ip = caller_ip;
     }
 
     fn is_task_pending(&self, task_key: crate::arenas::TaskKey) -> WalrusResult<bool> {
@@ -636,11 +693,12 @@ impl<'a> VM<'a> {
         Ok(matches!(task, AsyncTask::Pending { .. }))
     }
 
-    fn is_task_ready(&self, task_key: crate::arenas::TaskKey) -> WalrusResult<Option<Value>> {
+    fn task_resolution(&self, task_key: crate::arenas::TaskKey) -> WalrusResult<TaskResolution> {
         let task = self.get_heap().get_task(task_key)?;
         Ok(match task {
-            AsyncTask::Ready(value) => Some(*value),
-            AsyncTask::Pending { .. } => None,
+            AsyncTask::Pending { .. } => TaskResolution::Pending,
+            AsyncTask::Ready(value) => TaskResolution::Ready(*value),
+            AsyncTask::Failed(value) => TaskResolution::Failed(*value),
         })
     }
 
@@ -684,17 +742,23 @@ impl<'a> VM<'a> {
         match function {
             WalrusFunction::Vm(func) => {
                 if args.len() != func.arity {
-                    return Err(WalrusError::InvalidArgCount {
-                        name: func.name.clone(),
-                        expected: func.arity,
-                        got: args.len(),
-                        span,
-                        src: self.source_ref.source().into(),
-                        filename: self.source_ref.filename().into(),
-                    });
+                    return self.fail_task_with_error(
+                        task_key,
+                        WalrusError::InvalidArgCount {
+                            name: func.name.clone(),
+                            expected: func.arity,
+                            got: args.len(),
+                            span,
+                            src: self.source_ref.source().into(),
+                            filename: self.source_ref.filename().into(),
+                        },
+                    );
                 }
 
                 let caller_depth = self.call_stack.len();
+                let caller_ip = self.ip;
+                let caller_locals_len = self.locals.len();
+                let caller_stack_len = self.stack.len();
                 let new_frame = CallFrame {
                     return_ip: self.ip,
                     frame_pointer: self.locals.len(),
@@ -706,37 +770,76 @@ impl<'a> VM<'a> {
                     awaiting_task: Some(task_key),
                 };
 
+                self.task_exception_floor_stack.push(caller_depth);
                 self.call_stack.push(new_frame);
                 self.locals.extend(args);
                 self.ip = 0;
-                self.run_until_depth(caller_depth)?;
+                let result = self.run_until_depth(caller_depth);
+                if self.task_exception_floor_stack.last().copied() == Some(caller_depth) {
+                    self.task_exception_floor_stack.pop();
+                }
+
+                if let Err(err) = result {
+                    let failure = self.task_failure_value_from_error(err);
+                    self.recover_after_task_failure(
+                        caller_depth,
+                        caller_locals_len,
+                        caller_stack_len,
+                        caller_ip,
+                    );
+                    self.set_task_failed(task_key, failure)?;
+                    return Ok(());
+                }
+
+                if self.is_task_pending(task_key)? {
+                    let failure = self.get_heap_mut().push(HeapValue::String(
+                        "Async task exited without returning a result",
+                    ));
+                    self.set_task_failed(task_key, failure)?;
+                }
             }
             WalrusFunction::Rust(rust_fn) => {
                 if args.len() != rust_fn.args {
-                    return Err(WalrusError::InvalidArgCount {
-                        name: rust_fn.name.clone(),
-                        expected: rust_fn.args,
-                        got: args.len(),
-                        span,
-                        src: self.source_ref.source().into(),
-                        filename: self.source_ref.filename().into(),
-                    });
+                    return self.fail_task_with_error(
+                        task_key,
+                        WalrusError::InvalidArgCount {
+                            name: rust_fn.name.clone(),
+                            expected: rust_fn.args,
+                            got: args.len(),
+                            span,
+                            src: self.source_ref.source().into(),
+                            filename: self.source_ref.filename().into(),
+                        },
+                    );
                 }
-                let result = rust_fn.call(args, self.source_ref, span)?;
+                let result = match rust_fn.call(args, self.source_ref, span) {
+                    Ok(value) => value,
+                    Err(err) => {
+                        return self.fail_task_with_error(task_key, err);
+                    }
+                };
                 self.complete_task_on_frame_return(Some(task_key), result)?;
                 self.push(result);
             }
             WalrusFunction::Native(native_fn) => {
-                let result = self.call_native(native_fn, args, span)?;
+                let result = match self.call_native(native_fn, args, span) {
+                    Ok(value) => value,
+                    Err(err) => {
+                        return self.fail_task_with_error(task_key, err);
+                    }
+                };
                 self.complete_task_on_frame_return(Some(task_key), result)?;
                 self.push(result);
             }
             WalrusFunction::TreeWalk(_) => {
-                return Err(WalrusError::NodeFunctionNotSupportedInVm {
-                    span,
-                    src: self.source_ref.source().into(),
-                    filename: self.source_ref.filename().into(),
-                });
+                return self.fail_task_with_error(
+                    task_key,
+                    WalrusError::NodeFunctionNotSupportedInVm {
+                        span,
+                        src: self.source_ref.source().into(),
+                        filename: self.source_ref.filename().into(),
+                    },
+                );
             }
         }
 
@@ -915,10 +1018,21 @@ impl<'a> VM<'a> {
 
     /// Raise a thrown value, transferring control to the nearest active catch handler.
     fn throw_value(&mut self, value: Value, span: Span) -> WalrusResult<()> {
-        while let Some(handler) = self.exception_handlers.pop() {
+        let handler_floor = self.task_exception_floor_stack.last().copied().unwrap_or(0);
+
+        while let Some(handler) = self.exception_handlers.last().copied() {
             if handler.frame_index > self.current_frame_index() {
+                self.exception_handlers.pop();
                 continue;
             }
+
+            // While resolving a task, do not allow throws to jump into handlers owned by the
+            // awaiting caller. Those failures are captured on the task and re-thrown on `await`.
+            if handler.frame_index < handler_floor {
+                break;
+            }
+
+            self.exception_handlers.pop();
 
             // Unwind call frames until we reach the frame that owns this handler.
             while self.current_frame_index() > handler.frame_index {
@@ -2762,9 +2876,19 @@ impl<'a> VM<'a> {
                     let resume_ip = self.ip;
 
                     loop {
-                        if let Some(value) = self.is_task_ready(task_key)? {
-                            self.push(value);
-                            break;
+                        match self.task_resolution(task_key)? {
+                            TaskResolution::Ready(value) => {
+                                self.push(value);
+                                break;
+                            }
+                            TaskResolution::Failed(error_value) => {
+                                self.throw_value(error_value, span)?;
+                                if self.call_stack.len() != caller_depth || self.ip != resume_ip {
+                                    continue 'vm;
+                                }
+                                break;
+                            }
+                            TaskResolution::Pending => {}
                         }
 
                         let Some(next_task) = self.next_runnable_task(task_key)? else {
@@ -2781,8 +2905,11 @@ impl<'a> VM<'a> {
                             continue 'vm;
                         }
                         if !keep_result {
-                            // Background task completion result is irrelevant to this `await`.
-                            let _ = self.pop(opcode, span)?;
+                            if matches!(self.task_resolution(next_task)?, TaskResolution::Ready(_))
+                            {
+                                // Background task completion result is irrelevant to this `await`.
+                                let _ = self.pop(opcode, span)?;
+                            }
                         }
                     }
                 }

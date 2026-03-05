@@ -1,0 +1,19 @@
+async fn boom : {
+    throw "boom";
+}
+
+let task = boom();
+
+try {
+    await task;
+} catch err {
+    println("first:" + err);
+};
+
+try {
+    await task;
+} catch err {
+    println("second:" + err);
+};
+
+println(task);

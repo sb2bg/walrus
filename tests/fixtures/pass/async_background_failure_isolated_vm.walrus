@@ -1,0 +1,25 @@
+let order = "";
+
+async fn good : {
+    order += "g";
+    return 7;
+}
+
+async fn bad : {
+    order += "b";
+    throw "boom";
+}
+
+let bad_task = bad();
+let good_task = good();
+
+println(await good_task);
+println(order);
+
+try {
+    await bad_task;
+} catch err {
+    println(err);
+};
+
+println(order);
