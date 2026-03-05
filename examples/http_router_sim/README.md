@@ -25,7 +25,7 @@ non-blocking I/O and async connection handling.
 cargo build && ./target/debug/walrus examples/http_router_sim/main.walrus
 ```
 
-Then in another terminal:
+Then in another terminal (or browser for `http://127.0.0.1:8081/`):
 
 ```bash
 curl http://127.0.0.1:8081/
