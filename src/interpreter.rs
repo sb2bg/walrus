@@ -75,7 +75,10 @@ impl<'a> Interpreter<'a> {
                 Ok(self.visit_fn_def(name, args, *body, true)?)
             }
             NodeKind::AnonFunctionDefinition(args, body) => {
-                Ok(self.visit_anon_fn_def(args, *body)?)
+                Ok(self.visit_anon_fn_def(args, *body, false)?)
+            }
+            NodeKind::AsyncAnonFunctionDefinition(args, body) => {
+                Ok(self.visit_anon_fn_def(args, *body, true)?)
             }
             NodeKind::Ident(ident) => Ok(self.visit_variable(&ident, span)?),
             NodeKind::Void => Ok(Value::Void),
@@ -313,7 +316,12 @@ impl<'a> Interpreter<'a> {
         Ok(HeapValue::String(&result).alloc())
     }
 
-    fn visit_anon_fn_def(&mut self, args: Vec<String>, body: Node) -> InterpreterResult {
+    fn visit_anon_fn_def(
+        &mut self,
+        args: Vec<String>,
+        body: Node,
+        is_async: bool,
+    ) -> InterpreterResult {
         use crate::ast::collect_free_variables;
 
         let fn_name = format!("anon_{}", Uuid::new_v4());
@@ -329,7 +337,7 @@ impl<'a> Interpreter<'a> {
 
         Ok(
             HeapValue::Function(WalrusFunction::TreeWalk(NodeFunction::new_with_captures(
-                fn_name, args, body, false, captures,
+                fn_name, args, body, is_async, captures,
             )))
             .alloc(),
         )

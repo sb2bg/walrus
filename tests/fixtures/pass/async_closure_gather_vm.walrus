@@ -1,0 +1,6 @@
+import "std/async" as asyncx;
+
+let make = async : x { return x * 10; };
+let tasks = [make(0), make(1), make(2)];
+
+println(await asyncx.gather(tasks));

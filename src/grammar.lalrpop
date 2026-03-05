@@ -211,6 +211,7 @@ StructFunc: NodeKind = {
 };
 
 Lambda: NodeKind = {
+    "async" ":" <a: Comma<IdentStr>> <b: SpBlock> => NodeKind::AsyncAnonFunctionDefinition(a, b),
     ":" <a: Comma<IdentStr>> <b: SpBlock> => NodeKind::AnonFunctionDefinition(a, b),
 };
 

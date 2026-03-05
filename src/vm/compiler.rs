@@ -575,43 +575,10 @@ impl<'a> BytecodeEmitter<'a> {
                     .push(Instruction::new(Opcode::Await, span));
             }
             NodeKind::AnonFunctionDefinition(args, body) => {
-                // Create a child emitter - functions are always local scope
-                let mut emitter = self.new_child();
-                let arg_len = args.len();
-
-                // Define function parameters as locals in the function scope
-                // Don't emit Store opcodes - values will already be in locals when called
-                for arg in args {
-                    emitter.define_parameter(arg);
-                }
-
-                emitter.emit(*body)?;
-
-                // Add implicit void return if the function doesn't end with an explicit return
-                emitter.emit_void(span);
-                emitter.emit_return(span);
-
-                // TODO: Should this include the arity?
-                let name = format!("[{:p}]", &emitter.instructions);
-
-                // Create the function heap value
-                let func =
-                    self.instructions
-                        .get_heap_mut()
-                        .push(HeapValue::Function(WalrusFunction::Vm(VmFunction::new(
-                            name,
-                            arg_len,
-                            emitter.instruction_set(),
-                        ))));
-
-                // Load the function constant
-                let index = self.instructions.push_constant(func);
-                let opcode = match index {
-                    0 => Opcode::LoadConst0,
-                    1 => Opcode::LoadConst1,
-                    _ => Opcode::LoadConst(index),
-                };
-                self.instructions.push(Instruction::new(opcode, span));
+                self.emit_anon_function_definition(args, *body, span, false)?;
+            }
+            NodeKind::AsyncAnonFunctionDefinition(args, body) => {
+                self.emit_anon_function_definition(args, *body, span, true)?;
             }
             NodeKind::FunctionCall(func, args) => {
                 self.emit_function_call(func, args, span, false)?;
@@ -1284,6 +1251,46 @@ impl<'a> BytecodeEmitter<'a> {
             self.instructions
                 .push(Instruction::new(Opcode::StoreAt(func_index), span));
         }
+
+        Ok(())
+    }
+
+    fn emit_anon_function_definition(
+        &mut self,
+        args: Vec<String>,
+        body: Node,
+        span: Span,
+        is_async: bool,
+    ) -> WalrusResult<()> {
+        let mut emitter = self.new_child();
+        let arg_len = args.len();
+
+        for arg in args {
+            emitter.define_parameter(arg);
+        }
+
+        emitter.emit(body)?;
+        emitter.emit_void(span);
+        emitter.emit_return(span);
+
+        let name = format!("[{:p}]", &emitter.instructions);
+        let vm_function = if is_async {
+            VmFunction::new_async(name, arg_len, emitter.instruction_set())
+        } else {
+            VmFunction::new(name, arg_len, emitter.instruction_set())
+        };
+        let func = self
+            .instructions
+            .get_heap_mut()
+            .push(HeapValue::Function(WalrusFunction::Vm(vm_function)));
+
+        let index = self.instructions.push_constant(func);
+        let opcode = match index {
+            0 => Opcode::LoadConst0,
+            1 => Opcode::LoadConst1,
+            _ => Opcode::LoadConst(index),
+        };
+        self.instructions.push(Instruction::new(opcode, span));
 
         Ok(())
     }

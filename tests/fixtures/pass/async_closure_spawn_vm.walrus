@@ -1,0 +1,5 @@
+import "std/async" as asyncx;
+
+let double = async : x { return x * 2; };
+let task = asyncx.spawn(double, [21]);
+println(await task);

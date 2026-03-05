@@ -762,7 +762,8 @@ impl<'a> Analyzer<'a> {
                     }
                 }
             }
-            NodeKind::AnonFunctionDefinition(args, body) => {
+            NodeKind::AnonFunctionDefinition(args, body)
+            | NodeKind::AsyncAnonFunctionDefinition(args, body) => {
                 let function_scope = self.push_scope(*body.span());
                 self.with_scope(function_scope, |analyzer| {
                     let header_span = Span(node.span().0, body.span().0.min(node.span().1));

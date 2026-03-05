@@ -38,6 +38,7 @@ pub enum NodeKind {
     FunctionCall(Box<Node>, Vec<Node>),
     Index(Box<Node>, Box<Node>),
     AnonFunctionDefinition(Vec<String>, Box<Node>),
+    AsyncAnonFunctionDefinition(Vec<String>, Box<Node>),
     FunctionDefinition(String, Vec<String>, Box<Node>),
     AsyncFunctionDefinition(String, Vec<String>, Box<Node>),
     ExternFunctionDefinition(String, Vec<String>),
@@ -104,6 +105,9 @@ impl Display for NodeKind {
             NodeKind::Reassign(_, _, _) => write!(f, "Reassign"),
             NodeKind::FunctionCall(_, _) => write!(f, "FunctionCall"),
             NodeKind::AnonFunctionDefinition(_, _) => write!(f, "AnonFunctionDefinition"),
+            NodeKind::AsyncAnonFunctionDefinition(_, _) => {
+                write!(f, "AsyncAnonFunctionDefinition")
+            }
             NodeKind::FunctionDefinition(_, _, _) => write!(f, "FunctionDefinition"),
             NodeKind::AsyncFunctionDefinition(_, _, _) => write!(f, "AsyncFunctionDefinition"),
             NodeKind::ExternFunctionDefinition(_, _) => write!(f, "ExternFunctionDefinition"),
@@ -192,7 +196,8 @@ fn collect_free_vars_recursive(
             defined.insert(name.clone());
             // Don't recurse into function body - it has its own closure scope.
         }
-        NodeKind::AnonFunctionDefinition(args, body) => {
+        NodeKind::AnonFunctionDefinition(args, body)
+        | NodeKind::AsyncAnonFunctionDefinition(args, body) => {
             // Anonymous functions capture their environment, but we don't recurse
             // because they'll capture variables when they're created
         }
