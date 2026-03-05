@@ -3,8 +3,10 @@ import "std/http" as http;
 import "std/async" as asyncx;
 import "std/json" as json;
 import "./router.walrus" as router;
+import "std/io" as io;
 
 let app = router.new_app();
+let body = io.read_file("examples/http_router_sim/index.html");
 
 // --- Middleware ---
 
@@ -17,14 +19,7 @@ app.use(: req {
 // --- Routes ---
 
 app.get("/", : req {
-    let body = "Welcome to Walrus HTTP!\n\nRoutes:\n"
-        + "  GET  /health\n"
-        + "  GET  /users/:id\n"
-        + "  GET  /users/:id/posts/:post_id\n"
-        + "  POST /echo\n"
-        + "  GET  /slow\n"
-        + "  GET  /assets/*\n";
-    return router.text(200, body);
+    return router.html(200, body);
 });
 
 app.get("/health", : req {

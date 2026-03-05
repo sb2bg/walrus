@@ -12,6 +12,14 @@ fn text : status, body {
     };
 }
 
+fn html : status, body {
+    return {
+        "status": status,
+        "body": body,
+        "headers": {"content-type": "text/html"}
+    };
+}
+
 fn text_with_headers : status, body, headers {
     return {
         "status": status,
