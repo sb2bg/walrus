@@ -1,0 +1,28 @@
+import "std/async" as asyncx;
+
+// all_settled waits for all tasks regardless of success/failure
+
+async fn succeed: val {
+    return val;
+}
+
+async fn fail_with: msg {
+    throw msg;
+}
+
+let a = asyncx.spawn(succeed, ["hello"]);
+let b = asyncx.spawn(fail_with, ["oops"]);
+let c = asyncx.spawn(succeed, [42]);
+
+let results = await asyncx.all_settled([a, b, c]);
+
+for r in results {
+    let status = r["status"];
+    if status == "ok" {
+        println f"ok: {r[\"value\"]}";
+    } else if status == "error" {
+        println f"error: {r[\"error\"]}";
+    } else {
+        println f"other: {status}";
+    }
+}
