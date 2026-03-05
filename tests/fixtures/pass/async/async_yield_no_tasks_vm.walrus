@@ -1,0 +1,5 @@
+// yield with no queued tasks is a no-op
+yield;
+println "before";
+yield;
+println "after";

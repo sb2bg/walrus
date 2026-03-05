@@ -797,6 +797,7 @@ impl<'a> Analyzer<'a> {
             | NodeKind::Bool(_)
             | NodeKind::Break
             | NodeKind::Continue
+            | NodeKind::Yield
             | NodeKind::Void => {}
         }
     }
