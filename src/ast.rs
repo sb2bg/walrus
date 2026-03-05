@@ -39,6 +39,7 @@ pub enum NodeKind {
     Index(Box<Node>, Box<Node>),
     AnonFunctionDefinition(Vec<String>, Box<Node>),
     FunctionDefinition(String, Vec<String>, Box<Node>),
+    AsyncFunctionDefinition(String, Vec<String>, Box<Node>),
     ExternFunctionDefinition(String, Vec<String>),
     StructDefinition(String, Vec<Node>),
     StructFunctionDefinition(String, Vec<String>, Box<Node>),
@@ -58,6 +59,7 @@ pub enum NodeKind {
     Free(Box<Node>),
     Range(Option<Box<Node>>, Box<Node>),
     Defer(Box<Node>),
+    Await(Box<Node>),
     MemberAccess(Box<Node>, String),
     Break,
     Continue,
@@ -103,6 +105,7 @@ impl Display for NodeKind {
             NodeKind::FunctionCall(_, _) => write!(f, "FunctionCall"),
             NodeKind::AnonFunctionDefinition(_, _) => write!(f, "AnonFunctionDefinition"),
             NodeKind::FunctionDefinition(_, _, _) => write!(f, "FunctionDefinition"),
+            NodeKind::AsyncFunctionDefinition(_, _, _) => write!(f, "AsyncFunctionDefinition"),
             NodeKind::ExternFunctionDefinition(_, _) => write!(f, "ExternFunctionDefinition"),
             NodeKind::StructDefinition(_, _) => write!(f, "StructDefinition"),
             NodeKind::StructFunctionDefinition(_, _, _) => write!(f, "StructFunctionDefinition"),
@@ -126,6 +129,7 @@ impl Display for NodeKind {
             NodeKind::IndexAssign(_, _, _) => write!(f, "IndexAssign"),
             NodeKind::Range(_, _) => write!(f, "Range"),
             NodeKind::Defer(_) => write!(f, "Defer"),
+            NodeKind::Await(_) => write!(f, "Await"),
             NodeKind::MemberAccess(_, _) => write!(f, "MemberAccess"),
             NodeKind::Void => write!(f, "Void"),
         }
@@ -182,6 +186,11 @@ fn collect_free_vars_recursive(
             // Function name is defined in outer scope
             defined.insert(name.clone());
             // Don't recurse into the function body - it has its own closure scope
+        }
+        NodeKind::AsyncFunctionDefinition(name, _args, _body) => {
+            // Async function name is defined in outer scope.
+            defined.insert(name.clone());
+            // Don't recurse into function body - it has its own closure scope.
         }
         NodeKind::AnonFunctionDefinition(args, body) => {
             // Anonymous functions capture their environment, but we don't recurse
@@ -257,6 +266,9 @@ fn collect_free_vars_recursive(
             collect_free_vars_recursive(value, defined, free_vars);
         }
         NodeKind::Throw(value) | NodeKind::Free(value) | NodeKind::Defer(value) => {
+            collect_free_vars_recursive(value, defined, free_vars);
+        }
+        NodeKind::Await(value) => {
             collect_free_vars_recursive(value, defined, free_vars);
         }
         NodeKind::ExpressionStatement(expr) => {

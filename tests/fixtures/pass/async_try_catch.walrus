@@ -1,0 +1,9 @@
+async fn explode : {
+    throw "boom";
+}
+
+try {
+    println(await explode());
+} catch err {
+    println(err);
+};

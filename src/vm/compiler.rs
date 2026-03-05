@@ -564,74 +564,15 @@ impl<'a> BytecodeEmitter<'a> {
                 }
             }
             NodeKind::FunctionDefinition(name, args, body) => {
-                let is_global = self.depth == 0;
-
-                // Get the function index - use pre-registered index if it exists (forward declaration),
-                // otherwise register it now
-                let func_index = if is_global {
-                    if let Some(index) = self.instructions.resolve_global_index(&name) {
-                        // Already pre-registered in Pass 1
-                        index as u32
-                    } else {
-                        // Not pre-registered (shouldn't happen for top-level, but handle it)
-                        self.instructions.push_global(name.clone())
-                    }
-                } else {
-                    self.instructions.push_local(name.clone())
-                };
-
-                // Create a child emitter - functions are always local scope
-                let mut emitter = self.new_child();
-                let arg_len = args.len();
-
-                // Define function parameters as locals in the function scope
-                // Don't emit Store opcodes - values will already be in locals when called
-                for arg in args {
-                    emitter.define_parameter(arg);
-                }
-
-                emitter.emit(*body)?;
-
-                // Add implicit void return if the function doesn't end with an explicit return
-                emitter.emit_void(span);
-                emitter.emit_return(span);
-
-                // Get the compiled function's instruction set
-                let func_instructions = emitter.instruction_set();
-
-                // JIT: Register the function for hot-spot detection
-                // Note: We register it in the parent instruction set since that's where calls happen
+                self.emit_named_function_definition(name, args, *body, span, false)?;
+            }
+            NodeKind::AsyncFunctionDefinition(name, args, body) => {
+                self.emit_named_function_definition(name, args, *body, span, true)?;
+            }
+            NodeKind::Await(value) => {
+                self.emit(*value)?;
                 self.instructions
-                    .register_function(name.clone(), 0, arg_len);
-
-                // Create the function heap value
-                let func =
-                    self.instructions
-                        .get_heap_mut()
-                        .push(HeapValue::Function(WalrusFunction::Vm(VmFunction::new(
-                            name.clone(),
-                            arg_len,
-                            func_instructions,
-                        ))));
-
-                // Load the function constant and store it
-                let index = self.instructions.push_constant(func);
-                let opcode = match index {
-                    0 => Opcode::LoadConst0,
-                    1 => Opcode::LoadConst1,
-                    _ => Opcode::LoadConst(index),
-                };
-                self.instructions.push(Instruction::new(opcode, span));
-
-                if is_global {
-                    // Top-level function definitions go into globals
-                    self.instructions
-                        .push(Instruction::new(Opcode::StoreGlobal(func_index), span));
-                } else {
-                    // Nested function definitions go into locals
-                    self.instructions
-                        .push(Instruction::new(Opcode::StoreAt(func_index), span));
-                }
+                    .push(Instruction::new(Opcode::Await, span));
             }
             NodeKind::AnonFunctionDefinition(args, body) => {
                 // Create a child emitter - functions are always local scope
@@ -888,6 +829,7 @@ impl<'a> BytecodeEmitter<'a> {
                     for node in &nodes {
                         match node.kind() {
                             NodeKind::FunctionDefinition(_, _, _)
+                            | NodeKind::AsyncFunctionDefinition(_, _, _)
                             | NodeKind::StructDefinition(_, _) => {
                                 self.emit(node.clone())?;
                             }
@@ -899,6 +841,7 @@ impl<'a> BytecodeEmitter<'a> {
                     for node in nodes {
                         match node.kind() {
                             NodeKind::FunctionDefinition(_, _, _)
+                            | NodeKind::AsyncFunctionDefinition(_, _, _)
                             | NodeKind::StructDefinition(_, _) => {
                                 // Already compiled above
                             }
@@ -1227,6 +1170,13 @@ impl<'a> BytecodeEmitter<'a> {
                     self.instructions.push_global(name.clone());
                 }
             }
+            NodeKind::AsyncFunctionDefinition(name, _, _) => {
+                // Reserve the name so references resolve consistently before
+                // async code generation lands.
+                if self.depth == 0 {
+                    self.instructions.push_global(name.clone());
+                }
+            }
             NodeKind::StructDefinition(name, _) => {
                 // Structs are also global declarations
                 if self.depth == 0 {
@@ -1270,6 +1220,72 @@ impl<'a> BytecodeEmitter<'a> {
         // Define parameter in locals without emitting Store opcode
         // The value will already be in locals when the function is called
         self.instructions.push_local(name);
+    }
+
+    fn emit_named_function_definition(
+        &mut self,
+        name: String,
+        args: Vec<String>,
+        body: Node,
+        span: Span,
+        is_async: bool,
+    ) -> WalrusResult<()> {
+        let is_global = self.depth == 0;
+
+        // Get the function index - use pre-registered index if it exists (forward declaration),
+        // otherwise register it now.
+        let func_index = if is_global {
+            if let Some(index) = self.instructions.resolve_global_index(&name) {
+                index as u32
+            } else {
+                self.instructions.push_global(name.clone())
+            }
+        } else {
+            self.instructions.push_local(name.clone())
+        };
+
+        let mut emitter = self.new_child();
+        let arg_len = args.len();
+
+        for arg in args {
+            emitter.define_parameter(arg);
+        }
+
+        emitter.emit(body)?;
+        emitter.emit_void(span);
+        emitter.emit_return(span);
+
+        let func_instructions = emitter.instruction_set();
+        self.instructions
+            .register_function(name.clone(), 0, arg_len);
+
+        let vm_function = if is_async {
+            VmFunction::new_async(name.clone(), arg_len, func_instructions)
+        } else {
+            VmFunction::new(name.clone(), arg_len, func_instructions)
+        };
+        let func = self
+            .instructions
+            .get_heap_mut()
+            .push(HeapValue::Function(WalrusFunction::Vm(vm_function)));
+
+        let index = self.instructions.push_constant(func);
+        let opcode = match index {
+            0 => Opcode::LoadConst0,
+            1 => Opcode::LoadConst1,
+            _ => Opcode::LoadConst(index),
+        };
+        self.instructions.push(Instruction::new(opcode, span));
+
+        if is_global {
+            self.instructions
+                .push(Instruction::new(Opcode::StoreGlobal(func_index), span));
+        } else {
+            self.instructions
+                .push(Instruction::new(Opcode::StoreAt(func_index), span));
+        }
+
+        Ok(())
     }
 
     /// Emit bytecode for a function call.

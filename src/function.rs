@@ -36,16 +36,26 @@ pub struct NodeFunction {
     pub name: String,
     pub args: Vec<String>,
     pub body: Node,
+    pub is_async: bool,
     /// Captured variables from the enclosing scope (for closures)
     pub captures: FxHashMap<String, Value>,
 }
 
 impl NodeFunction {
     pub fn new(name: String, args: Vec<String>, node: Node) -> Self {
+        Self::new_with_async(name, args, node, false)
+    }
+
+    pub fn new_async(name: String, args: Vec<String>, node: Node) -> Self {
+        Self::new_with_async(name, args, node, true)
+    }
+
+    fn new_with_async(name: String, args: Vec<String>, node: Node, is_async: bool) -> Self {
         Self {
             name,
             args,
             body: node,
+            is_async,
             captures: FxHashMap::default(),
         }
     }
@@ -54,12 +64,14 @@ impl NodeFunction {
         name: String,
         args: Vec<String>,
         node: Node,
+        is_async: bool,
         captures: FxHashMap<String, Value>,
     ) -> Self {
         Self {
             name,
             args,
             body: node,
+            is_async,
             captures,
         }
     }
@@ -78,15 +90,25 @@ pub struct VmModuleBinding {
 pub struct VmFunction {
     pub name: String,
     pub arity: usize,
+    pub is_async: bool,
     pub code: Rc<InstructionSet>,
     pub module_binding: Option<Rc<VmModuleBinding>>,
 }
 
 impl VmFunction {
     pub fn new(name: String, arity: usize, code: InstructionSet) -> Self {
+        Self::new_with_async(name, arity, code, false)
+    }
+
+    pub fn new_async(name: String, arity: usize, code: InstructionSet) -> Self {
+        Self::new_with_async(name, arity, code, true)
+    }
+
+    fn new_with_async(name: String, arity: usize, code: InstructionSet, is_async: bool) -> Self {
         Self {
             name,
             arity,
+            is_async,
             code: Rc::new(code),
             module_binding: None,
         }
@@ -126,6 +148,25 @@ pub enum NativeFunction {
     Args,
     Cwd,
     Exit,
+    // Networking
+    NetTcpBind,
+    NetTcpAccept,
+    NetTcpConnect,
+    NetTcpLocalPort,
+    NetTcpRead,
+    NetTcpReadLine,
+    NetTcpWrite,
+    NetTcpClose,
+    NetTcpCloseListener,
+    // HTTP
+    HttpParseRequestLine,
+    HttpParseQuery,
+    HttpNormalizePath,
+    HttpMatchRoute,
+    HttpStatusText,
+    HttpResponse,
+    HttpResponseWithHeaders,
+    HttpReadRequest,
     // Math
     MathPi,
     MathE,
@@ -200,8 +241,20 @@ impl Display for WalrusFunction {
             "{}",
             match self {
                 WalrusFunction::Rust(func) => format!("<builtin_function({})>", func.name),
-                WalrusFunction::TreeWalk(func) => format!("<function({})>", func.name),
-                WalrusFunction::Vm(func) => format!("<function({})>", func.name),
+                WalrusFunction::TreeWalk(func) => {
+                    if func.is_async {
+                        format!("<async_function({})>", func.name)
+                    } else {
+                        format!("<function({})>", func.name)
+                    }
+                }
+                WalrusFunction::Vm(func) => {
+                    if func.is_async {
+                        format!("<async_function({})>", func.name)
+                    } else {
+                        format!("<function({})>", func.name)
+                    }
+                }
                 WalrusFunction::Native(func) => format!("<native_function({})>", func.name()),
             }
         )

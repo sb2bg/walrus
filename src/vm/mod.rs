@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::ptr::NonNull;
 use std::rc::Rc;
 
@@ -8,7 +9,7 @@ use rustc_hash::FxHashMap;
 use instruction_set::InstructionSet;
 
 use crate::WalrusResult;
-use crate::arenas::HeapValue;
+use crate::arenas::{FuncKey, HeapValue};
 use crate::error::WalrusError;
 use crate::function::{VmModuleBinding, WalrusFunction};
 use crate::iter::ValueIterator;
@@ -16,7 +17,7 @@ use crate::jit::{HotSpotDetector, TypeProfile, WalrusType};
 use crate::range::RangeValue;
 use crate::source_ref::SourceRef;
 use crate::span::Span;
-use crate::value::Value;
+use crate::value::{AsyncTask, Value};
 use crate::vm::opcode::Opcode;
 
 pub mod compiler;
@@ -53,6 +54,8 @@ struct CallFrame {
     return_override: Option<Value>,
     /// Optional module binding context for exported module VM functions.
     module_binding: Option<Rc<VmModuleBinding>>,
+    /// The task that this frame is currently resolving via `await`, if any.
+    awaiting_task: Option<crate::arenas::TaskKey>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -118,6 +121,8 @@ pub struct VM<'a> {
     gc_poll_counter: u32, // Throttle GC checks to avoid per-instruction overhead
     globals: Vec<Value>,
     global_names: Vec<String>,
+    async_task_queue: VecDeque<crate::arenas::TaskKey>,
+    run_until_depth_stack: Vec<usize>,
     source_ref: SourceRef<'a>,
     // Debugger state
     debugger: Option<debugger::Debugger>,
@@ -162,6 +167,7 @@ impl<'a> VM<'a> {
             function_name: "<main>".to_string(),
             return_override: None,
             module_binding: None,
+            awaiting_task: None,
         };
 
         Self {
@@ -174,6 +180,8 @@ impl<'a> VM<'a> {
             // Pre-size globals to declared symbol count so sparse/forward writes are safe.
             globals: vec![Value::Void; global_names.len()],
             global_names,
+            async_task_queue: VecDeque::new(),
+            run_until_depth_stack: Vec::new(),
             source_ref,
             debugger: None,
             debug_mode: false,
@@ -464,7 +472,13 @@ impl<'a> VM<'a> {
 
     /// Collect all root values that the GC needs to trace from
     pub(crate) fn collect_roots(&self) -> Vec<Value> {
-        let mut roots = Vec::with_capacity(self.stack.len() + self.locals.len() + 64);
+        let mut roots = Vec::with_capacity(
+            self.stack.len()
+                + self.locals.len()
+                + self.globals.len()
+                + self.async_task_queue.len()
+                + 96,
+        );
 
         // Stack values are roots
         roots.extend(self.stack.iter().copied());
@@ -481,6 +495,15 @@ impl<'a> VM<'a> {
             if let Some(binding) = &frame.module_binding {
                 roots.push(Value::Module(binding.module_key));
             }
+            if let Some(task_key) = frame.awaiting_task {
+                roots.push(Value::Task(task_key));
+            }
+        }
+
+        // Scheduled async tasks must remain rooted even when no user variable currently
+        // references them (fire-and-forget tasks queued by the event loop).
+        for &task_key in &self.async_task_queue {
+            roots.push(Value::Task(task_key));
         }
 
         // Imported modules are cached process-wide and must remain rooted.
@@ -572,6 +595,154 @@ impl<'a> VM<'a> {
         crate::native_registry::dispatch_native(self, native_fn, args, span)
     }
 
+    fn create_task_for_function_key(&mut self, function_key: FuncKey, args: Vec<Value>) -> Value {
+        let task = self
+            .get_heap_mut()
+            .push(HeapValue::Task(AsyncTask::Pending {
+                function: function_key,
+                args,
+            }));
+        if let Value::Task(task_key) = task {
+            self.async_task_queue.push_back(task_key);
+        }
+        task
+    }
+
+    fn create_task_for_cloned_function(
+        &mut self,
+        function: WalrusFunction,
+        args: Vec<Value>,
+    ) -> Value {
+        let func_value = self.get_heap_mut().push(HeapValue::Function(function));
+        let Value::Function(function_key) = func_value else {
+            unreachable!("HeapValue::Function must allocate a function key")
+        };
+        self.create_task_for_function_key(function_key, args)
+    }
+
+    fn complete_task_on_frame_return(
+        &mut self,
+        task_key: Option<crate::arenas::TaskKey>,
+        result: Value,
+    ) -> WalrusResult<()> {
+        if let Some(task_key) = task_key {
+            *self.get_heap_mut().get_mut_task(task_key)? = AsyncTask::Ready(result);
+        }
+        Ok(())
+    }
+
+    fn is_task_pending(&self, task_key: crate::arenas::TaskKey) -> WalrusResult<bool> {
+        let task = self.get_heap().get_task(task_key)?;
+        Ok(matches!(task, AsyncTask::Pending { .. }))
+    }
+
+    fn is_task_ready(&self, task_key: crate::arenas::TaskKey) -> WalrusResult<Option<Value>> {
+        let task = self.get_heap().get_task(task_key)?;
+        Ok(match task {
+            AsyncTask::Ready(value) => Some(*value),
+            AsyncTask::Pending { .. } => None,
+        })
+    }
+
+    fn next_runnable_task(
+        &mut self,
+        target: crate::arenas::TaskKey,
+    ) -> WalrusResult<Option<crate::arenas::TaskKey>> {
+        while let Some(task_key) = self.async_task_queue.pop_front() {
+            if self.is_task_pending(task_key)? {
+                return Ok(Some(task_key));
+            }
+        }
+
+        if self.is_task_pending(target)? {
+            Ok(Some(target))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn run_until_depth(&mut self, depth: usize) -> WalrusResult<()> {
+        self.run_until_depth_stack.push(depth);
+        let result = self.run_inner().map(|_| ());
+        if self.run_until_depth_stack.last().copied() == Some(depth) {
+            self.run_until_depth_stack.pop();
+        }
+        result
+    }
+
+    fn run_pending_task_to_completion(
+        &mut self,
+        task_key: crate::arenas::TaskKey,
+        span: Span,
+    ) -> WalrusResult<()> {
+        let task_snapshot = self.get_heap().get_task(task_key)?.clone();
+        let AsyncTask::Pending { function, args } = task_snapshot else {
+            return Ok(());
+        };
+
+        let function = self.get_heap().get_function(function)?.clone();
+        match function {
+            WalrusFunction::Vm(func) => {
+                if args.len() != func.arity {
+                    return Err(WalrusError::InvalidArgCount {
+                        name: func.name.clone(),
+                        expected: func.arity,
+                        got: args.len(),
+                        span,
+                        src: self.source_ref.source().into(),
+                        filename: self.source_ref.filename().into(),
+                    });
+                }
+
+                let caller_depth = self.call_stack.len();
+                let new_frame = CallFrame {
+                    return_ip: self.ip,
+                    frame_pointer: self.locals.len(),
+                    stack_pointer: self.stack.len(),
+                    instructions: Rc::clone(&func.code),
+                    function_name: String::new(),
+                    return_override: None,
+                    module_binding: func.module_binding.clone(),
+                    awaiting_task: Some(task_key),
+                };
+
+                self.call_stack.push(new_frame);
+                self.locals.extend(args);
+                self.ip = 0;
+                self.run_until_depth(caller_depth)?;
+            }
+            WalrusFunction::Rust(rust_fn) => {
+                if args.len() != rust_fn.args {
+                    return Err(WalrusError::InvalidArgCount {
+                        name: rust_fn.name.clone(),
+                        expected: rust_fn.args,
+                        got: args.len(),
+                        span,
+                        src: self.source_ref.source().into(),
+                        filename: self.source_ref.filename().into(),
+                    });
+                }
+                let result = rust_fn.call(args, self.source_ref, span)?;
+                self.complete_task_on_frame_return(Some(task_key), result)?;
+                self.push(result);
+            }
+            WalrusFunction::Native(native_fn) => {
+                let result = self.call_native(native_fn, args, span)?;
+                self.complete_task_on_frame_return(Some(task_key), result)?;
+                self.push(result);
+            }
+            WalrusFunction::TreeWalk(_) => {
+                return Err(WalrusError::NodeFunctionNotSupportedInVm {
+                    span,
+                    src: self.source_ref.source().into(),
+                    filename: self.source_ref.filename().into(),
+                });
+            }
+        }
+
+        Ok(())
+    }
+
     fn call_exported_function(
         &mut self,
         function: WalrusFunction,
@@ -610,6 +781,12 @@ impl<'a> VM<'a> {
                     });
                 }
 
+                if func.is_async {
+                    let task = self
+                        .create_task_for_cloned_function(WalrusFunction::Vm(func.clone()), args);
+                    return Ok(Some(task));
+                }
+
                 let new_frame = CallFrame {
                     return_ip: self.ip,
                     frame_pointer: self.locals.len(),
@@ -618,6 +795,7 @@ impl<'a> VM<'a> {
                     function_name: func.name.clone(),
                     return_override: None,
                     module_binding: func.module_binding.clone(),
+                    awaiting_task: None,
                 };
 
                 self.call_stack.push(new_frame);
@@ -792,7 +970,14 @@ impl<'a> VM<'a> {
         let debug_logging_enabled = log_enabled!(log::Level::Debug);
         let profiling_enabled = self.profiling_enabled;
 
-        loop {
+        'vm: loop {
+            if let Some(stop_depth) = self.run_until_depth_stack.last().copied() {
+                if self.call_stack.len() == stop_depth {
+                    self.run_until_depth_stack.pop();
+                    return Ok(Value::Void);
+                }
+            }
+
             // Poll GC periodically instead of every instruction.
             self.gc_poll_counter = self.gc_poll_counter.wrapping_add(1);
             if self.gc_poll_counter & 0xFF == 0 {
@@ -1189,6 +1374,7 @@ impl<'a> VM<'a> {
                                     function_name: format!("{}::iter", struct_name),
                                     return_override: None,
                                     module_binding: func.module_binding.clone(),
+                                    awaiting_task: None,
                                 };
 
                                 self.call_stack.push(new_frame);
@@ -1343,6 +1529,13 @@ impl<'a> VM<'a> {
                                         });
                                     }
 
+                                    if func.is_async {
+                                        let args = self.pop_n(arg_count, opcode, span)?;
+                                        let task = self.create_task_for_function_key(key, args);
+                                        self.push(task);
+                                        continue;
+                                    }
+
                                     // Create a new call frame instead of a child VM
                                     let new_frame = CallFrame {
                                         return_ip: self.ip,                          // Where to return after this function
@@ -1352,6 +1545,7 @@ impl<'a> VM<'a> {
                                         function_name: String::new(),
                                         return_override: None,
                                         module_binding: func.module_binding.clone(),
+                                        awaiting_task: None,
                                     };
 
                                     // Push the new frame
@@ -1435,6 +1629,7 @@ impl<'a> VM<'a> {
                                         function_name: format!("{}::init", struct_name),
                                         return_override: Some(instance_value),
                                         module_binding: init_func.module_binding.clone(),
+                                        awaiting_task: None,
                                     };
 
                                     self.call_stack.push(new_frame);
@@ -1531,6 +1726,10 @@ impl<'a> VM<'a> {
                                         .pop()
                                         .expect("Call stack should never be empty on tail call");
                                     self.clear_exception_handlers_from_frame(self.call_stack.len());
+                                    self.complete_task_on_frame_return(
+                                        frame.awaiting_task,
+                                        result,
+                                    )?;
 
                                     if self.call_stack.is_empty() {
                                         return Ok(result);
@@ -1551,6 +1750,10 @@ impl<'a> VM<'a> {
                                         .pop()
                                         .expect("Call stack should never be empty on tail call");
                                     self.clear_exception_handlers_from_frame(self.call_stack.len());
+                                    self.complete_task_on_frame_return(
+                                        frame.awaiting_task,
+                                        result,
+                                    )?;
 
                                     if self.call_stack.is_empty() {
                                         return Ok(result);
@@ -1570,6 +1773,30 @@ impl<'a> VM<'a> {
                                             src: self.source_ref.source().into(),
                                             filename: self.source_ref.filename().into(),
                                         });
+                                    }
+
+                                    if func.is_async {
+                                        let args = self.pop_n(arg_count, opcode, span)?;
+                                        let result = self.create_task_for_function_key(key, args);
+                                        let frame = self.call_stack.pop().expect(
+                                            "Call stack should never be empty on tail call",
+                                        );
+                                        self.clear_exception_handlers_from_frame(
+                                            self.call_stack.len(),
+                                        );
+                                        self.complete_task_on_frame_return(
+                                            frame.awaiting_task,
+                                            result,
+                                        )?;
+
+                                        if self.call_stack.is_empty() {
+                                            return Ok(result);
+                                        }
+
+                                        self.locals.truncate(frame.frame_pointer);
+                                        self.ip = frame.return_ip;
+                                        self.push(result);
+                                        continue;
                                     }
 
                                     // Clone what we need before mutating self
@@ -1694,6 +1921,10 @@ impl<'a> VM<'a> {
                                         .pop()
                                         .expect("Call stack should never be empty on tail call");
                                     self.clear_exception_handlers_from_frame(self.call_stack.len());
+                                    self.complete_task_on_frame_return(
+                                        frame.awaiting_task,
+                                        result,
+                                    )?;
 
                                     if self.call_stack.is_empty() {
                                         return Ok(result);
@@ -2513,6 +2744,48 @@ impl<'a> VM<'a> {
                         }
                     }
                 }
+                Opcode::Await => {
+                    let awaited = self.pop(opcode, span)?;
+                    let task_key = match awaited {
+                        Value::Task(task_key) => task_key,
+                        other => {
+                            return Err(WalrusError::TypeMismatch {
+                                expected: "task".to_string(),
+                                found: other.get_type().to_string(),
+                                span,
+                                src: self.source_ref.source().into(),
+                                filename: self.source_ref.filename().into(),
+                            });
+                        }
+                    };
+                    let caller_depth = self.call_stack.len();
+                    let resume_ip = self.ip;
+
+                    loop {
+                        if let Some(value) = self.is_task_ready(task_key)? {
+                            self.push(value);
+                            break;
+                        }
+
+                        let Some(next_task) = self.next_runnable_task(task_key)? else {
+                            return Err(WalrusError::GenericError {
+                                message: "Event loop deadlock: awaited task is pending with no runnable tasks".to_string(),
+                            });
+                        };
+
+                        let keep_result = next_task == task_key;
+                        self.run_pending_task_to_completion(next_task, span)?;
+                        if self.call_stack.len() != caller_depth || self.ip != resume_ip {
+                            // Control was transferred (for example by throw/catch while resolving
+                            // a task). Resume normal VM dispatch at the new location.
+                            continue 'vm;
+                        }
+                        if !keep_result {
+                            // Background task completion result is irrelevant to this `await`.
+                            let _ = self.pop(opcode, span)?;
+                        }
+                    }
+                }
                 Opcode::Return => {
                     let mut return_value = self.pop(opcode, span)?;
 
@@ -2526,6 +2799,7 @@ impl<'a> VM<'a> {
                     if let Some(override_value) = frame.return_override {
                         return_value = override_value;
                     }
+                    self.complete_task_on_frame_return(frame.awaiting_task, return_value)?;
 
                     // If this was the last frame (main), return the value
                     if self.call_stack.is_empty() {
@@ -2777,6 +3051,7 @@ impl<'a> VM<'a> {
                                     function_name: String::new(),
                                     return_override: None,
                                     module_binding: method_binding,
+                                    awaiting_task: None,
                                 };
 
                                 self.call_stack.push(new_frame);
@@ -2845,6 +3120,7 @@ impl<'a> VM<'a> {
                                     function_name: String::new(),
                                     return_override: None,
                                     module_binding: method_binding,
+                                    awaiting_task: None,
                                 };
 
                                 self.call_stack.push(new_frame);
@@ -3027,6 +3303,7 @@ impl<'a> VM<'a> {
                                     function_name: String::new(),
                                     return_override: None,
                                     module_binding: func.module_binding.clone(),
+                                    awaiting_task: None,
                                 };
 
                                 self.call_stack.push(new_frame);
@@ -3081,6 +3358,7 @@ impl<'a> VM<'a> {
                                     function_name: String::new(),
                                     return_override: None,
                                     module_binding: func.module_binding.clone(),
+                                    awaiting_task: None,
                                 };
 
                                 self.call_stack.push(new_frame);

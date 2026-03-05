@@ -6,7 +6,7 @@ use rustc_hash::FxHashMap;
 use uuid::Uuid;
 
 use crate::WalrusResult;
-use crate::arenas::{Free, HeapValue, Resolve};
+use crate::arenas::{Free, HeapValue, Resolve, with_arena, with_arena_mut};
 use crate::ast::{Node, NodeKind};
 use crate::error::WalrusError;
 use crate::function::{NodeFunction, WalrusFunction};
@@ -15,7 +15,7 @@ use crate::range::RangeValue;
 use crate::scope::Scope;
 use crate::source_ref::SourceRef;
 use crate::span::{Span, Spanned};
-use crate::value::Value;
+use crate::value::{AsyncTask, Value};
 use crate::vm::opcode::Opcode;
 
 pub struct Interpreter<'a> {
@@ -69,7 +69,10 @@ impl<'a> Interpreter<'a> {
             NodeKind::Dict(dict) => Ok(self.visit_dict(dict)?),
             NodeKind::List(list) => Ok(self.visit_list(list)?),
             NodeKind::FunctionDefinition(name, args, body) => {
-                Ok(self.visit_fn_def(name, args, *body)?)
+                Ok(self.visit_fn_def(name, args, *body, false)?)
+            }
+            NodeKind::AsyncFunctionDefinition(name, args, body) => {
+                Ok(self.visit_fn_def(name, args, *body, true)?)
             }
             NodeKind::AnonFunctionDefinition(args, body) => {
                 Ok(self.visit_anon_fn_def(args, *body)?)
@@ -101,6 +104,7 @@ impl<'a> Interpreter<'a> {
             NodeKind::PackageImport(name, as_name) => Ok(self.visit_package_import(name, as_name)?),
             NodeKind::For(var, iter, body) => Ok(self.visit_for(var, *iter, *body)?),
             NodeKind::Return(value) => Ok(self.visit_return(*value)?),
+            NodeKind::Await(value) => Ok(self.visit_await(*value, span)?),
             NodeKind::IndexAssign(value, index, new_value) => {
                 Ok(self.visit_index_assign(*value, *index, *new_value)?)
             }
@@ -325,13 +329,19 @@ impl<'a> Interpreter<'a> {
 
         Ok(
             HeapValue::Function(WalrusFunction::TreeWalk(NodeFunction::new_with_captures(
-                fn_name, args, body, captures,
+                fn_name, args, body, false, captures,
             )))
             .alloc(),
         )
     }
 
-    fn visit_fn_def(&mut self, name: String, args: Vec<String>, body: Node) -> InterpreterResult {
+    fn visit_fn_def(
+        &mut self,
+        name: String,
+        args: Vec<String>,
+        body: Node,
+        is_async: bool,
+    ) -> InterpreterResult {
         use crate::ast::collect_free_variables;
 
         // Capture free variables from the current scope
@@ -347,6 +357,7 @@ impl<'a> Interpreter<'a> {
             name.clone(),
             args,
             body,
+            is_async,
             captures,
         )))
         .alloc();
@@ -512,31 +523,22 @@ impl<'a> Interpreter<'a> {
                         rust_fn.call(args, self.source_ref, span)
                     }
                     WalrusFunction::TreeWalk(node_fn) => {
-                        if node_fn.args.len() != args.len() {
-                            Err(WalrusError::InvalidArgCount {
-                                name: node_fn.name.clone(),
-                                expected: node_fn.args.len(),
-                                got: args.len(),
-                                span,
-                                src: self.source_ref.source().into(),
-                                filename: self.source_ref.filename().into(),
-                            })?
+                        if node_fn.is_async {
+                            if node_fn.args.len() != args.len() {
+                                Err(WalrusError::InvalidArgCount {
+                                    name: node_fn.name.clone(),
+                                    expected: node_fn.args.len(),
+                                    got: args.len(),
+                                    span,
+                                    src: self.source_ref.source().into(),
+                                    filename: self.source_ref.filename().into(),
+                                })?
+                            }
+
+                            Ok(HeapValue::Task(AsyncTask::Pending { function: f, args }).alloc())
+                        } else {
+                            self.execute_treewalk_function(node_fn, args, span)
                         }
-
-                        // Create child interpreter
-                        let mut sub_interpreter = self.create_child(node_fn.name.clone());
-
-                        // Inject captured variables (closures)
-                        for (name, value) in &node_fn.captures {
-                            sub_interpreter.scope.assign(name.clone(), *value);
-                        }
-
-                        // Bind function arguments
-                        for (name, value) in node_fn.args.iter().zip(args) {
-                            sub_interpreter.scope.assign(name.clone(), value);
-                        }
-
-                        sub_interpreter.interpret(node_fn.body.clone())
                     }
                     WalrusFunction::Vm(_) | WalrusFunction::Native(_) => unsafe {
                         // Native functions are only available in the VM
@@ -550,6 +552,91 @@ impl<'a> Interpreter<'a> {
                 src: self.source_ref.source().to_string(),
                 filename: self.source_ref.filename().to_string(),
             }),
+        }
+    }
+
+    fn execute_treewalk_function(
+        &mut self,
+        node_fn: NodeFunction,
+        args: Vec<Value>,
+        span: Span,
+    ) -> InterpreterResult {
+        if node_fn.args.len() != args.len() {
+            Err(WalrusError::InvalidArgCount {
+                name: node_fn.name.clone(),
+                expected: node_fn.args.len(),
+                got: args.len(),
+                span,
+                src: self.source_ref.source().into(),
+                filename: self.source_ref.filename().into(),
+            })?
+        }
+
+        // Create child interpreter
+        let mut sub_interpreter = self.create_child(node_fn.name.clone());
+
+        // Inject captured variables (closures)
+        for (name, value) in &node_fn.captures {
+            sub_interpreter.scope.assign(name.clone(), *value);
+        }
+
+        // Bind function arguments
+        for (name, value) in node_fn.args.iter().zip(args) {
+            sub_interpreter.scope.assign(name.clone(), value);
+        }
+
+        sub_interpreter.interpret(node_fn.body.clone())
+    }
+
+    fn visit_await(&mut self, value: Node, span: Span) -> InterpreterResult {
+        let awaited = self.interpret(value)?;
+        let task_key = match awaited {
+            Value::Task(task_key) => task_key,
+            other => {
+                return Err(WalrusError::TypeMismatch {
+                    expected: "task".to_string(),
+                    found: other.get_type().to_string(),
+                    span,
+                    src: self.source_ref.source().into(),
+                    filename: self.source_ref.filename().into(),
+                });
+            }
+        };
+
+        let task_snapshot = with_arena(|arena| arena.get_task(task_key).cloned())?;
+        match task_snapshot {
+            AsyncTask::Ready(value) => Ok(value),
+            AsyncTask::Pending { function, args } => {
+                let function = with_arena(|arena| arena.get_function(function).cloned())?;
+                let result = match function {
+                    WalrusFunction::TreeWalk(node_fn) => {
+                        self.execute_treewalk_function(node_fn, args, span)?
+                    }
+                    WalrusFunction::Rust(rust_fn) => {
+                        if rust_fn.args != args.len() {
+                            Err(WalrusError::InvalidArgCount {
+                                name: rust_fn.name.clone(),
+                                expected: rust_fn.args,
+                                got: args.len(),
+                                span,
+                                src: self.source_ref.source().into(),
+                                filename: self.source_ref.filename().into(),
+                            })?
+                        }
+                        rust_fn.call(args, self.source_ref, span)?
+                    }
+                    WalrusFunction::Vm(_) | WalrusFunction::Native(_) => unsafe {
+                        unreachable_unchecked()
+                    },
+                };
+
+                with_arena_mut(|arena| -> crate::WalrusResult<()> {
+                    *arena.get_mut_task(task_key)? = AsyncTask::Ready(result);
+                    Ok(())
+                })?;
+
+                Ok(result)
+            }
         }
     }
 

@@ -502,6 +502,45 @@ impl<'a> Analyzer<'a> {
                     });
                 });
             }
+            NodeKind::AsyncFunctionDefinition(name, args, body) => {
+                let signature = async_function_signature(name, args);
+                let definition_id = self.add_definition(
+                    name,
+                    *node.span(),
+                    SymbolKind::Function,
+                    true,
+                    Some(signature),
+                    node.span().0,
+                    args.clone(),
+                );
+
+                let function_scope = self.push_scope(*body.span());
+                self.with_scope(function_scope, |analyzer| {
+                    analyzer.with_container(definition_id, |analyzer| {
+                        let header_span = Span(node.span().0, body.span().0.min(node.span().1));
+                        let parameter_spans =
+                            find_parameter_spans(analyzer.source, header_span, args);
+
+                        for (index, parameter) in args.iter().enumerate() {
+                            let span = parameter_spans.get(index).copied().unwrap_or_else(|| {
+                                find_name_span(analyzer.source, header_span, parameter)
+                            });
+                            analyzer.add_definition_with_span(
+                                parameter,
+                                span,
+                                span,
+                                SymbolKind::Parameter,
+                                false,
+                                Some("parameter".to_string()),
+                                span.0,
+                                Vec::new(),
+                            );
+                        }
+
+                        analyzer.walk(body);
+                    });
+                });
+            }
             NodeKind::StructDefinition(name, members) => {
                 let definition_id = self.add_definition(
                     name,
@@ -653,7 +692,8 @@ impl<'a> Analyzer<'a> {
             | NodeKind::Free(value)
             | NodeKind::Defer(value)
             | NodeKind::ExpressionStatement(value)
-            | NodeKind::UnaryOp(_, value) => {
+            | NodeKind::UnaryOp(_, value)
+            | NodeKind::Await(value) => {
                 self.walk(value);
             }
             NodeKind::If(condition, then_branch, else_branch) => {
@@ -766,6 +806,14 @@ fn function_signature(name: &str, args: &[String]) -> String {
         format!("fn {name}")
     } else {
         format!("fn {name} : {}", args.join(", "))
+    }
+}
+
+fn async_function_signature(name: &str, args: &[String]) -> String {
+    if args.is_empty() {
+        format!("async fn {name}")
+    } else {
+        format!("async fn {name} : {}", args.join(", "))
     }
 }
 

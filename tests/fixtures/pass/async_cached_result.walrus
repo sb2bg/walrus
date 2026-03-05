@@ -1,0 +1,10 @@
+let counter = 0;
+
+async fn next_counter : {
+    counter += 1;
+    return counter;
+}
+
+let task = next_counter();
+println(await task);
+println(await task);

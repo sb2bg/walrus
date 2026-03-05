@@ -10,11 +10,12 @@ use crate::error::WalrusError;
 use crate::function::WalrusFunction;
 use crate::gc::{
     GcState, estimate_dict_size, estimate_function_size, estimate_list_size,
-    estimate_struct_instance_size, estimate_tuple_size, get_allocation_threshold,
+    estimate_struct_instance_size, estimate_task_size, estimate_tuple_size,
+    get_allocation_threshold,
 };
 use crate::iter::{CollectionIter, DictIter, RangeIter, StrIter};
 use crate::structs::{StructDefinition, StructInstance};
-use crate::value::{Value, ValueIter};
+use crate::value::{AsyncTask, Value, ValueIter};
 
 // Thread-local arena for heap-allocated values.
 // Using thread_local! with RefCell provides safe interior mutability without
@@ -75,6 +76,7 @@ pub struct ValueHolder {
     string_intern: FxHashMap<String, StringKey>,
     functions: DenseSlotMap<FuncKey, WalrusFunction>,
     iterators: DenseSlotMap<IterKey, ValueIter>,
+    tasks: DenseSlotMap<TaskKey, AsyncTask>,
     struct_defs: DenseSlotMap<StructDefKey, StructDefinition>,
     struct_instances: DenseSlotMap<StructInstKey, StructInstance>,
     gc: GcState,
@@ -117,6 +119,7 @@ impl ValueHolder {
             string_intern: FxHashMap::default(),
             functions: DenseSlotMap::with_key(),
             iterators: DenseSlotMap::with_key(),
+            tasks: DenseSlotMap::with_key(),
             struct_defs: DenseSlotMap::with_key(),
             struct_instances: DenseSlotMap::with_key(),
             gc: GcState::new(),
@@ -138,6 +141,7 @@ impl ValueHolder {
             Value::Function(key) => self.functions.remove(key).is_some(),
             Value::Tuple(key) => self.tuples.remove(key).is_some(),
             Value::Iter(key) => self.iterators.remove(key).is_some(),
+            Value::Task(key) => self.tasks.remove(key).is_some(),
             Value::StructDef(key) => self.struct_defs.remove(key).is_some(),
             Value::StructInst(key) => self.struct_instances.remove(key).is_some(),
             _ => false,
@@ -161,7 +165,14 @@ impl ValueHolder {
             }
             HeapValue::String(s) => s.len() + 24, // String + overhead
             HeapValue::Iter(_) => 64,             // Rough estimate
-            HeapValue::StructDef(_) => 128,       // Rough estimate
+            HeapValue::Task(task) => {
+                let arg_count = match task {
+                    AsyncTask::Pending { args, .. } => args.len(),
+                    AsyncTask::Ready(_) => 0,
+                };
+                estimate_task_size(arg_count)
+            }
+            HeapValue::StructDef(_) => 128, // Rough estimate
             HeapValue::StructInst(inst) => estimate_struct_instance_size(inst.fields().len()),
         };
         self.gc.record_allocation(bytes);
@@ -183,6 +194,7 @@ impl ValueHolder {
                 Value::String(key)
             }
             HeapValue::Iter(iter) => Value::Iter(self.iterators.insert(iter)),
+            HeapValue::Task(task) => Value::Task(self.tasks.insert(task)),
             HeapValue::StructDef(def) => Value::StructDef(self.struct_defs.insert(def)),
             HeapValue::StructInst(inst) => Value::StructInst(self.struct_instances.insert(inst)),
         }
@@ -262,6 +274,21 @@ impl ValueHolder {
 
                 if let Some(value) = referenced {
                     self.mark(value);
+                }
+            }
+            Value::Task(key) => {
+                if let Some(task) = self.tasks.get(key).cloned() {
+                    match task {
+                        AsyncTask::Pending { function, args } => {
+                            self.mark(Value::Function(function));
+                            for arg in args {
+                                self.mark(arg);
+                            }
+                        }
+                        AsyncTask::Ready(value) => {
+                            self.mark(value);
+                        }
+                    }
                 }
             }
             Value::Function(key) => {
@@ -349,6 +376,17 @@ impl ValueHolder {
             freed += 1;
         }
 
+        // Sweep async tasks
+        let unmarked_tasks: Vec<TaskKey> = self
+            .tasks
+            .keys()
+            .filter(|&k| !self.gc.is_task_marked(k))
+            .collect();
+        for key in unmarked_tasks {
+            self.tasks.remove(key);
+            freed += 1;
+        }
+
         // Sweep struct definitions
         let unmarked_struct_defs: Vec<StructDefKey> = self
             .struct_defs
@@ -433,6 +471,7 @@ impl ValueHolder {
             + self.dicts.len()
             + self.functions.len()
             + self.iterators.len()
+            + self.tasks.len()
             + self.struct_defs.len()
             + self.struct_instances.len()
     }
@@ -457,6 +496,7 @@ impl ValueHolder {
             dicts: self.dicts.len(),
             functions: self.functions.len(),
             iterators: self.iterators.len(),
+            tasks: self.tasks.len(),
             struct_defs: self.struct_defs.len(),
             struct_instances: self.struct_instances.len(),
             allocation_count: self.gc.allocation_count(),
@@ -476,6 +516,7 @@ impl ValueHolder {
             Value::Range(range) => !range.is_empty(),
             Value::Function(_) => true,
             Value::Iter(_) => true,
+            Value::Task(_) => true,
             Value::StructDef(_) => true,
             Value::StructInst(_) => true,
             Value::Void => false,
@@ -535,6 +576,14 @@ impl ValueHolder {
 
     pub fn get_mut_iter(&mut self, key: IterKey) -> WalrusResult<&mut ValueIter> {
         Self::check(self.iterators.get_mut(key))
+    }
+
+    pub fn get_task(&self, key: TaskKey) -> WalrusResult<&AsyncTask> {
+        Self::check(self.tasks.get(key))
+    }
+
+    pub fn get_mut_task(&mut self, key: TaskKey) -> WalrusResult<&mut AsyncTask> {
+        Self::check(self.tasks.get_mut(key))
     }
 
     pub fn get_struct_def(&self, key: StructDefKey) -> WalrusResult<&StructDefinition> {
@@ -681,6 +730,13 @@ impl ValueHolder {
                 func.to_string()
             }
             Value::Iter(_) => "<iter object>".to_string(),
+            Value::Task(task) => {
+                let task = self.get_task(task)?;
+                match task {
+                    AsyncTask::Pending { .. } => "<task:pending>".to_string(),
+                    AsyncTask::Ready(_) => "<task:ready>".to_string(),
+                }
+            }
             Value::StructDef(s) => {
                 let def = self.get_struct_def(s)?;
                 def.to_string()
@@ -702,6 +758,7 @@ pub struct HeapStats {
     pub dicts: usize,
     pub functions: usize,
     pub iterators: usize,
+    pub tasks: usize,
     pub struct_defs: usize,
     pub struct_instances: usize,
     pub allocation_count: usize,
@@ -714,6 +771,7 @@ impl HeapStats {
             + self.dicts
             + self.functions
             + self.iterators
+            + self.tasks
             + self.struct_defs
             + self.struct_instances
     }
@@ -748,6 +806,7 @@ pub enum HeapValue<'a> {
     Function(WalrusFunction),
     String(&'a str),
     Iter(ValueIter),
+    Task(AsyncTask),
     StructDef(StructDefinition),
     StructInst(StructInstance),
 }
@@ -764,6 +823,7 @@ new_key_type! {
     pub struct FuncKey;
     pub struct TupleKey;
     pub struct IterKey;
+    pub struct TaskKey;
     pub struct StructDefKey;
     pub struct StructInstKey;
     pub struct StringKey;
@@ -854,6 +914,14 @@ impl Resolve for StructInstKey {
     }
 }
 
+impl Resolve for TaskKey {
+    type Output = AsyncTask;
+
+    fn resolve(self) -> WalrusResult<Self::Output> {
+        with_arena(|arena| arena.get_task(self).cloned())
+    }
+}
+
 // ResolveMut now returns cloned data that the caller can modify.
 // To persist changes, use with_arena_mut directly.
 
@@ -878,5 +946,13 @@ impl ResolveMut for StructInstKey {
 
     fn resolve_mut(self) -> WalrusResult<Self::Output> {
         with_arena(|arena| arena.get_struct_inst(self).cloned())
+    }
+}
+
+impl ResolveMut for TaskKey {
+    type Output = AsyncTask;
+
+    fn resolve_mut(self) -> WalrusResult<Self::Output> {
+        with_arena(|arena| arena.get_task(self).cloned())
     }
 }

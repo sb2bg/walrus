@@ -269,6 +269,7 @@ impl<'a> VM<'a> {
                         function_name: format!("fn<{}>", func.name),
                         return_override: None,
                         module_binding: func.module_binding.clone(),
+                        awaiting_task: None,
                     };
 
                     self.call_stack.push(new_frame);

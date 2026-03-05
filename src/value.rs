@@ -6,8 +6,8 @@ use float_ord::FloatOrd;
 
 use crate::WalrusResult;
 use crate::arenas::{
-    DictKey, FuncKey, IterKey, ListKey, Resolve, StringKey, StructDefKey, StructInstKey, TupleKey,
-    ValueHolder,
+    DictKey, FuncKey, IterKey, ListKey, Resolve, StringKey, StructDefKey, StructInstKey, TaskKey,
+    TupleKey, ValueHolder,
 };
 use crate::iter::{CollectionIter, DictIter, RangeIter, StrIter, ValueIterator};
 use crate::range::RangeValue;
@@ -42,6 +42,12 @@ impl ValueIterator for ValueIter {
     }
 }
 
+#[derive(Debug, Clone)]
+pub enum AsyncTask {
+    Pending { function: FuncKey, args: Vec<Value> },
+    Ready(Value),
+}
+
 #[derive(Debug, PartialEq, Eq, Copy, Clone, Hash)]
 pub enum Value {
     // todo: consolidate ints and floats into single number type
@@ -56,6 +62,7 @@ pub enum Value {
     Module(DictKey),
     Function(FuncKey),
     Iter(IterKey),
+    Task(TaskKey),
     StructDef(StructDefKey),
     StructInst(StructInstKey),
     Void,
@@ -75,6 +82,7 @@ impl Value {
             Value::Module(_) => "module",
             Value::Function(_) => "function",
             Value::Iter(_) => "iter",
+            Value::Task(_) => "task",
             Value::StructDef(_) => "struct",
             Value::StructInst(_) => "struct instance",
             Value::Void => "void",
@@ -95,6 +103,7 @@ impl Value {
             Value::Range(r) => !r.is_empty(),
             Value::Function(_) => true,
             Value::Iter(_) => true,
+            Value::Task(_) => true,
             Value::StructDef(_) => true,
             Value::StructInst(_) => true,
         })
@@ -192,6 +201,17 @@ impl Value {
                 func.to_string()
             }
             Value::Iter(_) => "iter".to_string(),
+            Value::Task(task) => {
+                use crate::arenas::with_arena;
+                with_arena(|arena| -> crate::WalrusResult<String> {
+                    let task = arena.get_task(task)?;
+                    let state = match task {
+                        AsyncTask::Pending { .. } => "pending",
+                        AsyncTask::Ready(_) => "ready",
+                    };
+                    Ok(format!("<task:{state}>"))
+                })?
+            }
             Value::StructDef(s) => {
                 use crate::arenas::with_arena;
                 with_arena(|arena| arena.get_struct_def(s).map(|def| def.to_string()))?
@@ -220,6 +240,7 @@ impl Display for Value {
             Value::Module(module) => write!(f, "{:?}", module),
             Value::Function(func) => write!(f, "{:?}", func),
             Value::Iter(iter) => write!(f, "{:?}", iter),
+            Value::Task(task) => write!(f, "{:?}", task),
             Value::StructDef(s) => write!(f, "{:?}", s),
             Value::StructInst(s) => write!(f, "{:?}", s),
             Value::Void => write!(f, "void"),

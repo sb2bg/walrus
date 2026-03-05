@@ -72,6 +72,7 @@ MathFactor = BinOp<FactorOp, Unary>;
 
 Unary = {
     <o: UnaryOp> <e: Sp<Unary>> => NodeKind::UnaryOp(o, e),
+    "await" <e: Sp<Unary>> => NodeKind::Await(e),
     Pow,
 };
 
@@ -189,6 +190,7 @@ For: NodeKind = {
 };
 
 Func: NodeKind = {
+    "async" "fn" <n: IdentStr> ":" <a: Comma<IdentStr>> <b: SpBlock> => NodeKind::AsyncFunctionDefinition(n, a, b),
     "fn" <n: IdentStr> ":" <a: Comma<IdentStr>> <b: SpBlock> => NodeKind::FunctionDefinition(n, a, b),
 };
 
