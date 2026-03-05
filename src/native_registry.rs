@@ -110,6 +110,38 @@ pub static NATIVE_SPECS: &[NativeSpec] = &[
         native_core_gc_threshold
     ),
     native_spec!(
+        AsyncSpawn,
+        "std/async",
+        "spawn",
+        ["callable", "args"],
+        "Schedule a task from a function+args (or pass through an existing task).",
+        native_async_spawn
+    ),
+    native_spec!(
+        AsyncSleep,
+        "std/async",
+        "sleep",
+        ["ms"],
+        "Return a task that resolves after the requested delay in milliseconds.",
+        native_async_sleep
+    ),
+    native_spec!(
+        AsyncTimeout,
+        "std/async",
+        "timeout",
+        ["task", "ms"],
+        "Wrap a task and fail it if it does not complete before the timeout.",
+        native_async_timeout
+    ),
+    native_spec!(
+        AsyncGather,
+        "std/async",
+        "gather",
+        ["tasks"],
+        "Return a task that resolves to a list of results once all tasks complete.",
+        native_async_gather
+    ),
+    native_spec!(
         FileOpen,
         "std/io",
         "file_open",
@@ -204,6 +236,142 @@ pub static NATIVE_SPECS: &[NativeSpec] = &[
         ["code"],
         "Exit the process with a status code.",
         native_exit
+    ),
+    native_spec!(
+        NetTcpBind,
+        "std/net",
+        "tcp_bind",
+        ["host", "port"],
+        "Bind a TCP listener and return its handle.",
+        native_net_tcp_bind
+    ),
+    native_spec!(
+        NetTcpAccept,
+        "std/net",
+        "tcp_accept",
+        ["listener"],
+        "Accept one incoming connection and return a stream handle.",
+        native_net_tcp_accept
+    ),
+    native_spec!(
+        NetTcpConnect,
+        "std/net",
+        "tcp_connect",
+        ["host", "port"],
+        "Connect to a TCP host/port and return a stream handle.",
+        native_net_tcp_connect
+    ),
+    native_spec!(
+        NetTcpLocalPort,
+        "std/net",
+        "tcp_local_port",
+        ["listener"],
+        "Return the listener's local bound port.",
+        native_net_tcp_local_port
+    ),
+    native_spec!(
+        NetTcpRead,
+        "std/net",
+        "tcp_read",
+        ["stream", "max_bytes"],
+        "Read up to max_bytes from a stream; returns void on EOF.",
+        native_net_tcp_read
+    ),
+    native_spec!(
+        NetTcpReadLine,
+        "std/net",
+        "tcp_read_line",
+        ["stream"],
+        "Read one line from a stream; returns void on EOF.",
+        native_net_tcp_read_line
+    ),
+    native_spec!(
+        NetTcpWrite,
+        "std/net",
+        "tcp_write",
+        ["stream", "content"],
+        "Write utf8 content to a stream and return bytes written.",
+        native_net_tcp_write
+    ),
+    native_spec!(
+        NetTcpClose,
+        "std/net",
+        "tcp_close",
+        ["stream"],
+        "Close a TCP stream handle.",
+        native_net_tcp_close
+    ),
+    native_spec!(
+        NetTcpCloseListener,
+        "std/net",
+        "tcp_close_listener",
+        ["listener"],
+        "Close a TCP listener handle.",
+        native_net_tcp_close_listener
+    ),
+    native_spec!(
+        HttpParseRequestLine,
+        "std/http",
+        "parse_request_line",
+        ["line"],
+        "Parse an HTTP request line into method/path/query/version fields.",
+        native_http_parse_request_line
+    ),
+    native_spec!(
+        HttpParseQuery,
+        "std/http",
+        "parse_query",
+        ["query"],
+        "Parse a query string into a dict of key/value pairs.",
+        native_http_parse_query
+    ),
+    native_spec!(
+        HttpNormalizePath,
+        "std/http",
+        "normalize_path",
+        ["path"],
+        "Normalize an HTTP path (collapse duplicate slashes, trim trailing slash).",
+        native_http_normalize_path
+    ),
+    native_spec!(
+        HttpMatchRoute,
+        "std/http",
+        "match_route",
+        ["pattern", "path"],
+        "Match a route pattern against a path with :params and trailing * wildcard.",
+        native_http_match_route
+    ),
+    native_spec!(
+        HttpStatusText,
+        "std/http",
+        "status_text",
+        ["status"],
+        "Return the canonical reason phrase for an HTTP status code.",
+        native_http_status_text
+    ),
+    native_spec!(
+        HttpResponse,
+        "std/http",
+        "response",
+        ["status", "body"],
+        "Build an HTTP/1.1 response string with default headers.",
+        native_http_response
+    ),
+    native_spec!(
+        HttpResponseWithHeaders,
+        "std/http",
+        "response_with_headers",
+        ["status", "body", "headers"],
+        "Build an HTTP/1.1 response string with caller-provided headers.",
+        native_http_response_with_headers
+    ),
+    native_spec!(
+        HttpReadRequest,
+        "std/http",
+        "read_request",
+        ["stream", "max_body_bytes"],
+        "Read and parse one HTTP request from a TCP stream; returns void on EOF.",
+        native_http_read_request
     ),
     native_spec!(MathPi, "std/math", "pi", [], "Return pi.", native_math_pi),
     native_spec!(
@@ -713,6 +881,84 @@ fn native_core_gc_threshold(vm: &mut VM<'_>, args: &[Value], span: Span) -> Walr
     Ok(Value::Int(old as i64))
 }
 
+fn value_sequence(vm: &VM<'_>, value: Value, span: Span) -> WalrusResult<Vec<Value>> {
+    match value {
+        Value::List(key) => Ok(vm.get_heap().get_list(key)?.to_vec()),
+        Value::Tuple(key) => Ok(vm.get_heap().get_tuple(key)?.to_vec()),
+        other => Err(WalrusError::TypeMismatch {
+            expected: "list or tuple".to_string(),
+            found: other.get_type().to_string(),
+            span,
+            src: vm.source_ref().source().into(),
+            filename: vm.source_ref().filename().into(),
+        }),
+    }
+}
+
+fn value_sequence_or_void(vm: &VM<'_>, value: Value, span: Span) -> WalrusResult<Vec<Value>> {
+    if matches!(value, Value::Void) {
+        return Ok(Vec::new());
+    }
+    value_sequence(vm, value, span)
+}
+
+fn non_negative_millis(vm: &VM<'_>, value: Value, span: Span, name: &str) -> WalrusResult<u64> {
+    let ms = vm.value_to_int(value, span)?;
+    if ms < 0 {
+        return Err(WalrusError::GenericError {
+            message: format!("{name} must be >= 0"),
+        });
+    }
+    Ok(ms as u64)
+}
+
+fn native_async_spawn(vm: &mut VM<'_>, args: &[Value], span: Span) -> WalrusResult<Value> {
+    let call_args = value_sequence_or_void(vm, args[1], span)?;
+    vm.spawn_task_from_callable(args[0], call_args, span)
+}
+
+fn native_async_sleep(vm: &mut VM<'_>, args: &[Value], span: Span) -> WalrusResult<Value> {
+    let delay_ms = non_negative_millis(vm, args[0], span, "sleep milliseconds")?;
+    Ok(vm.create_sleep_task(delay_ms))
+}
+
+fn native_async_timeout(vm: &mut VM<'_>, args: &[Value], span: Span) -> WalrusResult<Value> {
+    let task_key = match args[0] {
+        Value::Task(task_key) => task_key,
+        other => {
+            return Err(WalrusError::TypeMismatch {
+                expected: "task".to_string(),
+                found: other.get_type().to_string(),
+                span,
+                src: vm.source_ref().source().into(),
+                filename: vm.source_ref().filename().into(),
+            });
+        }
+    };
+    let timeout_ms = non_negative_millis(vm, args[1], span, "timeout milliseconds")?;
+    Ok(vm.create_timeout_task(task_key, timeout_ms))
+}
+
+fn native_async_gather(vm: &mut VM<'_>, args: &[Value], span: Span) -> WalrusResult<Value> {
+    let items = value_sequence(vm, args[0], span)?;
+    let mut tasks = Vec::with_capacity(items.len());
+    for value in items {
+        match value {
+            Value::Task(task_key) => tasks.push(task_key),
+            other => {
+                return Err(WalrusError::TypeMismatch {
+                    expected: "task".to_string(),
+                    found: other.get_type().to_string(),
+                    span,
+                    src: vm.source_ref().source().into(),
+                    filename: vm.source_ref().filename().into(),
+                });
+            }
+        }
+    }
+    Ok(vm.create_gather_task(tasks))
+}
+
 fn native_file_open(vm: &mut VM<'_>, args: &[Value], span: Span) -> WalrusResult<Value> {
     let path = vm.value_to_string(args[0], span)?;
     let mode = vm.value_to_string(args[1], span)?;
@@ -792,6 +1038,275 @@ fn native_cwd(vm: &mut VM<'_>, _args: &[Value], _span: Span) -> WalrusResult<Val
 fn native_exit(vm: &mut VM<'_>, args: &[Value], span: Span) -> WalrusResult<Value> {
     let code = vm.value_to_int(args[0], span)?;
     std::process::exit(code as i32);
+}
+
+fn native_net_tcp_bind(vm: &mut VM<'_>, args: &[Value], span: Span) -> WalrusResult<Value> {
+    let host = vm.value_to_string(args[0], span)?;
+    let port = vm.value_to_int(args[1], span)?;
+    crate::stdlib::tcp_bind(&host, port, span)
+}
+
+fn native_net_tcp_accept(vm: &mut VM<'_>, args: &[Value], span: Span) -> WalrusResult<Value> {
+    let listener = vm.value_to_int(args[0], span)?;
+    crate::stdlib::tcp_accept(listener, span)
+}
+
+fn native_net_tcp_connect(vm: &mut VM<'_>, args: &[Value], span: Span) -> WalrusResult<Value> {
+    let host = vm.value_to_string(args[0], span)?;
+    let port = vm.value_to_int(args[1], span)?;
+    crate::stdlib::tcp_connect(&host, port, span)
+}
+
+fn native_net_tcp_local_port(vm: &mut VM<'_>, args: &[Value], span: Span) -> WalrusResult<Value> {
+    let listener = vm.value_to_int(args[0], span)?;
+    Ok(Value::Int(crate::stdlib::tcp_local_port(listener, span)?))
+}
+
+fn native_net_tcp_read(vm: &mut VM<'_>, args: &[Value], span: Span) -> WalrusResult<Value> {
+    let stream = vm.value_to_int(args[0], span)?;
+    let max_bytes = vm.value_to_int(args[1], span)?;
+    match crate::stdlib::tcp_read(stream, max_bytes, span)? {
+        Some(text) => Ok(vm.get_heap_mut().push(HeapValue::String(&text))),
+        None => Ok(Value::Void),
+    }
+}
+
+fn native_net_tcp_read_line(vm: &mut VM<'_>, args: &[Value], span: Span) -> WalrusResult<Value> {
+    let stream = vm.value_to_int(args[0], span)?;
+    match crate::stdlib::tcp_read_line(stream, span)? {
+        Some(line) => Ok(vm.get_heap_mut().push(HeapValue::String(&line))),
+        None => Ok(Value::Void),
+    }
+}
+
+fn native_net_tcp_write(vm: &mut VM<'_>, args: &[Value], span: Span) -> WalrusResult<Value> {
+    let stream = vm.value_to_int(args[0], span)?;
+    let content = vm.value_to_string(args[1], span)?;
+    Ok(Value::Int(crate::stdlib::tcp_write(
+        stream, &content, span,
+    )?))
+}
+
+fn native_net_tcp_close(vm: &mut VM<'_>, args: &[Value], span: Span) -> WalrusResult<Value> {
+    let stream = vm.value_to_int(args[0], span)?;
+    crate::stdlib::tcp_close(stream, span)?;
+    Ok(Value::Void)
+}
+
+fn native_net_tcp_close_listener(
+    vm: &mut VM<'_>,
+    args: &[Value],
+    span: Span,
+) -> WalrusResult<Value> {
+    let listener = vm.value_to_int(args[0], span)?;
+    crate::stdlib::tcp_close_listener(listener, span)?;
+    Ok(Value::Void)
+}
+
+fn insert_key_value(
+    vm: &mut VM<'_>,
+    dict: &mut rustc_hash::FxHashMap<Value, Value>,
+    key: &str,
+    value: Value,
+) {
+    let key_value = vm.get_heap_mut().push(HeapValue::String(key));
+    dict.insert(key_value, value);
+}
+
+fn heap_string(vm: &mut VM<'_>, text: &str) -> Value {
+    vm.get_heap_mut().push(HeapValue::String(text))
+}
+
+fn type_mismatch_error(vm: &VM<'_>, expected: &str, found: Value, span: Span) -> WalrusError {
+    WalrusError::TypeMismatch {
+        expected: expected.to_string(),
+        found: found.get_type().to_string(),
+        span,
+        src: vm.source_ref().source().to_string(),
+        filename: vm.source_ref().filename().to_string(),
+    }
+}
+
+fn http_error_dict(vm: &mut VM<'_>, message: &str) -> Value {
+    let mut dict = rustc_hash::FxHashMap::default();
+    insert_key_value(vm, &mut dict, "ok", Value::Bool(false));
+    let message_value = heap_string(vm, message);
+    insert_key_value(vm, &mut dict, "error", message_value);
+    vm.get_heap_mut().push(HeapValue::Dict(dict))
+}
+
+fn native_http_parse_request_line(
+    vm: &mut VM<'_>,
+    args: &[Value],
+    span: Span,
+) -> WalrusResult<Value> {
+    let line = vm.value_to_string(args[0], span)?;
+
+    match crate::stdlib::http_parse_request_line(&line) {
+        Ok(parsed) => {
+            let mut dict = rustc_hash::FxHashMap::default();
+            insert_key_value(vm, &mut dict, "ok", Value::Bool(true));
+            let method_value = heap_string(vm, &parsed.method);
+            insert_key_value(vm, &mut dict, "method", method_value);
+            let target_value = heap_string(vm, &parsed.target);
+            insert_key_value(vm, &mut dict, "target", target_value);
+            let path_value = heap_string(vm, &parsed.path);
+            insert_key_value(vm, &mut dict, "path", path_value);
+            let query_value = heap_string(vm, &parsed.query);
+            insert_key_value(vm, &mut dict, "query", query_value);
+            let version_value = heap_string(vm, &parsed.version);
+            insert_key_value(vm, &mut dict, "version", version_value);
+            Ok(vm.get_heap_mut().push(HeapValue::Dict(dict)))
+        }
+        Err(message) => Ok(http_error_dict(vm, &message)),
+    }
+}
+
+fn native_http_parse_query(vm: &mut VM<'_>, args: &[Value], span: Span) -> WalrusResult<Value> {
+    let query = vm.value_to_string(args[0], span)?;
+    let pairs = crate::stdlib::http_parse_query(&query);
+
+    let mut dict = rustc_hash::FxHashMap::default();
+    for (key, value) in pairs {
+        let key_value = heap_string(vm, &key);
+        let val_value = heap_string(vm, &value);
+        dict.insert(key_value, val_value);
+    }
+
+    Ok(vm.get_heap_mut().push(HeapValue::Dict(dict)))
+}
+
+fn native_http_normalize_path(vm: &mut VM<'_>, args: &[Value], span: Span) -> WalrusResult<Value> {
+    let path = vm.value_to_string(args[0], span)?;
+    let normalized = crate::stdlib::http_normalize_path(&path);
+    Ok(heap_string(vm, &normalized))
+}
+
+fn native_http_match_route(vm: &mut VM<'_>, args: &[Value], span: Span) -> WalrusResult<Value> {
+    let pattern = vm.value_to_string(args[0], span)?;
+    let path = vm.value_to_string(args[1], span)?;
+    let matched = crate::stdlib::http_match_route(&pattern, &path);
+
+    let mut params = rustc_hash::FxHashMap::default();
+    for (name, value) in matched.params {
+        let key = heap_string(vm, &name);
+        let val = heap_string(vm, &value);
+        params.insert(key, val);
+    }
+    let params_dict = vm.get_heap_mut().push(HeapValue::Dict(params));
+
+    let wildcard_value = match matched.wildcard {
+        Some(wildcard) => heap_string(vm, &wildcard),
+        None => Value::Void,
+    };
+
+    let mut result = rustc_hash::FxHashMap::default();
+    insert_key_value(vm, &mut result, "found", Value::Bool(matched.found));
+    let pattern_value = heap_string(vm, &matched.pattern);
+    insert_key_value(vm, &mut result, "pattern", pattern_value);
+    let path_value = heap_string(vm, &matched.path);
+    insert_key_value(vm, &mut result, "path", path_value);
+    insert_key_value(vm, &mut result, "params", params_dict);
+    insert_key_value(vm, &mut result, "wildcard", wildcard_value);
+
+    Ok(vm.get_heap_mut().push(HeapValue::Dict(result)))
+}
+
+fn native_http_status_text(vm: &mut VM<'_>, args: &[Value], span: Span) -> WalrusResult<Value> {
+    let status = vm.value_to_int(args[0], span)?;
+    let reason = crate::stdlib::http_status_text(status);
+    Ok(heap_string(vm, reason))
+}
+
+fn native_http_response(vm: &mut VM<'_>, args: &[Value], span: Span) -> WalrusResult<Value> {
+    let status = vm.value_to_int(args[0], span)?;
+    let body = vm.value_to_string(args[1], span)?;
+    let response = crate::stdlib::http_build_response(status, &body, &[], span)?;
+    Ok(heap_string(vm, &response))
+}
+
+fn native_http_response_with_headers(
+    vm: &mut VM<'_>,
+    args: &[Value],
+    span: Span,
+) -> WalrusResult<Value> {
+    let status = vm.value_to_int(args[0], span)?;
+    let body = vm.value_to_string(args[1], span)?;
+
+    let headers_key = match args[2] {
+        Value::Dict(key) => key,
+        other => return Err(type_mismatch_error(vm, "dict", other, span)),
+    };
+
+    let header_entries = vm
+        .get_heap()
+        .get_dict(headers_key)?
+        .iter()
+        .map(|(&k, &v)| (k, v))
+        .collect::<Vec<_>>();
+
+    let mut headers = Vec::with_capacity(header_entries.len());
+    for (key_value, value_value) in header_entries {
+        let name = vm.value_to_string(key_value, span)?;
+        let value = vm.value_to_string(value_value, span)?;
+        headers.push((name, value));
+    }
+
+    let response = crate::stdlib::http_build_response(status, &body, &headers, span)?;
+    Ok(heap_string(vm, &response))
+}
+
+fn native_http_read_request(vm: &mut VM<'_>, args: &[Value], span: Span) -> WalrusResult<Value> {
+    let stream = vm.value_to_int(args[0], span)?;
+    let max_body_bytes = vm.value_to_int(args[1], span)?;
+
+    match crate::stdlib::http_read_request(stream, max_body_bytes, span)? {
+        crate::stdlib::HttpReadOutcome::Eof => Ok(Value::Void),
+        crate::stdlib::HttpReadOutcome::BadRequest(message) => Ok(http_error_dict(vm, &message)),
+        crate::stdlib::HttpReadOutcome::Request(request) => {
+            let mut headers = rustc_hash::FxHashMap::default();
+            for (name, value) in request.headers {
+                let key = heap_string(vm, &name);
+                let val = heap_string(vm, &value);
+                headers.insert(key, val);
+            }
+            let headers_value = vm.get_heap_mut().push(HeapValue::Dict(headers));
+
+            let query_pairs = crate::stdlib::http_parse_query(&request.query);
+            let mut query = rustc_hash::FxHashMap::default();
+            for (name, value) in query_pairs {
+                let key = heap_string(vm, &name);
+                let val = heap_string(vm, &value);
+                query.insert(key, val);
+            }
+            let query_value = vm.get_heap_mut().push(HeapValue::Dict(query));
+
+            let mut dict = rustc_hash::FxHashMap::default();
+            insert_key_value(vm, &mut dict, "ok", Value::Bool(true));
+            let method_value = heap_string(vm, &request.method);
+            insert_key_value(vm, &mut dict, "method", method_value);
+            let target_value = heap_string(vm, &request.target);
+            insert_key_value(vm, &mut dict, "target", target_value);
+            let path_value = heap_string(vm, &request.path);
+            insert_key_value(vm, &mut dict, "path", path_value);
+            let query_text_value = heap_string(vm, &request.query);
+            insert_key_value(vm, &mut dict, "query", query_text_value);
+            insert_key_value(vm, &mut dict, "query_params", query_value);
+            let version_value = heap_string(vm, &request.version);
+            insert_key_value(vm, &mut dict, "version", version_value);
+            insert_key_value(vm, &mut dict, "headers", headers_value);
+            let body_value = heap_string(vm, &request.body);
+            insert_key_value(vm, &mut dict, "body", body_value);
+            insert_key_value(
+                vm,
+                &mut dict,
+                "content_length",
+                Value::Int(request.content_length),
+            );
+
+            Ok(vm.get_heap_mut().push(HeapValue::Dict(dict)))
+        }
+    }
 }
 
 fn native_math_pi(_vm: &mut VM<'_>, _args: &[Value], _span: Span) -> WalrusResult<Value> {

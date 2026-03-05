@@ -1,6 +1,7 @@
 use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::Hash;
+use std::time::Instant;
 
 use float_ord::FloatOrd;
 
@@ -45,6 +46,9 @@ impl ValueIterator for ValueIter {
 #[derive(Debug, Clone)]
 pub enum AsyncTask {
     Pending { function: FuncKey, args: Vec<Value> },
+    Sleep { wake_at: Instant },
+    Timeout { task: TaskKey, deadline: Instant },
+    Gather { tasks: Vec<TaskKey> },
     Ready(Value),
     Failed(Value),
 }
@@ -208,6 +212,9 @@ impl Value {
                     let task = arena.get_task(task)?;
                     let state = match task {
                         AsyncTask::Pending { .. } => "pending",
+                        AsyncTask::Sleep { .. } => "pending",
+                        AsyncTask::Timeout { .. } => "pending",
+                        AsyncTask::Gather { .. } => "pending",
                         AsyncTask::Ready(_) => "ready",
                         AsyncTask::Failed(_) => "failed",
                     };

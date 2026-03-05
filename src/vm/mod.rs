@@ -1,10 +1,11 @@
 use std::collections::VecDeque;
 use std::ptr::NonNull;
 use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 use float_ord::FloatOrd;
 use log::{debug, log_enabled};
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use instruction_set::InstructionSet;
 
@@ -131,6 +132,7 @@ pub struct VM<'a> {
     async_task_queue: VecDeque<crate::arenas::TaskKey>,
     run_until_depth_stack: Vec<usize>,
     task_exception_floor_stack: Vec<usize>,
+    await_task_roots: Vec<crate::arenas::TaskKey>,
     source_ref: SourceRef<'a>,
     // Debugger state
     debugger: Option<debugger::Debugger>,
@@ -191,6 +193,7 @@ impl<'a> VM<'a> {
             async_task_queue: VecDeque::new(),
             run_until_depth_stack: Vec::new(),
             task_exception_floor_stack: Vec::new(),
+            await_task_roots: Vec::new(),
             source_ref,
             debugger: None,
             debug_mode: false,
@@ -486,6 +489,7 @@ impl<'a> VM<'a> {
                 + self.locals.len()
                 + self.globals.len()
                 + self.async_task_queue.len()
+                + self.await_task_roots.len()
                 + 96,
         );
 
@@ -512,6 +516,12 @@ impl<'a> VM<'a> {
         // Scheduled async tasks must remain rooted even when no user variable currently
         // references them (fire-and-forget tasks queued by the event loop).
         for &task_key in &self.async_task_queue {
+            roots.push(Value::Task(task_key));
+        }
+
+        // Awaited tasks need to be rooted while the await loop is spinning even though the
+        // operand stack value has been popped.
+        for &task_key in &self.await_task_roots {
             roots.push(Value::Task(task_key));
         }
 
@@ -629,6 +639,87 @@ impl<'a> VM<'a> {
         self.create_task_for_function_key(function_key, args)
     }
 
+    fn create_non_runnable_task(&mut self, task: AsyncTask) -> Value {
+        self.get_heap_mut().push(HeapValue::Task(task))
+    }
+
+    pub(crate) fn spawn_task_from_callable(
+        &mut self,
+        callable: Value,
+        args: Vec<Value>,
+        span: Span,
+    ) -> WalrusResult<Value> {
+        match callable {
+            Value::Task(task_key) => {
+                if !args.is_empty() {
+                    return Err(WalrusError::InvalidArgCount {
+                        name: "spawn".to_string(),
+                        expected: 0,
+                        got: args.len(),
+                        span,
+                        src: self.source_ref.source().into(),
+                        filename: self.source_ref.filename().into(),
+                    });
+                }
+                Ok(Value::Task(task_key))
+            }
+            Value::Function(function_key) => {
+                let function = self.get_heap().get_function(function_key)?;
+                let expected = match function {
+                    WalrusFunction::Vm(func) => func.arity,
+                    WalrusFunction::Rust(func) => func.args,
+                    WalrusFunction::Native(func) => func.arity(),
+                    WalrusFunction::TreeWalk(_) => {
+                        return Err(WalrusError::NodeFunctionNotSupportedInVm {
+                            span,
+                            src: self.source_ref.source().into(),
+                            filename: self.source_ref.filename().into(),
+                        });
+                    }
+                };
+                if args.len() != expected {
+                    return Err(WalrusError::InvalidArgCount {
+                        name: function.to_string(),
+                        expected,
+                        got: args.len(),
+                        span,
+                        src: self.source_ref.source().into(),
+                        filename: self.source_ref.filename().into(),
+                    });
+                }
+                Ok(self.create_task_for_function_key(function_key, args))
+            }
+            other => Err(WalrusError::TypeMismatch {
+                expected: "function or task".to_string(),
+                found: other.get_type().to_string(),
+                span,
+                src: self.source_ref.source().into(),
+                filename: self.source_ref.filename().into(),
+            }),
+        }
+    }
+
+    pub(crate) fn create_sleep_task(&mut self, delay_ms: u64) -> Value {
+        let wake_at = Instant::now() + Duration::from_millis(delay_ms);
+        self.create_non_runnable_task(AsyncTask::Sleep { wake_at })
+    }
+
+    pub(crate) fn create_timeout_task(
+        &mut self,
+        task_key: crate::arenas::TaskKey,
+        timeout_ms: u64,
+    ) -> Value {
+        let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+        self.create_non_runnable_task(AsyncTask::Timeout {
+            task: task_key,
+            deadline,
+        })
+    }
+
+    pub(crate) fn create_gather_task(&mut self, tasks: Vec<crate::arenas::TaskKey>) -> Value {
+        self.create_non_runnable_task(AsyncTask::Gather { tasks })
+    }
+
     fn complete_task_on_frame_return(
         &mut self,
         task_key: Option<crate::arenas::TaskKey>,
@@ -688,18 +779,104 @@ impl<'a> VM<'a> {
         self.ip = caller_ip;
     }
 
-    fn is_task_pending(&self, task_key: crate::arenas::TaskKey) -> WalrusResult<bool> {
+    fn is_task_runnable(&self, task_key: crate::arenas::TaskKey) -> WalrusResult<bool> {
         let task = self.get_heap().get_task(task_key)?;
         Ok(matches!(task, AsyncTask::Pending { .. }))
     }
 
-    fn task_resolution(&self, task_key: crate::arenas::TaskKey) -> WalrusResult<TaskResolution> {
+    fn poll_task_resolution(
+        &mut self,
+        task_key: crate::arenas::TaskKey,
+    ) -> WalrusResult<TaskResolution> {
+        let task = self.get_heap().get_task(task_key)?.clone();
+        match task {
+            AsyncTask::Pending { .. } => Ok(TaskResolution::Pending),
+            AsyncTask::Ready(value) => Ok(TaskResolution::Ready(value)),
+            AsyncTask::Failed(value) => Ok(TaskResolution::Failed(value)),
+            AsyncTask::Sleep { wake_at } => {
+                if Instant::now() >= wake_at {
+                    *self.get_heap_mut().get_mut_task(task_key)? = AsyncTask::Ready(Value::Void);
+                    Ok(TaskResolution::Ready(Value::Void))
+                } else {
+                    Ok(TaskResolution::Pending)
+                }
+            }
+            AsyncTask::Timeout { task, deadline } => match self.poll_task_resolution(task)? {
+                TaskResolution::Ready(value) => {
+                    *self.get_heap_mut().get_mut_task(task_key)? = AsyncTask::Ready(value);
+                    Ok(TaskResolution::Ready(value))
+                }
+                TaskResolution::Failed(value) => {
+                    *self.get_heap_mut().get_mut_task(task_key)? = AsyncTask::Failed(value);
+                    Ok(TaskResolution::Failed(value))
+                }
+                TaskResolution::Pending => {
+                    if Instant::now() >= deadline {
+                        let message = self
+                            .get_heap_mut()
+                            .push(HeapValue::String("task timed out"));
+                        *self.get_heap_mut().get_mut_task(task_key)? = AsyncTask::Failed(message);
+                        Ok(TaskResolution::Failed(message))
+                    } else {
+                        Ok(TaskResolution::Pending)
+                    }
+                }
+            },
+            AsyncTask::Gather { tasks } => {
+                let mut values = Vec::with_capacity(tasks.len());
+                for child in tasks {
+                    match self.poll_task_resolution(child)? {
+                        TaskResolution::Ready(value) => values.push(value),
+                        TaskResolution::Failed(value) => {
+                            *self.get_heap_mut().get_mut_task(task_key)? = AsyncTask::Failed(value);
+                            return Ok(TaskResolution::Failed(value));
+                        }
+                        TaskResolution::Pending => {
+                            return Ok(TaskResolution::Pending);
+                        }
+                    }
+                }
+
+                let list = self.get_heap_mut().push(HeapValue::List(values));
+                *self.get_heap_mut().get_mut_task(task_key)? = AsyncTask::Ready(list);
+                Ok(TaskResolution::Ready(list))
+            }
+        }
+    }
+
+    fn next_deadline_for_task(
+        &self,
+        task_key: crate::arenas::TaskKey,
+        visited: &mut FxHashSet<crate::arenas::TaskKey>,
+    ) -> WalrusResult<Option<Instant>> {
+        if !visited.insert(task_key) {
+            return Ok(None);
+        }
+
         let task = self.get_heap().get_task(task_key)?;
-        Ok(match task {
-            AsyncTask::Pending { .. } => TaskResolution::Pending,
-            AsyncTask::Ready(value) => TaskResolution::Ready(*value),
-            AsyncTask::Failed(value) => TaskResolution::Failed(*value),
-        })
+        match task {
+            AsyncTask::Sleep { wake_at } => Ok(Some(*wake_at)),
+            AsyncTask::Timeout { task, deadline } => {
+                let nested = self.next_deadline_for_task(*task, visited)?;
+                Ok(match nested {
+                    Some(value) => Some((*deadline).min(value)),
+                    None => Some(*deadline),
+                })
+            }
+            AsyncTask::Gather { tasks } => {
+                let mut soonest: Option<Instant> = None;
+                for &child in tasks {
+                    if let Some(deadline) = self.next_deadline_for_task(child, visited)? {
+                        soonest = Some(match soonest {
+                            Some(current) => current.min(deadline),
+                            None => deadline,
+                        });
+                    }
+                }
+                Ok(soonest)
+            }
+            AsyncTask::Pending { .. } | AsyncTask::Ready(_) | AsyncTask::Failed(_) => Ok(None),
+        }
     }
 
     fn next_runnable_task(
@@ -707,12 +884,12 @@ impl<'a> VM<'a> {
         target: crate::arenas::TaskKey,
     ) -> WalrusResult<Option<crate::arenas::TaskKey>> {
         while let Some(task_key) = self.async_task_queue.pop_front() {
-            if self.is_task_pending(task_key)? {
+            if self.is_task_runnable(task_key)? {
                 return Ok(Some(task_key));
             }
         }
 
-        if self.is_task_pending(target)? {
+        if self.is_task_runnable(target)? {
             Ok(Some(target))
         } else {
             Ok(None)
@@ -791,7 +968,10 @@ impl<'a> VM<'a> {
                     return Ok(());
                 }
 
-                if self.is_task_pending(task_key)? {
+                if matches!(
+                    self.poll_task_resolution(task_key)?,
+                    TaskResolution::Pending
+                ) {
                     let failure = self.get_heap_mut().push(HeapValue::String(
                         "Async task exited without returning a result",
                     ));
@@ -2874,14 +3054,17 @@ impl<'a> VM<'a> {
                     };
                     let caller_depth = self.call_stack.len();
                     let resume_ip = self.ip;
+                    self.await_task_roots.push(task_key);
 
                     loop {
-                        match self.task_resolution(task_key)? {
+                        match self.poll_task_resolution(task_key)? {
                             TaskResolution::Ready(value) => {
                                 self.push(value);
+                                self.await_task_roots.pop();
                                 break;
                             }
                             TaskResolution::Failed(error_value) => {
+                                self.await_task_roots.pop();
                                 self.throw_value(error_value, span)?;
                                 if self.call_stack.len() != caller_depth || self.ip != resume_ip {
                                     continue 'vm;
@@ -2892,6 +3075,17 @@ impl<'a> VM<'a> {
                         }
 
                         let Some(next_task) = self.next_runnable_task(task_key)? else {
+                            let mut visited = FxHashSet::default();
+                            if let Some(deadline) =
+                                self.next_deadline_for_task(task_key, &mut visited)?
+                            {
+                                let now = Instant::now();
+                                if deadline > now {
+                                    std::thread::sleep(deadline.duration_since(now));
+                                }
+                                continue;
+                            }
+                            self.await_task_roots.pop();
                             return Err(WalrusError::GenericError {
                                 message: "Event loop deadlock: awaited task is pending with no runnable tasks".to_string(),
                             });
@@ -2902,11 +3096,14 @@ impl<'a> VM<'a> {
                         if self.call_stack.len() != caller_depth || self.ip != resume_ip {
                             // Control was transferred (for example by throw/catch while resolving
                             // a task). Resume normal VM dispatch at the new location.
+                            self.await_task_roots.pop();
                             continue 'vm;
                         }
                         if !keep_result {
-                            if matches!(self.task_resolution(next_task)?, TaskResolution::Ready(_))
-                            {
+                            if matches!(
+                                self.poll_task_resolution(next_task)?,
+                                TaskResolution::Ready(_)
+                            ) {
                                 // Background task completion result is irrelevant to this `await`.
                                 let _ = self.pop(opcode, span)?;
                             }

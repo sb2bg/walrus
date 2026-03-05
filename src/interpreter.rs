@@ -612,6 +612,11 @@ impl<'a> Interpreter<'a> {
                 src: self.source_ref.source().into(),
                 filename: self.source_ref.filename().into(),
             }),
+            AsyncTask::Sleep { .. } | AsyncTask::Timeout { .. } | AsyncTask::Gather { .. } => {
+                Err(WalrusError::GenericError {
+                    message: "std/async task wrappers are only supported in VM mode".to_string(),
+                })
+            }
             AsyncTask::Pending { function, args } => {
                 let function = with_arena(|arena| arena.get_function(function).cloned())?;
                 let result = match function {

@@ -168,7 +168,10 @@ impl ValueHolder {
             HeapValue::Task(task) => {
                 let arg_count = match task {
                     AsyncTask::Pending { args, .. } => args.len(),
+                    AsyncTask::Gather { tasks } => tasks.len(),
                     AsyncTask::Ready(_) => 0,
+                    AsyncTask::Sleep { .. } => 0,
+                    AsyncTask::Timeout { .. } => 1,
                     AsyncTask::Failed(_) => 0,
                 };
                 estimate_task_size(arg_count)
@@ -284,6 +287,15 @@ impl ValueHolder {
                             self.mark(Value::Function(function));
                             for arg in args {
                                 self.mark(arg);
+                            }
+                        }
+                        AsyncTask::Sleep { .. } => {}
+                        AsyncTask::Timeout { task, .. } => {
+                            self.mark(Value::Task(task));
+                        }
+                        AsyncTask::Gather { tasks } => {
+                            for task in tasks {
+                                self.mark(Value::Task(task));
                             }
                         }
                         AsyncTask::Ready(value) => {
@@ -738,6 +750,9 @@ impl ValueHolder {
                 let task = self.get_task(task)?;
                 match task {
                     AsyncTask::Pending { .. } => "<task:pending>".to_string(),
+                    AsyncTask::Sleep { .. } => "<task:pending>".to_string(),
+                    AsyncTask::Timeout { .. } => "<task:pending>".to_string(),
+                    AsyncTask::Gather { .. } => "<task:pending>".to_string(),
                     AsyncTask::Ready(_) => "<task:ready>".to_string(),
                     AsyncTask::Failed(_) => "<task:failed>".to_string(),
                 }

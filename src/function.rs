@@ -134,6 +134,11 @@ pub enum NativeFunction {
     CoreGc,
     CoreHeapStats,
     CoreGcThreshold,
+    // Async primitives
+    AsyncSpawn,
+    AsyncSleep,
+    AsyncTimeout,
+    AsyncGather,
     // File I/O
     FileOpen,
     FileRead,
