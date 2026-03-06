@@ -1777,6 +1777,7 @@ dependencies = [
  "tokio",
  "toml",
  "tower-lsp",
+ "url",
  "uuid",
 ]
 
