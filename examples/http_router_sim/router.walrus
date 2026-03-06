@@ -55,13 +55,20 @@ struct Middleware {
         self.stack = self.stack + [handler];
     }
 
+    fn settle : self, value {
+        if core.type(value) == "task" {
+            return await value;
+        }
+        return value;
+    }
+
     fn run : self, request, next {
         let i = 0;
         let n = core.len(self.stack);
 
         while i < n {
             let mw = self.stack[i];
-            let result = mw(request);
+            let result = self.settle(mw(request));
 
             // If middleware returns a response, short-circuit
             if result != void {
@@ -72,7 +79,7 @@ struct Middleware {
         }
 
         // All middleware passed, call the route handler
-        return next(request);
+        return self.settle(next(request));
     }
 }
 
@@ -132,6 +139,13 @@ struct App {
         self.error_handler = handler;
     }
 
+    fn settle : self, value {
+        if core.type(value) == "task" {
+            return await value;
+        }
+        return value;
+    }
+
     fn dispatch : self, request {
         let i = 0;
         let n = core.len(self.routes);
@@ -155,7 +169,7 @@ struct App {
         }
 
         if self.not_found_handler != void {
-            return self.not_found_handler(request);
+            return self.settle(self.not_found_handler(request));
         }
 
         let method = request["method"];
@@ -186,7 +200,7 @@ struct App {
                     response = self.dispatch(request);
                 } catch err {
                     if self.error_handler != void {
-                        response = self.error_handler(err, request);
+                        response = self.settle(self.error_handler(err, request));
                     } else {
                         response = text(500, "internal server error\n");
                     }
