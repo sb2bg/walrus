@@ -227,6 +227,12 @@ if core.len(args) < 2 {
 | `net.tcp_accept(listener)`          | Accept one incoming connection and return a stream handle     |
 | `net.tcp_connect(host, port)`       | Connect to a host/port and return a stream handle             |
 | `net.tcp_local_port(listener)`      | Return the listener's local bound port (useful with port `0`) |
+| `net.tcp_peer_addr(stream)`         | Return the remote peer address for a connected stream         |
+| `net.tcp_stream_local_addr(stream)` | Return the local socket address for a connected stream        |
+| `net.tcp_set_read_timeout(stream, ms_or_void)` | Set or clear the read timeout on a stream       |
+| `net.tcp_set_write_timeout(stream, ms_or_void)`| Set or clear the write timeout on a stream      |
+| `net.tcp_set_nodelay(stream, enabled)` | Enable or disable `TCP_NODELAY`                            |
+| `net.tcp_shutdown(stream, how)`     | Shutdown `read`, `write`, or `both` sides of a TCP stream    |
 | `net.tcp_read(stream, max_bytes)`   | Read up to `max_bytes` bytes (returns `void` at EOF)          |
 | `net.tcp_read_line(stream)`         | Read one line (returns `void` at EOF)                         |
 | `net.tcp_write(stream, content)`    | Write UTF-8 content and return bytes written                  |
@@ -263,11 +269,15 @@ net.tcp_close_listener(listener);
 | -------------------------------------------------- | ------------------------------------------------------------------------ |
 | `http.parse_request_line(line)`                    | Parse request line into `{ ok, method, target, path, query, version }` |
 | `http.parse_query(query)`                          | Parse query string into a dict                                           |
+| `http.parse_query_pairs(query)`                    | Parse query string into a decoded list of `[key, value]` pairs          |
 | `http.normalize_path(path)`                        | Normalize path (collapse repeated slashes, trim trailing slash)          |
 | `http.match_route(pattern, path)`                  | Route matching with `:param` segments and trailing `*` wildcard          |
 | `http.status_text(status)`                         | Return status reason phrase (for example `404 -> "Not Found"`)           |
 | `http.response(status, body)`                      | Build an HTTP/1.1 response string with default headers                   |
 | `http.response_with_headers(status, body, headers)`| Build response with caller-provided headers dict                         |
+| `http.make_response(status, body)`                 | Build a response object `{status, body, headers, header_pairs}`          |
+| `http.make_response_with_headers(status, body, headers)` | Build a response object with headers                              |
+| `http.serialize_response(response)`                | Serialize a response object back into an HTTP/1.1 response string        |
 | `http.read_request(stream, max_body_bytes)`        | Read/parse one HTTP request (`void` on EOF, `{ ok: false, error }` on malformed input) |
 
 **Example: Minimal HTTP Echo**
@@ -289,6 +299,18 @@ if req != void and req["ok"] {
 net.tcp_close(stream);
 net.tcp_close_listener(listener);
 ```
+
+**HTTP Benchmark Snapshot**
+
+Representative local loopback run using [`benchmarks/http_bench/run_http_bench.py`](benchmarks/http_bench/run_http_bench.py): `ab -k`, `10,000` requests per scenario, `1,000` warmup requests, concurrency `32`, peak RSS sampled from the server process.
+
+| Target | `GET /health` | `GET /users/42/posts/7` | `POST /echo` | Peak RSS |
+| ------ | -------------- | ------------------------ | ------------ | -------- |
+| Walrus | `23,441 req/s`, `p95 2 ms`, `p99 2 ms` | `21,285 req/s`, `p95 2 ms`, `p99 2 ms` | `17,633 req/s`, `p95 3 ms`, `p99 5 ms` | `23.42 MiB` |
+| Flask + Waitress | `5,740 req/s`, `p95 11 ms`, `p99 21 ms` | `6,806 req/s`, `p95 8 ms`, `p99 13 ms` | `6,953 req/s`, `p95 8 ms`, `p99 9 ms` | `44.23 MiB` |
+| FastAPI + Uvicorn | `6,680 req/s`, `p95 6 ms`, `p99 11 ms` | `5,883 req/s`, `p95 7 ms`, `p99 13 ms` | `9,528 req/s`, `p95 4 ms`, `p99 5 ms` | `59.62 MiB` |
+
+On this run, Walrus delivered roughly `3.5x` FastAPI/Uvicorn's throughput on `GET /health` while using under half its memory. See [`benchmarks/http_bench/README.md`](benchmarks/http_bench/README.md) for methodology and rerun instructions.
 
 #### `std/math` - Math and Random Utilities
 
