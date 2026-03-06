@@ -149,6 +149,7 @@ pub enum NativeFunction {
     AsyncChannel,
     AsyncSend,
     AsyncRecv,
+    AsyncClose,
     // File I/O
     FileOpen,
     FileRead,
