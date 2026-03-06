@@ -849,21 +849,31 @@ impl<'a> VM<'a> {
             }
             IoHttpOutcome::Request(req) => {
                 let mut headers = FxHashMap::default();
+                let mut header_pairs = Vec::with_capacity(req.headers.len());
                 for (name, value) in &req.headers {
                     let key = self.get_heap_mut().push(HeapValue::String(name));
                     let val = self.get_heap_mut().push(HeapValue::String(value));
                     headers.insert(key, val);
+                    let pair = self.get_heap_mut().push(HeapValue::List(vec![key, val]));
+                    header_pairs.push(pair);
                 }
                 let headers_value = self.get_heap_mut().push(HeapValue::Dict(headers));
+                let header_pairs_value = self.get_heap_mut().push(HeapValue::List(header_pairs));
 
                 let query_pairs = crate::stdlib::http_parse_query(&req.query);
                 let mut query = FxHashMap::default();
+                let mut query_pairs_values = Vec::with_capacity(query_pairs.len());
                 for (name, value) in query_pairs {
                     let key = self.get_heap_mut().push(HeapValue::String(&name));
                     let val = self.get_heap_mut().push(HeapValue::String(&value));
                     query.insert(key, val);
+                    let pair = self.get_heap_mut().push(HeapValue::List(vec![key, val]));
+                    query_pairs_values.push(pair);
                 }
                 let query_value = self.get_heap_mut().push(HeapValue::Dict(query));
+                let query_pairs_value = self
+                    .get_heap_mut()
+                    .push(HeapValue::List(query_pairs_values));
 
                 let mut dict = FxHashMap::default();
                 let ok_key = self.get_heap_mut().push(HeapValue::String("ok"));
@@ -882,11 +892,15 @@ impl<'a> VM<'a> {
                 dict.insert(query_key, query_text_val);
                 let qp_key = self.get_heap_mut().push(HeapValue::String("query_params"));
                 dict.insert(qp_key, query_value);
+                let qpp_key = self.get_heap_mut().push(HeapValue::String("query_pairs"));
+                dict.insert(qpp_key, query_pairs_value);
                 let ver_key = self.get_heap_mut().push(HeapValue::String("version"));
                 let ver_val = self.get_heap_mut().push(HeapValue::String(&req.version));
                 dict.insert(ver_key, ver_val);
                 let hdr_key = self.get_heap_mut().push(HeapValue::String("headers"));
                 dict.insert(hdr_key, headers_value);
+                let hdr_pairs_key = self.get_heap_mut().push(HeapValue::String("header_pairs"));
+                dict.insert(hdr_pairs_key, header_pairs_value);
                 let body_key = self.get_heap_mut().push(HeapValue::String("body"));
                 let body_val = self.get_heap_mut().push(HeapValue::String(&req.body));
                 dict.insert(body_key, body_val);

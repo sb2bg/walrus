@@ -5,43 +5,23 @@ import "std/async" as asyncx;
 // --- Response helpers ---
 
 fn text : status, body {
-    return {
-        "status": status,
-        "body": body,
-        "headers": {}
-    };
+    return http.make_response(status, body);
 }
 
 fn html : status, body {
-    return {
-        "status": status,
-        "body": body,
-        "headers": {"content-type": "text/html"}
-    };
+    return http.make_response_with_headers(status, body, {"content-type": "text/html"});
 }
 
 fn text_with_headers : status, body, headers {
-    return {
-        "status": status,
-        "body": body,
-        "headers": headers
-    };
+    return http.make_response_with_headers(status, body, headers);
 }
 
 fn json : status, body {
-    return {
-        "status": status,
-        "body": body,
-        "headers": {"content-type": "application/json"}
-    };
+    return http.make_response_with_headers(status, body, {"content-type": "application/json"});
 }
 
 fn redirect : url {
-    return {
-        "status": 302,
-        "body": "",
-        "headers": {"location": url}
-    };
+    return http.make_response_with_headers(302, "", {"location": url});
 }
 
 // --- Middleware support ---
@@ -193,7 +173,7 @@ struct App {
 
             if request["ok"] == false {
                 let body = "bad request: " + request["error"] + "\n";
-                response = {"status": 400, "body": body, "headers": {"connection": "close"}};
+                response = http.make_response_with_headers(400, body, {"connection": "close"});
                 close = true;
             } else {
                 try {
@@ -211,7 +191,7 @@ struct App {
             let body = response["body"];
             let headers = response["headers"];
 
-            await net.tcp_write(stream, http.response_with_headers(status, body, headers));
+            await net.tcp_write(stream, http.serialize_response(response));
 
             let method = "";
             let path = "";

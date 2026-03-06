@@ -9,8 +9,10 @@ use std::collections::HashMap;
 use std::fmt::Write as FmtWrite;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::{Shutdown, TcpListener, TcpStream};
 use std::path::Path;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use hyper::http::header::{CONNECTION, CONTENT_LENGTH, CONTENT_TYPE, HeaderName, HeaderValue};
 use hyper::http::{HeaderMap, Method, Response, StatusCode, Uri, Version};
@@ -45,8 +47,8 @@ struct FileTable {
 }
 
 struct NetState {
-    listeners: HashMap<i64, TcpListener>,
-    streams: HashMap<i64, TcpStream>,
+    listeners: HashMap<i64, Arc<TcpListener>>,
+    streams: HashMap<i64, Arc<Mutex<TcpStream>>>,
     next_handle: i64,
 }
 
@@ -98,29 +100,29 @@ impl NetState {
 
     fn insert_listener(&mut self, listener: TcpListener) -> i64 {
         let handle = self.next();
-        self.listeners.insert(handle, listener);
+        self.listeners.insert(handle, Arc::new(listener));
         handle
     }
 
     fn insert_stream(&mut self, stream: TcpStream) -> i64 {
         let handle = self.next();
-        self.streams.insert(handle, stream);
+        self.streams.insert(handle, Arc::new(Mutex::new(stream)));
         handle
     }
 
-    fn get_mut_listener(&mut self, handle: i64) -> Option<&mut TcpListener> {
-        self.listeners.get_mut(&handle)
+    fn listener(&self, handle: i64) -> Option<Arc<TcpListener>> {
+        self.listeners.get(&handle).cloned()
     }
 
-    fn get_mut_stream(&mut self, handle: i64) -> Option<&mut TcpStream> {
-        self.streams.get_mut(&handle)
+    fn stream(&self, handle: i64) -> Option<Arc<Mutex<TcpStream>>> {
+        self.streams.get(&handle).cloned()
     }
 
-    fn remove_listener(&mut self, handle: i64) -> Option<TcpListener> {
+    fn remove_listener(&mut self, handle: i64) -> Option<Arc<TcpListener>> {
         self.listeners.remove(&handle)
     }
 
-    fn remove_stream(&mut self, handle: i64) -> Option<TcpStream> {
+    fn remove_stream(&mut self, handle: i64) -> Option<Arc<Mutex<TcpStream>>> {
         self.streams.remove(&handle)
     }
 }
@@ -440,10 +442,10 @@ pub fn tcp_bind(host: &str, port: i64, _span: Span) -> WalrusResult<Value> {
 /// Accept one incoming connection from a listener handle and return a stream handle.
 pub fn tcp_accept(listener_handle: i64, _span: Span) -> WalrusResult<Value> {
     NET_TABLE.with(|table| {
-        let mut table = table.borrow_mut();
         let listener =
             table
-                .get_mut_listener(listener_handle)
+                .borrow()
+                .listener(listener_handle)
                 .ok_or_else(|| WalrusError::GenericError {
                     message: format!("net.tcp_accept: invalid listener handle {listener_handle}"),
                 })?;
@@ -452,7 +454,7 @@ pub fn tcp_accept(listener_handle: i64, _span: Span) -> WalrusResult<Value> {
             message: format!("net.tcp_accept: accept failed: {err}"),
         })?;
 
-        let stream_handle = table.insert_stream(stream);
+        let stream_handle = table.borrow_mut().insert_stream(stream);
         Ok(Value::Int(stream_handle))
     })
 }
@@ -476,10 +478,10 @@ pub fn tcp_connect(host: &str, port: i64, _span: Span) -> WalrusResult<Value> {
 /// Return the bound local port for a listener handle.
 pub fn tcp_local_port(listener_handle: i64, _span: Span) -> WalrusResult<i64> {
     NET_TABLE.with(|table| {
-        let mut table = table.borrow_mut();
         let listener =
             table
-                .get_mut_listener(listener_handle)
+                .borrow()
+                .listener(listener_handle)
                 .ok_or_else(|| WalrusError::GenericError {
                     message: format!(
                         "net.tcp_local_port: invalid listener handle {listener_handle}"
@@ -497,6 +499,155 @@ pub fn tcp_local_port(listener_handle: i64, _span: Span) -> WalrusResult<i64> {
     })
 }
 
+pub fn tcp_peer_addr(stream_handle: i64, _span: Span) -> WalrusResult<String> {
+    NET_TABLE.with(|table| {
+        let stream =
+            table
+                .borrow()
+                .stream(stream_handle)
+                .ok_or_else(|| WalrusError::GenericError {
+                    message: format!("net.tcp_peer_addr: invalid stream handle {stream_handle}"),
+                })?;
+        let stream = stream.lock().map_err(|_| WalrusError::GenericError {
+            message: "net.tcp_peer_addr: stream lock poisoned".to_string(),
+        })?;
+        stream
+            .peer_addr()
+            .map(|addr| addr.to_string())
+            .map_err(|err| WalrusError::GenericError {
+                message: format!("net.tcp_peer_addr: failed to read peer addr: {err}"),
+            })
+    })
+}
+
+pub fn tcp_stream_local_addr(stream_handle: i64, _span: Span) -> WalrusResult<String> {
+    NET_TABLE.with(|table| {
+        let stream =
+            table
+                .borrow()
+                .stream(stream_handle)
+                .ok_or_else(|| WalrusError::GenericError {
+                    message: format!(
+                        "net.tcp_stream_local_addr: invalid stream handle {stream_handle}"
+                    ),
+                })?;
+        let stream = stream.lock().map_err(|_| WalrusError::GenericError {
+            message: "net.tcp_stream_local_addr: stream lock poisoned".to_string(),
+        })?;
+        stream
+            .local_addr()
+            .map(|addr| addr.to_string())
+            .map_err(|err| WalrusError::GenericError {
+                message: format!("net.tcp_stream_local_addr: failed to read local addr: {err}"),
+            })
+    })
+}
+
+pub fn tcp_set_read_timeout(
+    stream_handle: i64,
+    timeout_ms: Option<u64>,
+    _span: Span,
+) -> WalrusResult<()> {
+    NET_TABLE.with(|table| {
+        let stream =
+            table
+                .borrow()
+                .stream(stream_handle)
+                .ok_or_else(|| WalrusError::GenericError {
+                    message: format!(
+                        "net.tcp_set_read_timeout: invalid stream handle {stream_handle}"
+                    ),
+                })?;
+        let stream = stream.lock().map_err(|_| WalrusError::GenericError {
+            message: "net.tcp_set_read_timeout: stream lock poisoned".to_string(),
+        })?;
+        stream
+            .set_read_timeout(timeout_ms.map(Duration::from_millis))
+            .map_err(|err| WalrusError::GenericError {
+                message: format!("net.tcp_set_read_timeout: failed: {err}"),
+            })
+    })
+}
+
+pub fn tcp_set_write_timeout(
+    stream_handle: i64,
+    timeout_ms: Option<u64>,
+    _span: Span,
+) -> WalrusResult<()> {
+    NET_TABLE.with(|table| {
+        let stream =
+            table
+                .borrow()
+                .stream(stream_handle)
+                .ok_or_else(|| WalrusError::GenericError {
+                    message: format!(
+                        "net.tcp_set_write_timeout: invalid stream handle {stream_handle}"
+                    ),
+                })?;
+        let stream = stream.lock().map_err(|_| WalrusError::GenericError {
+            message: "net.tcp_set_write_timeout: stream lock poisoned".to_string(),
+        })?;
+        stream
+            .set_write_timeout(timeout_ms.map(Duration::from_millis))
+            .map_err(|err| WalrusError::GenericError {
+                message: format!("net.tcp_set_write_timeout: failed: {err}"),
+            })
+    })
+}
+
+pub fn tcp_set_nodelay(stream_handle: i64, enabled: bool, _span: Span) -> WalrusResult<()> {
+    NET_TABLE.with(|table| {
+        let stream =
+            table
+                .borrow()
+                .stream(stream_handle)
+                .ok_or_else(|| WalrusError::GenericError {
+                    message: format!("net.tcp_set_nodelay: invalid stream handle {stream_handle}"),
+                })?;
+        let stream = stream.lock().map_err(|_| WalrusError::GenericError {
+            message: "net.tcp_set_nodelay: stream lock poisoned".to_string(),
+        })?;
+        stream
+            .set_nodelay(enabled)
+            .map_err(|err| WalrusError::GenericError {
+                message: format!("net.tcp_set_nodelay: failed: {err}"),
+            })
+    })
+}
+
+pub fn tcp_shutdown(stream_handle: i64, how: &str, _span: Span) -> WalrusResult<()> {
+    let shutdown = match how {
+        "read" => Shutdown::Read,
+        "write" => Shutdown::Write,
+        "both" => Shutdown::Both,
+        _ => {
+            return Err(WalrusError::GenericError {
+                message: format!(
+                    "net.tcp_shutdown: invalid mode '{how}', expected 'read', 'write', or 'both'"
+                ),
+            });
+        }
+    };
+
+    NET_TABLE.with(|table| {
+        let stream =
+            table
+                .borrow()
+                .stream(stream_handle)
+                .ok_or_else(|| WalrusError::GenericError {
+                    message: format!("net.tcp_shutdown: invalid stream handle {stream_handle}"),
+                })?;
+        let stream = stream.lock().map_err(|_| WalrusError::GenericError {
+            message: "net.tcp_shutdown: stream lock poisoned".to_string(),
+        })?;
+        stream
+            .shutdown(shutdown)
+            .map_err(|err| WalrusError::GenericError {
+                message: format!("net.tcp_shutdown: failed: {err}"),
+            })
+    })
+}
+
 /// Read up to max_bytes from a stream. Returns None on EOF.
 pub fn tcp_read(stream_handle: i64, max_bytes: i64, _span: Span) -> WalrusResult<Option<String>> {
     if max_bytes <= 0 {
@@ -506,13 +657,16 @@ pub fn tcp_read(stream_handle: i64, max_bytes: i64, _span: Span) -> WalrusResult
     }
 
     NET_TABLE.with(|table| {
-        let mut table = table.borrow_mut();
         let stream =
             table
-                .get_mut_stream(stream_handle)
+                .borrow()
+                .stream(stream_handle)
                 .ok_or_else(|| WalrusError::GenericError {
                     message: format!("net.tcp_read: invalid stream handle {stream_handle}"),
                 })?;
+        let mut stream = stream.lock().map_err(|_| WalrusError::GenericError {
+            message: "net.tcp_read: stream lock poisoned".to_string(),
+        })?;
 
         let mut buf = vec![0u8; max_bytes as usize];
         let read = stream
@@ -537,13 +691,16 @@ pub fn tcp_read(stream_handle: i64, max_bytes: i64, _span: Span) -> WalrusResult
 /// Read one line from a stream. Returns None on EOF before data.
 pub fn tcp_read_line(stream_handle: i64, _span: Span) -> WalrusResult<Option<String>> {
     NET_TABLE.with(|table| {
-        let mut table = table.borrow_mut();
         let stream =
             table
-                .get_mut_stream(stream_handle)
+                .borrow()
+                .stream(stream_handle)
                 .ok_or_else(|| WalrusError::GenericError {
                     message: format!("net.tcp_read_line: invalid stream handle {stream_handle}"),
                 })?;
+        let mut stream = stream.lock().map_err(|_| WalrusError::GenericError {
+            message: "net.tcp_read_line: stream lock poisoned".to_string(),
+        })?;
 
         let mut bytes = Vec::new();
         let mut buf = [0u8; 1];
@@ -585,13 +742,16 @@ pub fn tcp_read_line(stream_handle: i64, _span: Span) -> WalrusResult<Option<Str
 /// Write utf8 data to a stream and return bytes written.
 pub fn tcp_write(stream_handle: i64, content: &str, _span: Span) -> WalrusResult<i64> {
     NET_TABLE.with(|table| {
-        let mut table = table.borrow_mut();
         let stream =
             table
-                .get_mut_stream(stream_handle)
+                .borrow()
+                .stream(stream_handle)
                 .ok_or_else(|| WalrusError::GenericError {
                     message: format!("net.tcp_write: invalid stream handle {stream_handle}"),
                 })?;
+        let mut stream = stream.lock().map_err(|_| WalrusError::GenericError {
+            message: "net.tcp_write: stream lock poisoned".to_string(),
+        })?;
 
         stream
             .write_all(content.as_bytes())
@@ -607,7 +767,10 @@ pub fn tcp_write(stream_handle: i64, content: &str, _span: Span) -> WalrusResult
 pub fn tcp_close(stream_handle: i64, _span: Span) -> WalrusResult<()> {
     NET_TABLE.with(|table| {
         let mut table = table.borrow_mut();
-        if table.remove_stream(stream_handle).is_some() {
+        if let Some(stream) = table.remove_stream(stream_handle) {
+            if let Ok(stream) = stream.lock() {
+                let _ = stream.shutdown(Shutdown::Both);
+            }
             Ok(())
         } else {
             Err(WalrusError::GenericError {
@@ -645,25 +808,16 @@ pub fn store_tcp_listener(listener: TcpListener) -> i64 {
     NET_TABLE.with(|table| table.borrow_mut().insert_listener(listener))
 }
 
-/// Clone a TcpListener for use in a background thread.
+/// Share a TcpListener for use in background I/O.
 /// Returns None if the handle is invalid.
-pub fn clone_tcp_listener(handle: i64) -> Option<TcpListener> {
-    NET_TABLE.with(|table| {
-        let table = table.borrow();
-        table
-            .listeners
-            .get(&handle)
-            .and_then(|l| l.try_clone().ok())
-    })
+pub fn shared_tcp_listener(handle: i64) -> Option<Arc<TcpListener>> {
+    NET_TABLE.with(|table| table.borrow().listener(handle))
 }
 
-/// Clone a TcpStream for use in a background thread.
+/// Share a TcpStream for use in background I/O.
 /// Returns None if the handle is invalid.
-pub fn clone_tcp_stream(handle: i64) -> Option<TcpStream> {
-    NET_TABLE.with(|table| {
-        let table = table.borrow();
-        table.streams.get(&handle).and_then(|s| s.try_clone().ok())
-    })
+pub fn shared_tcp_stream(handle: i64) -> Option<Arc<Mutex<TcpStream>>> {
+    NET_TABLE.with(|table| table.borrow().stream(handle))
 }
 
 #[derive(Debug, Clone)]
@@ -752,16 +906,8 @@ pub fn http_parse_query(query: &str) -> Vec<(String, String)> {
         return Vec::new();
     }
 
-    query
-        .split('&')
-        .filter(|pair| !pair.is_empty())
-        .map(|pair| {
-            if let Some((k, v)) = pair.split_once('=') {
-                (k.to_string(), v.to_string())
-            } else {
-                (pair.to_string(), String::new())
-            }
-        })
+    url::form_urlencoded::parse(query.as_bytes())
+        .into_owned()
         .collect()
 }
 
@@ -976,18 +1122,22 @@ pub fn http_read_request(
                 .to_string(),
         })?;
 
-    NET_TABLE.with(|table| {
-        let mut table = table.borrow_mut();
-        let stream =
-            table
-                .get_mut_stream(stream_handle)
-                .ok_or_else(|| WalrusError::GenericError {
-                    message: format!("http.read_request: invalid stream handle {stream_handle}"),
-                })?;
+    let stream = shared_tcp_stream(stream_handle).ok_or_else(|| WalrusError::GenericError {
+        message: format!("http.read_request: invalid stream handle {stream_handle}"),
+    })?;
 
-        http_read_request_from_stream(stream, max_body_bytes)
-            .map_err(|msg| WalrusError::GenericError { message: msg })
-    })
+    http_read_request_from_shared_stream(&stream, max_body_bytes)
+        .map_err(|message| WalrusError::GenericError { message })
+}
+
+pub fn http_read_request_from_shared_stream(
+    stream: &Arc<Mutex<TcpStream>>,
+    max_body_bytes: usize,
+) -> Result<HttpReadOutcome, String> {
+    let mut stream = stream
+        .lock()
+        .map_err(|_| "http.read_request: stream lock poisoned".to_string())?;
+    http_read_request_from_stream(&mut stream, max_body_bytes)
 }
 
 /// Read and parse an HTTP request directly from a TcpStream.
@@ -996,8 +1146,6 @@ pub fn http_read_request_from_stream(
     stream: &mut TcpStream,
     max_body_bytes: usize,
 ) -> Result<HttpReadOutcome, String> {
-    use crate::value::{IoHttpOutcome, IoHttpRequest};
-
     let mut buf = Vec::with_capacity(HTTP_READ_CHUNK_BYTES);
     let mut temp = [0u8; HTTP_READ_CHUNK_BYTES];
 
