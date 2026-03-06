@@ -40,7 +40,7 @@ mod symbol_table;
 /// - Where the operand stack was at call time (for cleanup on return)
 /// - The function's bytecode (via Rc to avoid cloning)
 /// - The function name for debugging/stack traces
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct CallFrame {
     /// Instruction pointer to return to after this frame completes
     return_ip: usize,
@@ -83,6 +83,27 @@ enum TaskResolution {
     Ready(Value),
     Failed(Value),
     Cancelled,
+}
+
+#[derive(Debug, Default, Clone)]
+struct ExecutionContext {
+    stack: Vec<Value>,
+    locals: Vec<Value>,
+    call_stack: Vec<CallFrame>,
+    exception_handlers: Vec<ExceptionHandler>,
+    ip: usize,
+}
+
+#[derive(Debug, Clone)]
+struct SuspendedExecution {
+    context: ExecutionContext,
+    waiting_on: crate::arenas::TaskKey,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RunSignal {
+    Returned(Value),
+    Suspended(crate::arenas::TaskKey),
 }
 
 /// The Walrus Virtual Machine executes compiled bytecode.
@@ -140,9 +161,9 @@ pub struct VM<'a> {
     globals: Vec<Value>,
     global_names: Vec<String>,
     async_task_queue: VecDeque<crate::arenas::TaskKey>,
-    run_until_depth_stack: Vec<usize>,
-    task_exception_floor_stack: Vec<usize>,
-    await_task_roots: Vec<crate::arenas::TaskKey>,
+    suspended_main: Option<SuspendedExecution>,
+    suspended_tasks: FxHashMap<crate::arenas::TaskKey, SuspendedExecution>,
+    task_waiters: FxHashMap<crate::arenas::TaskKey, Vec<crate::arenas::TaskKey>>,
     source_ref: SourceRef<'a>,
     // I/O wakeup channel: worker threads send () to wake the event loop
     io_wakeup_tx: mpsc::Sender<()>,
@@ -208,9 +229,9 @@ impl<'a> VM<'a> {
             globals: vec![Value::Void; global_names.len()],
             global_names,
             async_task_queue: VecDeque::new(),
-            run_until_depth_stack: Vec::new(),
-            task_exception_floor_stack: Vec::new(),
-            await_task_roots: Vec::new(),
+            suspended_main: None,
+            suspended_tasks: FxHashMap::default(),
+            task_waiters: FxHashMap::default(),
             source_ref,
             io_wakeup_tx,
             io_wakeup_rx,
@@ -292,6 +313,24 @@ impl<'a> VM<'a> {
     fn function_name(&self) -> &str {
         let name = &self.current_frame().function_name;
         if name.is_empty() { "<fn>" } else { name }
+    }
+
+    fn take_context(&mut self) -> ExecutionContext {
+        ExecutionContext {
+            stack: std::mem::take(&mut self.stack),
+            locals: std::mem::take(&mut self.locals),
+            call_stack: std::mem::take(&mut self.call_stack),
+            exception_handlers: std::mem::take(&mut self.exception_handlers),
+            ip: self.ip,
+        }
+    }
+
+    fn restore_context(&mut self, context: ExecutionContext) {
+        self.stack = context.stack;
+        self.locals = context.locals;
+        self.call_stack = context.call_stack;
+        self.exception_handlers = context.exception_handlers;
+        self.ip = context.ip;
     }
 
     /// Helper to access heap - uses thread-local ARENA
@@ -504,48 +543,63 @@ impl<'a> VM<'a> {
 
     /// Collect all root values that the GC needs to trace from
     pub(crate) fn collect_roots(&self) -> Vec<Value> {
+        fn extend_context_roots(
+            roots: &mut Vec<Value>,
+            stack: &[Value],
+            locals: &[Value],
+            call_stack: &[CallFrame],
+        ) {
+            roots.extend(stack.iter().copied());
+            roots.extend(locals.iter().copied());
+            for frame in call_stack {
+                roots.extend(frame.instructions.constants.iter().copied());
+                if let Some(binding) = &frame.module_binding {
+                    roots.push(Value::Module(binding.module_key));
+                }
+                if let Some(task_key) = frame.awaiting_task {
+                    roots.push(Value::Task(task_key));
+                }
+            }
+        }
+
         let mut roots = Vec::with_capacity(
             self.stack.len()
                 + self.locals.len()
                 + self.globals.len()
                 + self.async_task_queue.len()
-                + self.await_task_roots.len()
-                + 96,
+                + self.suspended_tasks.len() * 16
+                + 128,
         );
 
-        // Stack values are roots
-        roots.extend(self.stack.iter().copied());
+        extend_context_roots(&mut roots, &self.stack, &self.locals, &self.call_stack);
 
-        // Local variables are roots
-        roots.extend(self.locals.iter().copied());
-
-        // Global variables are roots
         roots.extend(self.globals.iter().copied());
 
-        // Constants in all call frames are roots (they might reference heap objects)
-        for frame in &self.call_stack {
-            roots.extend(frame.instructions.constants.iter().copied());
-            if let Some(binding) = &frame.module_binding {
-                roots.push(Value::Module(binding.module_key));
-            }
-            if let Some(task_key) = frame.awaiting_task {
-                roots.push(Value::Task(task_key));
-            }
-        }
-
-        // Scheduled async tasks must remain rooted even when no user variable currently
-        // references them (fire-and-forget tasks queued by the event loop).
         for &task_key in &self.async_task_queue {
             roots.push(Value::Task(task_key));
         }
 
-        // Awaited tasks need to be rooted while the await loop is spinning even though the
-        // operand stack value has been popped.
-        for &task_key in &self.await_task_roots {
-            roots.push(Value::Task(task_key));
+        if let Some(suspended) = &self.suspended_main {
+            extend_context_roots(
+                &mut roots,
+                &suspended.context.stack,
+                &suspended.context.locals,
+                &suspended.context.call_stack,
+            );
+            roots.push(Value::Task(suspended.waiting_on));
         }
 
-        // Imported modules are cached process-wide and must remain rooted.
+        for (&task_key, suspended) in &self.suspended_tasks {
+            roots.push(Value::Task(task_key));
+            roots.push(Value::Task(suspended.waiting_on));
+            extend_context_roots(
+                &mut roots,
+                &suspended.context.stack,
+                &suspended.context.locals,
+                &suspended.context.call_stack,
+            );
+        }
+
         roots.extend(crate::program::cached_module_roots());
 
         roots
@@ -642,7 +696,7 @@ impl<'a> VM<'a> {
                 args,
             }));
         if let Value::Task(task_key) = task {
-            self.async_task_queue.push_back(task_key);
+            self.enqueue_task(task_key);
         }
         task
     }
@@ -992,11 +1046,13 @@ impl<'a> VM<'a> {
             | AsyncTask::Channel(_)
             | AsyncTask::UserRecv { .. } => {
                 *self.get_heap_mut().get_mut_task(task_key)? = AsyncTask::Cancelled;
+                self.suspended_tasks.remove(&task_key);
                 Ok(true)
             }
             AsyncTask::Timeout { task, .. } => {
                 let _ = self.cancel_task_recursive_internal(task, visited)?;
                 *self.get_heap_mut().get_mut_task(task_key)? = AsyncTask::Cancelled;
+                self.suspended_tasks.remove(&task_key);
                 Ok(true)
             }
             AsyncTask::Gather { tasks }
@@ -1006,6 +1062,7 @@ impl<'a> VM<'a> {
                     let _ = self.cancel_task_recursive_internal(child, visited)?;
                 }
                 *self.get_heap_mut().get_mut_task(task_key)? = AsyncTask::Cancelled;
+                self.suspended_tasks.remove(&task_key);
                 Ok(true)
             }
             AsyncTask::Ready(_) | AsyncTask::Failed(_) | AsyncTask::Cancelled => Ok(false),
@@ -1014,21 +1071,18 @@ impl<'a> VM<'a> {
 
     pub(crate) fn cancel_task(&mut self, task_key: crate::arenas::TaskKey) -> WalrusResult<bool> {
         let mut visited = FxHashSet::default();
-        self.cancel_task_recursive_internal(task_key, &mut visited)
+        let cancelled = self.cancel_task_recursive_internal(task_key, &mut visited)?;
+        if cancelled {
+            self.suspended_tasks.remove(&task_key);
+            self.wake_task_waiters(task_key)?;
+        }
+        Ok(cancelled)
     }
 
     pub(crate) fn run_queued_tasks(&mut self, span: Span) -> WalrusResult<()> {
-        while let Some(task_key) = self.async_task_queue.pop_front() {
-            if !self.is_task_runnable(task_key)? {
-                continue;
-            }
+        while let Some(task_key) = self.next_runnable_task()? {
             self.run_pending_task_to_completion(task_key, span)?;
-            if matches!(
-                self.poll_task_resolution(task_key)?,
-                TaskResolution::Ready(_)
-            ) {
-                let _ = self.stack.pop();
-            }
+            self.refresh_waiting_tasks()?;
         }
         Ok(())
     }
@@ -1078,6 +1132,7 @@ impl<'a> VM<'a> {
         failure: Value,
     ) -> WalrusResult<()> {
         *self.get_heap_mut().get_mut_task(task_key)? = AsyncTask::Failed(failure);
+        self.wake_task_waiters(task_key)?;
         Ok(())
     }
 
@@ -1101,25 +1156,64 @@ impl<'a> VM<'a> {
         self.set_task_failed(task_key, failure)
     }
 
-    fn recover_after_task_failure(
-        &mut self,
-        caller_depth: usize,
-        caller_locals_len: usize,
-        caller_stack_len: usize,
-        caller_ip: usize,
-    ) {
-        while self.call_stack.len() > caller_depth {
-            self.call_stack.pop();
+    fn enqueue_task(&mut self, task_key: crate::arenas::TaskKey) {
+        if !self.async_task_queue.contains(&task_key) {
+            self.async_task_queue.push_back(task_key);
         }
-        self.clear_exception_handlers_from_frame(caller_depth);
-        self.locals.truncate(caller_locals_len);
-        self.stack.truncate(caller_stack_len);
-        self.ip = caller_ip;
     }
 
-    fn is_task_runnable(&self, task_key: crate::arenas::TaskKey) -> WalrusResult<bool> {
+    fn wake_task_waiters(&mut self, task_key: crate::arenas::TaskKey) -> WalrusResult<()> {
+        let Some(waiters) = self.task_waiters.remove(&task_key) else {
+            return Ok(());
+        };
+
+        for waiter in waiters {
+            if self.suspended_tasks.contains_key(&waiter)
+                && !matches!(
+                    self.get_heap().get_task(waiter)?,
+                    AsyncTask::Ready(_) | AsyncTask::Failed(_) | AsyncTask::Cancelled
+                )
+            {
+                self.enqueue_task(waiter);
+            }
+        }
+
+        Ok(())
+    }
+
+    fn refresh_waiting_tasks(&mut self) -> WalrusResult<()> {
+        let mut watched = FxHashSet::default();
+        if let Some(suspended) = &self.suspended_main {
+            watched.insert(suspended.waiting_on);
+        }
+        watched.extend(self.task_waiters.keys().copied());
+
+        for task_key in watched {
+            if matches!(
+                self.poll_task_resolution(task_key)?,
+                TaskResolution::Ready(_) | TaskResolution::Failed(_) | TaskResolution::Cancelled
+            ) {
+                self.wake_task_waiters(task_key)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn is_task_runnable(&mut self, task_key: crate::arenas::TaskKey) -> WalrusResult<bool> {
         let task = self.get_heap().get_task(task_key)?;
-        Ok(matches!(task, AsyncTask::Pending { .. }))
+        if !matches!(task, AsyncTask::Pending { .. }) {
+            return Ok(false);
+        }
+
+        if let Some(suspended) = self.suspended_tasks.get(&task_key) {
+            return Ok(matches!(
+                self.poll_task_resolution(suspended.waiting_on)?,
+                TaskResolution::Ready(_) | TaskResolution::Failed(_) | TaskResolution::Cancelled
+            ));
+        }
+
+        Ok(true)
     }
 
     fn poll_task_resolution(
@@ -1340,30 +1434,101 @@ impl<'a> VM<'a> {
         }
     }
 
-    fn next_runnable_task(
-        &mut self,
-        target: crate::arenas::TaskKey,
-    ) -> WalrusResult<Option<crate::arenas::TaskKey>> {
+    fn next_scheduler_deadline(&self) -> WalrusResult<Option<Instant>> {
+        let mut watched = FxHashSet::default();
+        let mut deadline: Option<Instant> = None;
+
+        if let Some(suspended) = &self.suspended_main {
+            watched.insert(suspended.waiting_on);
+        }
+        watched.extend(self.task_waiters.keys().copied());
+
+        for task_key in watched {
+            let mut visited = FxHashSet::default();
+            if let Some(next) = self.next_deadline_for_task(task_key, &mut visited)? {
+                deadline = Some(match deadline {
+                    Some(current) => current.min(next),
+                    None => next,
+                });
+            }
+        }
+
+        Ok(deadline)
+    }
+
+    fn scheduler_has_pending_io(&self) -> WalrusResult<bool> {
+        let mut watched = FxHashSet::default();
+        if let Some(suspended) = &self.suspended_main {
+            watched.insert(suspended.waiting_on);
+        }
+        watched.extend(self.task_waiters.keys().copied());
+
+        for task_key in watched {
+            let mut visited = FxHashSet::default();
+            if self.task_has_pending_io(task_key, &mut visited)? {
+                return Ok(true);
+            }
+        }
+
+        Ok(false)
+    }
+
+    fn wait_for_scheduler_progress(&mut self) -> WalrusResult<()> {
+        let deadline = self.next_scheduler_deadline()?;
+        let has_io = self.scheduler_has_pending_io()?;
+
+        if deadline.is_none() && !has_io {
+            return Err(WalrusError::GenericError {
+                message:
+                    "Event loop deadlock: all suspended work is waiting with no runnable tasks"
+                        .to_string(),
+            });
+        }
+
+        if let Some(deadline) = deadline {
+            let now = Instant::now();
+            if deadline > now {
+                let timeout = deadline.duration_since(now);
+                let _ = self.io_wakeup_rx.recv_timeout(timeout);
+            }
+        } else {
+            let _ = self.io_wakeup_rx.recv();
+        }
+
+        Ok(())
+    }
+
+    fn main_waiting_task_resolved(&mut self) -> WalrusResult<bool> {
+        let Some(suspended) = &self.suspended_main else {
+            return Ok(false);
+        };
+
+        Ok(matches!(
+            self.poll_task_resolution(suspended.waiting_on)?,
+            TaskResolution::Ready(_) | TaskResolution::Failed(_) | TaskResolution::Cancelled
+        ))
+    }
+
+    fn resume_main_if_ready(&mut self) -> WalrusResult<bool> {
+        if !self.main_waiting_task_resolved()? {
+            return Ok(false);
+        }
+
+        let suspended = self
+            .suspended_main
+            .take()
+            .expect("main suspension should exist when ready");
+        self.restore_context(suspended.context);
+        Ok(true)
+    }
+
+    fn next_runnable_task(&mut self) -> WalrusResult<Option<crate::arenas::TaskKey>> {
         while let Some(task_key) = self.async_task_queue.pop_front() {
             if self.is_task_runnable(task_key)? {
                 return Ok(Some(task_key));
             }
         }
-
-        if self.is_task_runnable(target)? {
-            Ok(Some(target))
-        } else {
-            Ok(None)
-        }
-    }
-
-    fn run_until_depth(&mut self, depth: usize) -> WalrusResult<()> {
-        self.run_until_depth_stack.push(depth);
-        let result = self.run_inner().map(|_| ());
-        if self.run_until_depth_stack.last().copied() == Some(depth) {
-            self.run_until_depth_stack.pop();
-        }
-        result
+        Ok(None)
     }
 
     fn run_pending_task_to_completion(
@@ -1376,10 +1541,13 @@ impl<'a> VM<'a> {
             return Ok(());
         };
 
+        let caller_context = self.take_context();
+        let suspended_task = self.suspended_tasks.remove(&task_key);
         let function = self.get_heap().get_function(function)?.clone();
         match function {
             WalrusFunction::Vm(func) => {
                 if args.len() != func.arity {
+                    self.restore_context(caller_context);
                     return self.fail_task_with_error(
                         task_key,
                         WalrusError::InvalidArgCount {
@@ -1393,54 +1561,68 @@ impl<'a> VM<'a> {
                     );
                 }
 
-                let caller_depth = self.call_stack.len();
-                let caller_ip = self.ip;
-                let caller_locals_len = self.locals.len();
-                let caller_stack_len = self.stack.len();
-                let new_frame = CallFrame {
-                    return_ip: self.ip,
-                    frame_pointer: self.locals.len(),
-                    stack_pointer: self.stack.len(),
-                    instructions: Rc::clone(&func.code),
-                    function_name: String::new(),
-                    return_override: None,
-                    module_binding: func.module_binding.clone(),
-                    awaiting_task: Some(task_key),
+                let context = if let Some(suspended) = suspended_task {
+                    suspended.context
+                } else {
+                    ExecutionContext {
+                        stack: Vec::new(),
+                        locals: args,
+                        call_stack: vec![CallFrame {
+                            return_ip: 0,
+                            frame_pointer: 0,
+                            stack_pointer: 0,
+                            instructions: Rc::clone(&func.code),
+                            function_name: func.name.clone(),
+                            return_override: None,
+                            module_binding: func.module_binding.clone(),
+                            awaiting_task: Some(task_key),
+                        }],
+                        exception_handlers: Vec::new(),
+                        ip: 0,
+                    }
                 };
 
-                self.task_exception_floor_stack.push(caller_depth);
-                self.call_stack.push(new_frame);
-                self.locals.extend(args);
-                self.ip = 0;
-                let result = self.run_until_depth(caller_depth);
-                if self.task_exception_floor_stack.last().copied() == Some(caller_depth) {
-                    self.task_exception_floor_stack.pop();
-                }
+                self.restore_context(context);
+                let outcome = self.run_inner();
+                let task_context = self.take_context();
+                self.restore_context(caller_context);
 
-                if let Err(err) = result {
-                    let failure = self.task_failure_value_from_error(err);
-                    self.recover_after_task_failure(
-                        caller_depth,
-                        caller_locals_len,
-                        caller_stack_len,
-                        caller_ip,
-                    );
-                    self.set_task_failed(task_key, failure)?;
-                    return Ok(());
-                }
-
-                if matches!(
-                    self.poll_task_resolution(task_key)?,
-                    TaskResolution::Pending
-                ) {
-                    let failure = self.get_heap_mut().push(HeapValue::String(
-                        "Async task exited without returning a result",
-                    ));
-                    self.set_task_failed(task_key, failure)?;
+                match outcome {
+                    Ok(RunSignal::Returned(_)) => {
+                        if matches!(
+                            self.poll_task_resolution(task_key)?,
+                            TaskResolution::Pending
+                        ) {
+                            let failure = self.get_heap_mut().push(HeapValue::String(
+                                "Async task exited without returning a result",
+                            ));
+                            self.set_task_failed(task_key, failure)?;
+                        } else {
+                            self.wake_task_waiters(task_key)?;
+                        }
+                    }
+                    Ok(RunSignal::Suspended(waiting_on)) => {
+                        self.suspended_tasks.insert(
+                            task_key,
+                            SuspendedExecution {
+                                context: task_context,
+                                waiting_on,
+                            },
+                        );
+                        self.task_waiters
+                            .entry(waiting_on)
+                            .or_default()
+                            .push(task_key);
+                    }
+                    Err(err) => {
+                        let failure = self.task_failure_value_from_error(err);
+                        self.set_task_failed(task_key, failure)?;
+                    }
                 }
             }
             WalrusFunction::Rust(rust_fn) => {
                 if args.len() != rust_fn.args {
+                    self.restore_context(caller_context);
                     return self.fail_task_with_error(
                         task_key,
                         WalrusError::InvalidArgCount {
@@ -1456,23 +1638,28 @@ impl<'a> VM<'a> {
                 let result = match rust_fn.call(args, self.source_ref, span) {
                     Ok(value) => value,
                     Err(err) => {
+                        self.restore_context(caller_context);
                         return self.fail_task_with_error(task_key, err);
                     }
                 };
                 self.complete_task_on_frame_return(Some(task_key), result)?;
-                self.push(result);
+                self.restore_context(caller_context);
+                self.wake_task_waiters(task_key)?;
             }
             WalrusFunction::Native(native_fn) => {
                 let result = match self.call_native(native_fn, args, span) {
                     Ok(value) => value,
                     Err(err) => {
+                        self.restore_context(caller_context);
                         return self.fail_task_with_error(task_key, err);
                     }
                 };
                 self.complete_task_on_frame_return(Some(task_key), result)?;
-                self.push(result);
+                self.restore_context(caller_context);
+                self.wake_task_waiters(task_key)?;
             }
             WalrusFunction::TreeWalk(_) => {
+                self.restore_context(caller_context);
                 return self.fail_task_with_error(
                     task_key,
                     WalrusError::NodeFunctionNotSupportedInVm {
@@ -1659,18 +1846,10 @@ impl<'a> VM<'a> {
 
     /// Raise a thrown value, transferring control to the nearest active catch handler.
     fn throw_value(&mut self, value: Value, span: Span) -> WalrusResult<()> {
-        let handler_floor = self.task_exception_floor_stack.last().copied().unwrap_or(0);
-
         while let Some(handler) = self.exception_handlers.last().copied() {
             if handler.frame_index > self.current_frame_index() {
                 self.exception_handlers.pop();
                 continue;
-            }
-
-            // While resolving a task, do not allow throws to jump into handlers owned by the
-            // awaiting caller. Those failures are captured on the task and re-thrown on `await`.
-            if handler.frame_index < handler_floor {
-                break;
             }
 
             self.exception_handlers.pop();
@@ -1703,36 +1882,49 @@ impl<'a> VM<'a> {
 
     /// Run the VM and add stack trace information to any errors
     pub fn run(&mut self) -> WalrusResult<Value> {
-        match self.run_inner() {
-            Ok(value) => Ok(value),
-            Err(err) => {
-                // Add stack trace to the error message
-                let stack_trace = self.format_stack_trace();
-                if stack_trace.is_empty() {
-                    Err(err)
-                } else {
-                    // Wrap the error with stack trace info
-                    Err(WalrusError::RuntimeErrorWithStackTrace {
-                        error: err.to_string(),
-                        stack_trace,
-                    })
+        loop {
+            match self.run_inner() {
+                Ok(RunSignal::Returned(value)) => return Ok(value),
+                Ok(RunSignal::Suspended(waiting_on)) => {
+                    self.suspended_main = Some(SuspendedExecution {
+                        context: self.take_context(),
+                        waiting_on,
+                    });
+
+                    while self.suspended_main.is_some() {
+                        self.refresh_waiting_tasks()?;
+                        if self.resume_main_if_ready()? {
+                            break;
+                        }
+
+                        if let Some(task_key) = self.next_runnable_task()? {
+                            self.run_pending_task_to_completion(task_key, Span::default())?;
+                            continue;
+                        }
+
+                        self.wait_for_scheduler_progress()?;
+                    }
+                }
+                Err(err) => {
+                    let stack_trace = self.format_stack_trace();
+                    return if stack_trace.is_empty() {
+                        Err(err)
+                    } else {
+                        Err(WalrusError::RuntimeErrorWithStackTrace {
+                            error: err.to_string(),
+                            stack_trace,
+                        })
+                    };
                 }
             }
         }
     }
 
-    fn run_inner(&mut self) -> WalrusResult<Value> {
+    fn run_inner(&mut self) -> WalrusResult<RunSignal> {
         let debug_logging_enabled = log_enabled!(log::Level::Debug);
         let profiling_enabled = self.profiling_enabled;
 
         'vm: loop {
-            if let Some(stop_depth) = self.run_until_depth_stack.last().copied() {
-                if self.call_stack.len() == stop_depth {
-                    self.run_until_depth_stack.pop();
-                    return Ok(Value::Void);
-                }
-            }
-
             // Poll GC periodically instead of every instruction.
             self.gc_poll_counter = self.gc_poll_counter.wrapping_add(1);
             if self.gc_poll_counter & 0xFF == 0 {
@@ -2487,7 +2679,7 @@ impl<'a> VM<'a> {
                                     )?;
 
                                     if self.call_stack.is_empty() {
-                                        return Ok(result);
+                                        return Ok(RunSignal::Returned(result));
                                     }
 
                                     self.locals.truncate(frame.frame_pointer);
@@ -2511,7 +2703,7 @@ impl<'a> VM<'a> {
                                     )?;
 
                                     if self.call_stack.is_empty() {
-                                        return Ok(result);
+                                        return Ok(RunSignal::Returned(result));
                                     }
 
                                     self.locals.truncate(frame.frame_pointer);
@@ -2545,7 +2737,7 @@ impl<'a> VM<'a> {
                                         )?;
 
                                         if self.call_stack.is_empty() {
-                                            return Ok(result);
+                                            return Ok(RunSignal::Returned(result));
                                         }
 
                                         self.locals.truncate(frame.frame_pointer);
@@ -2682,7 +2874,7 @@ impl<'a> VM<'a> {
                                     )?;
 
                                     if self.call_stack.is_empty() {
-                                        return Ok(result);
+                                        return Ok(RunSignal::Returned(result));
                                     }
 
                                     self.locals.truncate(frame.frame_pointer);
@@ -3513,84 +3705,23 @@ impl<'a> VM<'a> {
                             });
                         }
                     };
-                    let caller_depth = self.call_stack.len();
-                    let resume_ip = self.ip;
-                    let mut awaited_result_on_stack = false;
-                    self.await_task_roots.push(task_key);
-
-                    loop {
-                        match self.poll_task_resolution(task_key)? {
-                            TaskResolution::Ready(value) => {
-                                if !awaited_result_on_stack {
-                                    self.push(value);
-                                }
-                                self.await_task_roots.pop();
-                                break;
-                            }
-                            TaskResolution::Failed(error_value) => {
-                                self.await_task_roots.pop();
-                                self.throw_value(error_value, span)?;
-                                if self.call_stack.len() != caller_depth || self.ip != resume_ip {
-                                    continue 'vm;
-                                }
-                                break;
-                            }
-                            TaskResolution::Cancelled => {
-                                self.await_task_roots.pop();
-                                let cancelled = self.cancelled_task_error_value();
-                                self.throw_value(cancelled, span)?;
-                                if self.call_stack.len() != caller_depth || self.ip != resume_ip {
-                                    continue 'vm;
-                                }
-                                break;
-                            }
-                            TaskResolution::Pending => {}
+                    match self.poll_task_resolution(task_key)? {
+                        TaskResolution::Ready(value) => {
+                            self.push(value);
                         }
-
-                        let Some(next_task) = self.next_runnable_task(task_key)? else {
-                            // No runnable tasks — check for timers or pending I/O
-                            let mut visited = FxHashSet::default();
-                            let deadline = self.next_deadline_for_task(task_key, &mut visited)?;
-                            visited.clear();
-                            let has_io = self.task_has_pending_io(task_key, &mut visited)?;
-
-                            if deadline.is_none() && !has_io {
-                                self.await_task_roots.pop();
-                                return Err(WalrusError::GenericError {
-                                    message: "Event loop deadlock: awaited task is pending with no runnable tasks".to_string(),
-                                });
-                            }
-
-                            // Wait for either I/O completion or timer expiry
-                            if let Some(deadline) = deadline {
-                                let now = Instant::now();
-                                if deadline > now {
-                                    let timeout = deadline.duration_since(now);
-                                    // Block until wakeup signal or timeout
-                                    let _ = self.io_wakeup_rx.recv_timeout(timeout);
-                                }
-                            } else {
-                                // Only I/O pending, no timer — block until wakeup
-                                let _ = self.io_wakeup_rx.recv();
-                            }
-                            continue;
-                        };
-
-                        let keep_result = next_task == task_key;
-                        self.run_pending_task_to_completion(next_task, span)?;
-                        if self.call_stack.len() != caller_depth || self.ip != resume_ip {
-                            // Control was transferred (for example by throw/catch while resolving
-                            // a task). Resume normal VM dispatch at the new location.
-                            self.await_task_roots.pop();
+                        TaskResolution::Failed(error_value) => {
+                            self.throw_value(error_value, span)?;
                             continue 'vm;
                         }
-                        let next_resolution = self.poll_task_resolution(next_task)?;
-                        if keep_result {
-                            awaited_result_on_stack =
-                                matches!(next_resolution, TaskResolution::Ready(_));
-                        } else if matches!(next_resolution, TaskResolution::Ready(_)) {
-                            // Background task completion result is irrelevant to this `await`.
-                            let _ = self.pop(opcode, span)?;
+                        TaskResolution::Cancelled => {
+                            let cancelled = self.cancelled_task_error_value();
+                            self.throw_value(cancelled, span)?;
+                            continue 'vm;
+                        }
+                        TaskResolution::Pending => {
+                            self.ip -= 1;
+                            self.push(Value::Task(task_key));
+                            return Ok(RunSignal::Suspended(task_key));
                         }
                     }
                 }
@@ -3611,7 +3742,7 @@ impl<'a> VM<'a> {
 
                     // If this was the last frame (main), return the value
                     if self.call_stack.is_empty() {
-                        return Ok(return_value);
+                        return Ok(RunSignal::Returned(return_value));
                     }
 
                     // Truncate locals back to the frame pointer (cleanup this frame's locals)
