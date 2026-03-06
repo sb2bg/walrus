@@ -6,3 +6,7 @@ walrus.iml
 scripts/
 vscode/walrus/node_modules/
 vscode/walrus/*.vsix
+/benchmarks/http_bench/.venv/
+/benchmarks/http_bench/__pycache__/
+/benchmarks/http_bench/results/
+/benchmarks/http_bench/echo_payload.json
