@@ -48,7 +48,7 @@ app.post("/echo", : req {
 });
 
 // Simulate a slow endpoint — other requests are served concurrently
-app.get("/slow", : req {
+app.get("/slow", async : req {
     await asyncx.sleep(1000);
     return router.text(200, "done (after 1s delay)\n");
 });
