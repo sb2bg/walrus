@@ -1,0 +1,25 @@
+import "std/net" as net;
+import "std/core" as core;
+
+let listener = net.tcp_bind("127.0.0.1", 0);
+let port = net.tcp_local_port(listener);
+
+let client = await net.tcp_connect("127.0.0.1", port);
+let server = await net.tcp_accept(listener);
+
+println(core.type(net.tcp_peer_addr(client)));
+println(core.type(net.tcp_stream_local_addr(client)));
+
+net.tcp_set_nodelay(client, true);
+net.tcp_set_read_timeout(client, 50);
+net.tcp_set_write_timeout(client, 50);
+println(true);
+
+await net.tcp_write(client, "x");
+println(await net.tcp_read(server, 1));
+net.tcp_shutdown(client, "both");
+println(true);
+
+net.tcp_close(client);
+net.tcp_close(server);
+net.tcp_close_listener(listener);

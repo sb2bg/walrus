@@ -29,18 +29,13 @@ servers that expose the same routes and payload shapes.
 ## Run
 
 ```bash
-python3 benchmarks/http_bench/run_http_bench.py
-```
-
-Optional Python library comparisons:
-
-```bash
-python3 -m pip install -r benchmarks/http_bench/requirements-fastapi.txt
-python3 benchmarks/http_bench/run_http_bench.py
+python3 -m venv benchmarks/http_bench/.venv
+benchmarks/http_bench/.venv/bin/pip install -r benchmarks/http_bench/requirements-fastapi.txt
+benchmarks/http_bench/.venv/bin/python benchmarks/http_bench/run_http_bench.py
 ```
 
 Tune the run:
 
 ```bash
-python3 benchmarks/http_bench/run_http_bench.py --requests 20000 --concurrency 64
+benchmarks/http_bench/.venv/bin/python benchmarks/http_bench/run_http_bench.py --requests 20000 --concurrency 64
 ```
