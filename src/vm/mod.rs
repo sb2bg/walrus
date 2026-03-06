@@ -27,6 +27,7 @@ pub mod compiler;
 pub mod debugger;
 pub mod handlers;
 pub mod instruction_set;
+mod io_pool;
 pub mod methods;
 pub mod opcode;
 pub mod optimize;
@@ -790,19 +791,13 @@ impl<'a> VM<'a> {
         })
     }
 
-    /// Spawn a background I/O operation on a worker thread.
+    /// Spawn a background I/O operation on the bounded blocking I/O pool.
     /// Returns a Task value backed by a Channel that resolves when the worker completes.
     pub(crate) fn spawn_io<F>(&mut self, work: F) -> Value
     where
         F: FnOnce() -> Result<IoResult, String> + Send + 'static,
     {
-        let (tx, rx) = mpsc::channel();
-        let wakeup = self.io_wakeup_tx.clone();
-        std::thread::spawn(move || {
-            let result = work();
-            let _ = tx.send(result);
-            let _ = wakeup.send(());
-        });
+        let rx = io_pool::submit_io(work, self.io_wakeup_tx.clone());
         self.create_non_runnable_task(AsyncTask::Channel(IoChannel::new(rx)))
     }
 
