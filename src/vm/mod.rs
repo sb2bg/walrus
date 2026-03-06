@@ -955,6 +955,22 @@ impl<'a> VM<'a> {
         })
     }
 
+    pub(crate) fn channel_close(
+        &mut self,
+        endpoint_key: crate::arenas::DictKey,
+    ) -> WalrusResult<bool> {
+        let dict = self.get_heap().get_dict(endpoint_key)?.clone();
+        let id_key_str = self.get_heap_mut().push(HeapValue::String("__channel_id"));
+        if let Some(Value::Int(id)) = dict.get(&id_key_str) {
+            let id = *id as usize;
+            if id < self.user_channels.len() {
+                *self.user_channels[id].closed.borrow_mut() = true;
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     fn cancelled_task_error_value(&mut self) -> Value {
         self.get_heap_mut()
             .push(HeapValue::String("task cancelled"))
@@ -3499,12 +3515,15 @@ impl<'a> VM<'a> {
                     };
                     let caller_depth = self.call_stack.len();
                     let resume_ip = self.ip;
+                    let mut awaited_result_on_stack = false;
                     self.await_task_roots.push(task_key);
 
                     loop {
                         match self.poll_task_resolution(task_key)? {
                             TaskResolution::Ready(value) => {
-                                self.push(value);
+                                if !awaited_result_on_stack {
+                                    self.push(value);
+                                }
                                 self.await_task_roots.pop();
                                 break;
                             }
@@ -3565,14 +3584,13 @@ impl<'a> VM<'a> {
                             self.await_task_roots.pop();
                             continue 'vm;
                         }
-                        if !keep_result {
-                            if matches!(
-                                self.poll_task_resolution(next_task)?,
-                                TaskResolution::Ready(_)
-                            ) {
-                                // Background task completion result is irrelevant to this `await`.
-                                let _ = self.pop(opcode, span)?;
-                            }
+                        let next_resolution = self.poll_task_resolution(next_task)?;
+                        if keep_result {
+                            awaited_result_on_stack =
+                                matches!(next_resolution, TaskResolution::Ready(_));
+                        } else if matches!(next_resolution, TaskResolution::Ready(_)) {
+                            // Background task completion result is irrelevant to this `await`.
+                            let _ = self.pop(opcode, span)?;
                         }
                     }
                 }

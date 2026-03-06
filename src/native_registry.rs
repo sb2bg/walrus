@@ -191,6 +191,14 @@ pub static NATIVE_SPECS: &[NativeSpec] = &[
         native_async_recv
     ),
     native_spec!(
+        AsyncClose,
+        "std/async",
+        "close",
+        ["endpoint"],
+        "Close a channel sender or receiver. Pending receivers resolve to void and future sends return false.",
+        native_async_close
+    ),
+    native_spec!(
         AsyncStatus,
         "std/async",
         "status",
@@ -1150,6 +1158,22 @@ fn native_async_recv(vm: &mut VM<'_>, args: &[Value], span: Span) -> WalrusResul
         }
     };
     Ok(vm.channel_recv(receiver_key)?)
+}
+
+fn native_async_close(vm: &mut VM<'_>, args: &[Value], span: Span) -> WalrusResult<Value> {
+    let endpoint_key = match args[0] {
+        Value::Dict(key) => key,
+        other => {
+            return Err(WalrusError::TypeMismatch {
+                expected: "channel endpoint".to_string(),
+                found: other.get_type().to_string(),
+                span,
+                src: vm.source_ref().source().into(),
+                filename: vm.source_ref().filename().into(),
+            });
+        }
+    };
+    Ok(Value::Bool(vm.channel_close(endpoint_key)?))
 }
 
 fn native_async_status(vm: &mut VM<'_>, args: &[Value], span: Span) -> WalrusResult<Value> {
