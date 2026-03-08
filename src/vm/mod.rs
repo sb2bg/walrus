@@ -1,14 +1,18 @@
+use std::cell::RefCell;
+use std::collections::VecDeque;
 use std::ptr::NonNull;
 use std::rc::Rc;
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
 
 use float_ord::FloatOrd;
 use log::{debug, log_enabled};
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use instruction_set::InstructionSet;
 
 use crate::WalrusResult;
-use crate::arenas::HeapValue;
+use crate::arenas::{DictKey, FuncKey, HeapValue};
 use crate::error::WalrusError;
 use crate::function::{VmModuleBinding, WalrusFunction};
 use crate::iter::ValueIterator;
@@ -16,16 +20,20 @@ use crate::jit::{HotSpotDetector, TypeProfile, WalrusType};
 use crate::range::RangeValue;
 use crate::source_ref::SourceRef;
 use crate::span::Span;
-use crate::value::Value;
+use crate::value::{AsyncTask, IoChannel, IoResult, Value};
 use crate::vm::opcode::Opcode;
 
 pub mod compiler;
+mod debug_runtime;
 pub mod debugger;
-pub mod handlers;
 pub mod instruction_set;
+mod io_pool;
 pub mod methods;
+mod modules;
 pub mod opcode;
 pub mod optimize;
+mod scheduler;
+mod state;
 mod symbol_table;
 
 /// Represents a single call frame on the call stack.
@@ -36,7 +44,7 @@ mod symbol_table;
 /// - Where the operand stack was at call time (for cleanup on return)
 /// - The function's bytecode (via Rc to avoid cloning)
 /// - The function name for debugging/stack traces
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct CallFrame {
     /// Instruction pointer to return to after this frame completes
     return_ip: usize,
@@ -53,6 +61,8 @@ struct CallFrame {
     return_override: Option<Value>,
     /// Optional module binding context for exported module VM functions.
     module_binding: Option<Rc<VmModuleBinding>>,
+    /// The task that this frame is currently resolving via `await`, if any.
+    awaiting_task: Option<crate::arenas::TaskKey>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -69,6 +79,35 @@ struct ExceptionHandler {
     stack_len: usize,
     /// Locals length to restore before entering catch.
     locals_len: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TaskResolution {
+    Pending,
+    Ready(Value),
+    Failed(Value),
+    Cancelled,
+}
+
+#[derive(Debug, Default, Clone)]
+struct ExecutionContext {
+    stack: Vec<Value>,
+    locals: Vec<Value>,
+    call_stack: Vec<CallFrame>,
+    exception_handlers: Vec<ExceptionHandler>,
+    ip: usize,
+}
+
+#[derive(Debug, Clone)]
+struct SuspendedExecution {
+    context: ExecutionContext,
+    waiting_on: crate::arenas::TaskKey,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RunSignal {
+    Returned(Value),
+    Suspended(crate::arenas::TaskKey),
 }
 
 /// The Walrus Virtual Machine executes compiled bytecode.
@@ -103,6 +142,13 @@ struct ExceptionHandler {
 /// only keys that index into the arena.
 ///
 /// ## JIT Compilation (Phase 2)
+/// A user-facing async channel for task-to-task communication.
+/// Single-threaded: uses Rc<RefCell<...>> since the VM is not Send.
+struct UserChannel {
+    buffer: Rc<RefCell<VecDeque<Value>>>,
+    closed: Rc<RefCell<bool>>,
+}
+
 /// The VM tracks type information and execution counts at key points:
 /// - Loop headers (for hot loop detection)
 /// - Function calls (for hot function detection)
@@ -118,7 +164,16 @@ pub struct VM<'a> {
     gc_poll_counter: u32, // Throttle GC checks to avoid per-instruction overhead
     globals: Vec<Value>,
     global_names: Vec<String>,
+    async_task_queue: VecDeque<crate::arenas::TaskKey>,
+    suspended_main: Option<SuspendedExecution>,
+    suspended_tasks: FxHashMap<crate::arenas::TaskKey, SuspendedExecution>,
+    task_waiters: FxHashMap<crate::arenas::TaskKey, Vec<crate::arenas::TaskKey>>,
     source_ref: SourceRef<'a>,
+    // I/O wakeup channel: worker threads send () to wake the event loop
+    io_wakeup_tx: mpsc::Sender<()>,
+    io_wakeup_rx: mpsc::Receiver<()>,
+    // User-facing async channels for task-to-task communication
+    user_channels: Vec<UserChannel>,
     // Debugger state
     debugger: Option<debugger::Debugger>,
     debug_mode: bool,
@@ -134,665 +189,51 @@ pub struct VM<'a> {
 }
 
 impl<'a> VM<'a> {
-    pub fn new(source_ref: SourceRef<'a>, is: InstructionSet) -> Self {
-        let global_names = is.globals.get_all_names();
-        // Initialize hot-spot detector with loop and function metadata from the bytecode
-        let mut hotspot_detector = HotSpotDetector::new();
-
-        // Register all loops detected during compilation
-        for loop_meta in &is.loops {
-            hotspot_detector.register_loop(
-                loop_meta.header_ip,
-                loop_meta.back_edge_ip,
-                loop_meta.exit_ip,
-            );
-        }
-
-        // Register all functions detected during compilation
-        for func_meta in &is.functions {
-            hotspot_detector.register_function(&func_meta.name, func_meta.start_ip);
-        }
-
-        // Create the initial call frame for the main program
-        let main_frame = CallFrame {
-            return_ip: 0,
-            frame_pointer: 0,
-            stack_pointer: 0,
-            instructions: Rc::new(is),
-            function_name: "<main>".to_string(),
-            return_override: None,
-            module_binding: None,
-        };
-
-        Self {
-            stack: Vec::new(),
-            locals: Vec::new(),
-            call_stack: vec![main_frame],
-            exception_handlers: Vec::new(),
-            ip: 0,
-            gc_poll_counter: 0,
-            // Pre-size globals to declared symbol count so sparse/forward writes are safe.
-            globals: vec![Value::Void; global_names.len()],
-            global_names,
-            source_ref,
-            debugger: None,
-            debug_mode: false,
-            // Profiling is opt-in (enabled by Program when requested)
-            hotspot_detector,
-            type_profile: TypeProfile::new(),
-            profiling_enabled: false,
-            // JIT compiler (Phase 2)
-            #[cfg(feature = "jit")]
-            jit_compiler: crate::jit::JitCompiler::new().ok(),
-            #[cfg(feature = "jit")]
-            jit_enabled: false,
-        }
-    }
-
-    /// Enable the debugger
-    pub fn enable_debugger(&mut self) {
-        self.debug_mode = true;
-        self.debugger = Some(debugger::Debugger::new());
-    }
-
-    /// Create a VM with profiling disabled (for benchmarking baseline)
-    pub fn new_without_profiling(source_ref: SourceRef<'a>, is: InstructionSet) -> Self {
-        let mut vm = Self::new(source_ref, is);
-        vm.profiling_enabled = false;
-        vm
-    }
-
-    /// Enable or disable JIT profiling
-    pub fn set_profiling(&mut self, enabled: bool) {
-        self.profiling_enabled = enabled;
-    }
-
-    /// Enable or disable JIT compilation and execution
-    #[cfg(feature = "jit")]
-    pub fn set_jit_enabled(&mut self, enabled: bool) {
-        self.jit_enabled = enabled;
-    }
-
-    /// Get JIT compilation statistics
-    #[cfg(feature = "jit")]
-    pub fn jit_stats(&self) -> Option<crate::jit::JitStats> {
-        self.jit_compiler.as_ref().map(|jit| jit.stats())
-    }
-
-    /// Get hot-spot detection statistics
-    pub fn hotspot_stats(&self) -> crate::jit::hotspot::HotSpotStats {
-        self.hotspot_detector.stats()
-    }
-
-    /// Get the type profile for analysis
-    pub fn type_profile(&self) -> &TypeProfile {
-        &self.type_profile
-    }
-
-    /// Get the current call frame (the one at the top of the call stack)
-    #[inline(always)]
-    fn current_frame(&self) -> &CallFrame {
-        // SAFETY: call_stack is never empty during VM execution (always has at least main frame)
-        unsafe { self.call_stack.last().unwrap_unchecked() }
-    }
-
-    #[inline(always)]
-    fn current_frame_index(&self) -> usize {
-        self.call_stack.len() - 1
-    }
-
-    /// Get the current frame pointer (start of current frame's locals)
-    #[inline(always)]
-    fn frame_pointer(&self) -> usize {
-        self.current_frame().frame_pointer
-    }
-
-    /// Get the current function name
-    #[inline(always)]
-    fn function_name(&self) -> &str {
-        let name = &self.current_frame().function_name;
-        if name.is_empty() { "<fn>" } else { name }
-    }
-
-    /// Helper to access heap - uses thread-local ARENA
-    ///
-    /// # Safety
-    /// Uses unsafe get_arena_ptr() for performance. This is safe because:
-    /// - The VM is single-threaded
-    /// - We only access the arena within VM methods (no escaping references)
-    /// - No concurrent borrows occur within VM execution
-    #[inline]
-    pub(crate) fn get_heap(&self) -> &crate::arenas::ValueHolder {
-        unsafe { &*crate::arenas::get_arena_ptr() }
-    }
-
-    /// Helper to access heap mutably - uses thread-local ARENA
-    ///
-    /// # Safety
-    /// See get_heap() for safety rationale.
-    #[inline]
-    pub(crate) fn get_heap_mut(&mut self) -> &mut crate::arenas::ValueHolder {
-        unsafe { &mut *crate::arenas::get_arena_ptr() }
-    }
-
-    #[inline(always)]
-    pub(crate) fn source_ref(&self) -> SourceRef<'a> {
-        self.source_ref
-    }
-
-    #[inline(always)]
-    fn current_module_binding(&self) -> Option<Rc<VmModuleBinding>> {
-        self.call_stack
-            .last()
-            .and_then(|frame| frame.module_binding.clone())
-    }
-
-    fn undefined_global_error(
-        &self,
-        index: usize,
-        span: Span,
-        binding: Option<&VmModuleBinding>,
-    ) -> WalrusError {
-        let name = binding
-            .and_then(|ctx| ctx.global_names.get(index))
-            .or_else(|| self.global_names.get(index))
-            .cloned()
-            .unwrap_or_else(|| format!("<global[{index}]>"));
-
-        let (src, filename) = if let Some(ctx) = binding {
-            (ctx.source.to_string(), ctx.filename.to_string())
-        } else {
-            (
-                self.source_ref.source().to_string(),
-                self.source_ref.filename().to_string(),
-            )
-        };
-
-        WalrusError::UndefinedVariable {
-            name,
-            span,
-            src,
-            filename,
-        }
-    }
-
-    fn load_global_value(&mut self, index: usize, span: Span) -> WalrusResult<Value> {
-        if let Some(binding) = self.current_module_binding() {
-            let Some(name) = binding.global_names.get(index) else {
-                return Err(self.undefined_global_error(index, span, Some(binding.as_ref())));
-            };
-
-            let key = Value::String(self.get_heap_mut().push_ident(name));
-            let module = self.get_heap().get_module(binding.module_key)?;
-            if let Some(value) = module.get(&key).copied() {
-                return Ok(value);
-            }
-
-            Ok(binding
-                .global_values
-                .get(index)
-                .copied()
-                .unwrap_or(Value::Void))
-        } else {
-            self.globals
-                .get(index)
-                .copied()
-                .ok_or_else(|| self.undefined_global_error(index, span, None))
-        }
-    }
-
-    fn store_global_value(&mut self, index: usize, value: Value, span: Span) -> WalrusResult<()> {
-        if let Some(binding) = self.current_module_binding() {
-            let Some(name) = binding.global_names.get(index) else {
-                return Err(self.undefined_global_error(index, span, Some(binding.as_ref())));
-            };
-
-            let key = Value::String(self.get_heap_mut().push_ident(name));
-            self.get_heap_mut()
-                .get_mut_module(binding.module_key)?
-                .insert(key, value);
-            Ok(())
-        } else {
-            if index >= self.globals.len() {
-                self.globals.resize(index + 1, Value::Void);
-            }
-            self.globals[index] = value;
-            Ok(())
-        }
-    }
-
-    fn bind_exported_value_to_module(
-        &mut self,
-        value: Value,
-        binding: &Rc<VmModuleBinding>,
-    ) -> WalrusResult<Value> {
-        match value {
-            Value::Function(func_key) => {
-                let function = self.get_heap().get_function(func_key)?.clone();
-                match function {
-                    WalrusFunction::Vm(mut vm_func) => {
-                        vm_func.module_binding = Some(binding.clone());
-                        Ok(self
-                            .get_heap_mut()
-                            .push(HeapValue::Function(WalrusFunction::Vm(vm_func))))
-                    }
-                    _ => Ok(value),
-                }
-            }
-            Value::StructDef(struct_key) => {
-                let original = self.get_heap().get_struct_def(struct_key)?.clone();
-                let mut rebound =
-                    crate::structs::StructDefinition::new(original.name().to_string());
-
-                for (method_name, method_fn) in original.methods() {
-                    let bound_method = match method_fn.clone() {
-                        WalrusFunction::Vm(mut vm_func) => {
-                            vm_func.module_binding = Some(binding.clone());
-                            WalrusFunction::Vm(vm_func)
-                        }
-                        other => other,
-                    };
-                    rebound.add_method(method_name.clone(), bound_method);
-                }
-
-                Ok(self.get_heap_mut().push(HeapValue::StructDef(rebound)))
-            }
-            _ => Ok(value),
-        }
-    }
-
-    pub fn export_globals_as_module(&mut self) -> WalrusResult<Value> {
-        let global_names = self.global_names.clone();
-        let global_values = self.globals.clone();
-        let mut exports = FxHashMap::default();
-
-        for (index, name) in global_names.iter().enumerate() {
-            if name == "_" {
-                continue;
-            }
-
-            let value = match self.globals.get(index).copied() {
-                Some(value) => value,
-                None => continue,
-            };
-
-            let key = self.get_heap_mut().push(HeapValue::String(name));
-            exports.insert(key, value);
-        }
-
-        let module_key = match self.get_heap_mut().push(HeapValue::Module(exports)) {
-            Value::Module(key) => key,
-            _ => unreachable!("module export must allocate a module"),
-        };
-
-        let binding = Rc::new(VmModuleBinding {
-            module_key,
-            global_names: Rc::new(global_names),
-            global_values: Rc::new(global_values),
-            source: Rc::new(self.source_ref.source().to_string()),
-            filename: Rc::new(self.source_ref.filename().to_string()),
-        });
-
-        // Rebind exported values that contain VM functions so global accesses
-        // resolve against this module, not the importing VM's global vector.
-        let names = binding.global_names.clone();
-        for name in names.iter() {
-            if name == "_" {
-                continue;
-            }
-
-            let entry_value = {
-                let key = Value::String(self.get_heap_mut().push_ident(name));
-                let module = self.get_heap().get_module(module_key)?;
-                module.get(&key).copied()
-            };
-
-            let Some(entry_value) = entry_value else {
-                continue;
-            };
-
-            let bound_value = self.bind_exported_value_to_module(entry_value, &binding)?;
-
-            let key = Value::String(self.get_heap_mut().push_ident(name));
-            self.get_heap_mut()
-                .get_mut_module(module_key)?
-                .insert(key, bound_value);
-        }
-
-        Ok(Value::Module(module_key))
-    }
-
-    /// Collect all root values that the GC needs to trace from
-    pub(crate) fn collect_roots(&self) -> Vec<Value> {
-        let mut roots = Vec::with_capacity(self.stack.len() + self.locals.len() + 64);
-
-        // Stack values are roots
-        roots.extend(self.stack.iter().copied());
-
-        // Local variables are roots
-        roots.extend(self.locals.iter().copied());
-
-        // Global variables are roots
-        roots.extend(self.globals.iter().copied());
-
-        // Constants in all call frames are roots (they might reference heap objects)
-        for frame in &self.call_stack {
-            roots.extend(frame.instructions.constants.iter().copied());
-            if let Some(binding) = &frame.module_binding {
-                roots.push(Value::Module(binding.module_key));
-            }
-        }
-
-        // Imported modules are cached process-wide and must remain rooted.
-        roots.extend(crate::program::cached_module_roots());
-
-        roots
-    }
-
-    /// Run garbage collection if needed
-    fn maybe_collect_garbage(&mut self) {
-        if self.get_heap().should_collect() {
-            let roots = self.collect_roots();
-            let freed = self.get_heap_mut().collect_garbage(&roots);
-            if freed > 0 {
-                debug!("GC: Freed {} objects", freed);
-            }
-        }
-    }
-
-    /// Stringify a value using the global heap
-    fn stringify_value(&self, value: Value) -> WalrusResult<String> {
-        self.get_heap().stringify(value)
-    }
-
-    /// Format the current call stack as a human-readable stack trace
-    /// Truncates the middle if there are too many frames (like Python does)
-    fn format_stack_trace(&self) -> String {
-        if self.call_stack.len() <= 1 {
-            return String::new();
-        }
-
-        const MAX_FRAMES_TOP: usize = 5; // Show first N frames (oldest)
-        const MAX_FRAMES_BOTTOM: usize = 5; // Show last N frames (most recent)
-
-        let mut trace = String::from("\nStack trace (most recent call last):\n");
-        let len = self.call_stack.len();
-
-        if len <= MAX_FRAMES_TOP + MAX_FRAMES_BOTTOM {
-            // Show all frames
-            for (i, frame) in self.call_stack.iter().enumerate() {
-                let name = if frame.function_name.is_empty() {
-                    "<fn>"
-                } else {
-                    frame.function_name.as_str()
-                };
-                trace.push_str(&format!("  {}: {}\n", i, name));
-            }
-        } else {
-            // Show first N frames
-            for (i, frame) in self.call_stack.iter().take(MAX_FRAMES_TOP).enumerate() {
-                let name = if frame.function_name.is_empty() {
-                    "<fn>"
-                } else {
-                    frame.function_name.as_str()
-                };
-                trace.push_str(&format!("  {}: {}\n", i, name));
-            }
-
-            // Show truncation message
-            let hidden = len - MAX_FRAMES_TOP - MAX_FRAMES_BOTTOM;
-            trace.push_str(&format!("  ... {} more frames ...\n", hidden));
-
-            // Show last N frames
-            for (i, frame) in self
-                .call_stack
-                .iter()
-                .skip(len - MAX_FRAMES_BOTTOM)
-                .enumerate()
-            {
-                let actual_index = len - MAX_FRAMES_BOTTOM + i;
-                let name = if frame.function_name.is_empty() {
-                    "<fn>"
-                } else {
-                    frame.function_name.as_str()
-                };
-                trace.push_str(&format!("  {}: {}\n", actual_index, name));
-            }
-        }
-        trace
-    }
-
-    /// Call a native stdlib function
-    fn call_native(
-        &mut self,
-        native_fn: crate::function::NativeFunction,
-        args: Vec<Value>,
-        span: Span,
-    ) -> WalrusResult<Value> {
-        crate::native_registry::dispatch_native(self, native_fn, args, span)
-    }
-
-    fn call_exported_function(
-        &mut self,
-        function: WalrusFunction,
-        args: Vec<Value>,
-        span: Span,
-    ) -> WalrusResult<Option<Value>> {
-        match function {
-            WalrusFunction::Native(native) => {
-                let result = self.call_native(native, args, span)?;
-                Ok(Some(result))
-            }
-            WalrusFunction::Rust(rust_fn) => {
-                if args.len() != rust_fn.args {
-                    return Err(WalrusError::InvalidArgCount {
-                        name: rust_fn.name.clone(),
-                        expected: rust_fn.args,
-                        got: args.len(),
-                        span,
-                        src: self.source_ref.source().into(),
-                        filename: self.source_ref.filename().into(),
-                    });
-                }
-
-                let result = rust_fn.call(args, self.source_ref, span)?;
-                Ok(Some(result))
-            }
-            WalrusFunction::Vm(func) => {
-                if args.len() != func.arity {
-                    return Err(WalrusError::InvalidArgCount {
-                        name: func.name.clone(),
-                        expected: func.arity,
-                        got: args.len(),
-                        span,
-                        src: self.source_ref.source().into(),
-                        filename: self.source_ref.filename().into(),
-                    });
-                }
-
-                let new_frame = CallFrame {
-                    return_ip: self.ip,
-                    frame_pointer: self.locals.len(),
-                    stack_pointer: self.stack.len(),
-                    instructions: Rc::clone(&func.code),
-                    function_name: func.name.clone(),
-                    return_override: None,
-                    module_binding: func.module_binding.clone(),
-                };
-
-                self.call_stack.push(new_frame);
-                self.locals.extend(args);
-                self.ip = 0;
-                Ok(None)
-            }
-            WalrusFunction::TreeWalk(_) => Err(WalrusError::NodeFunctionNotSupportedInVm {
-                span,
-                src: self.source_ref.source().into(),
-                filename: self.source_ref.filename().into(),
-            }),
-        }
-    }
-
-    /// Helper to extract string from Value
-    pub(crate) fn value_to_string(&self, value: Value, span: Span) -> WalrusResult<String> {
-        match value {
-            Value::String(key) => Ok(self.get_heap().get_string(key)?.to_string()),
-            _ => Err(WalrusError::TypeMismatch {
-                expected: "string".to_string(),
-                found: value.get_type().to_string(),
-                span,
-                src: self.source_ref.source().into(),
-                filename: self.source_ref.filename().into(),
-            }),
-        }
-    }
-
-    /// Helper to extract int from Value
-    pub(crate) fn value_to_int(&self, value: Value, span: Span) -> WalrusResult<i64> {
-        match value {
-            Value::Int(n) => Ok(n),
-            _ => Err(WalrusError::TypeMismatch {
-                expected: "int".to_string(),
-                found: value.get_type().to_string(),
-                span,
-                src: self.source_ref.source().into(),
-                filename: self.source_ref.filename().into(),
-            }),
-        }
-    }
-
-    /// Helper to extract numeric values (int or float) as f64
-    pub(crate) fn value_to_number(&self, value: Value, span: Span) -> WalrusResult<f64> {
-        match value {
-            Value::Int(n) => Ok(n as f64),
-            Value::Float(FloatOrd(f)) => Ok(f),
-            _ => Err(WalrusError::TypeMismatch {
-                expected: "number".to_string(),
-                found: value.get_type().to_string(),
-                span,
-                src: self.source_ref.source().into(),
-                filename: self.source_ref.filename().into(),
-            }),
-        }
-    }
-
-    /// Normalize an index (supports negative indices) against a character length.
-    fn normalize_index(index: i64, len: usize) -> Option<usize> {
-        let len = len as i64;
-        let normalized = if index < 0 { index + len } else { index };
-        if normalized < 0 || normalized >= len {
-            None
-        } else {
-            Some(normalized as usize)
-        }
-    }
-
-    /// Convert a character index to a byte offset.
-    /// Returns `s.len()` when `char_index` is exactly one-past-the-end.
-    fn char_to_byte_offset(s: &str, char_index: usize) -> Option<usize> {
-        if char_index == 0 {
-            return Some(0);
-        }
-        if char_index == s.chars().count() {
-            return Some(s.len());
-        }
-        s.char_indices().nth(char_index).map(|(offset, _)| offset)
-    }
-
-    /// Remove handlers that are no longer reachable from the current execution point.
-    ///
-    /// Handlers become stale when:
-    /// - Their frame has been popped.
-    /// - Control flow in the same frame has jumped out of the protected try range.
-    fn prune_exception_handlers(&mut self) {
-        if self.exception_handlers.is_empty() {
-            return;
-        }
-
-        let current_frame = self.current_frame_index();
-        while let Some(handler) = self.exception_handlers.last().copied() {
-            let stale_frame = handler.frame_index > current_frame;
-            let out_of_range_in_frame = handler.frame_index == current_frame
-                && (self.ip < handler.start_ip || self.ip >= handler.end_ip);
-
-            if stale_frame || out_of_range_in_frame {
-                self.exception_handlers.pop();
-            } else {
-                break;
-            }
-        }
-    }
-
-    /// Clear all handlers that belong to `frame_index` or deeper.
-    /// Used when a frame is reused (tail call) or dropped.
-    fn clear_exception_handlers_from_frame(&mut self, frame_index: usize) {
-        while let Some(handler) = self.exception_handlers.last().copied() {
-            if handler.frame_index >= frame_index {
-                self.exception_handlers.pop();
-            } else {
-                break;
-            }
-        }
-    }
-
-    /// Raise a thrown value, transferring control to the nearest active catch handler.
-    fn throw_value(&mut self, value: Value, span: Span) -> WalrusResult<()> {
-        while let Some(handler) = self.exception_handlers.pop() {
-            if handler.frame_index > self.current_frame_index() {
-                continue;
-            }
-
-            // Unwind call frames until we reach the frame that owns this handler.
-            while self.current_frame_index() > handler.frame_index {
-                let frame = self
-                    .call_stack
-                    .pop()
-                    .expect("Call stack should never be empty while unwinding");
-                self.locals.truncate(frame.frame_pointer);
-                self.stack.truncate(frame.stack_pointer);
-            }
-
-            self.locals.truncate(handler.locals_len);
-            self.stack.truncate(handler.stack_len);
-            self.ip = handler.catch_ip;
-            self.push(value);
-            return Ok(());
-        }
-
-        let message = self.stringify_value(value)?;
-        Err(WalrusError::ThrownValue {
-            message,
-            span,
-            src: self.source_ref.source().into(),
-            filename: self.source_ref.filename().into(),
-        })
-    }
-
     /// Run the VM and add stack trace information to any errors
     pub fn run(&mut self) -> WalrusResult<Value> {
-        match self.run_inner() {
-            Ok(value) => Ok(value),
-            Err(err) => {
-                // Add stack trace to the error message
-                let stack_trace = self.format_stack_trace();
-                if stack_trace.is_empty() {
-                    Err(err)
-                } else {
-                    // Wrap the error with stack trace info
-                    Err(WalrusError::RuntimeErrorWithStackTrace {
-                        error: err.to_string(),
-                        stack_trace,
-                    })
+        loop {
+            match self.run_inner() {
+                Ok(RunSignal::Returned(value)) => return Ok(value),
+                Ok(RunSignal::Suspended(waiting_on)) => {
+                    self.suspended_main = Some(SuspendedExecution {
+                        context: self.take_context(),
+                        waiting_on,
+                    });
+
+                    while self.suspended_main.is_some() {
+                        self.refresh_waiting_tasks()?;
+                        if self.resume_main_if_ready()? {
+                            break;
+                        }
+
+                        if let Some(task_key) = self.next_runnable_task()? {
+                            self.run_pending_task_to_completion(task_key, Span::default())?;
+                            continue;
+                        }
+
+                        self.wait_for_scheduler_progress()?;
+                    }
+                }
+                Err(err) => {
+                    let stack_trace = self.format_stack_trace();
+                    return if stack_trace.is_empty() {
+                        Err(err)
+                    } else {
+                        Err(WalrusError::RuntimeErrorWithStackTrace {
+                            error: err.to_string(),
+                            stack_trace,
+                        })
+                    };
                 }
             }
         }
     }
 
-    fn run_inner(&mut self) -> WalrusResult<Value> {
+    fn run_inner(&mut self) -> WalrusResult<RunSignal> {
         let debug_logging_enabled = log_enabled!(log::Level::Debug);
         let profiling_enabled = self.profiling_enabled;
 
-        loop {
+        'vm: loop {
             // Poll GC periodically instead of every instruction.
             self.gc_poll_counter = self.gc_poll_counter.wrapping_add(1);
             if self.gc_poll_counter & 0xFF == 0 {
@@ -954,7 +395,7 @@ impl<'a> VM<'a> {
                         self.try_compile_hot_range_loop(loop_header_ip, exit_ip);
                     }
 
-                    // Standard interpreted execution
+                    // Standard execution
                     let fp = self.frame_pointer();
                     let idx = fp + local_idx as usize;
                     // SAFETY: compiler guarantees range-loop locals are allocated at idx and idx+1.
@@ -1189,6 +630,7 @@ impl<'a> VM<'a> {
                                     function_name: format!("{}::iter", struct_name),
                                     return_override: None,
                                     module_binding: func.module_binding.clone(),
+                                    awaiting_task: None,
                                 };
 
                                 self.call_stack.push(new_frame);
@@ -1308,19 +750,16 @@ impl<'a> VM<'a> {
                             if let Ok(func_ref) = self.get_heap().get_function(key) {
                                 let name = match func_ref {
                                     WalrusFunction::Vm(f) => f.name.clone(),
-                                    WalrusFunction::Rust(f) => f.name.clone(),
-                                    _ => String::new(),
+                                    WalrusFunction::Native(f) => f.name().to_string(),
                                 };
-                                if !name.is_empty() {
-                                    if self.hotspot_detector.record_function_call(&name) {
-                                        debug!("Hot function detected: {}", name);
-                                    }
-                                    // Track argument types
-                                    let args_start = self.stack.len() - arg_count;
-                                    for (i, arg) in self.stack[args_start..].iter().enumerate() {
-                                        let arg_type = WalrusType::from_value(arg);
-                                        self.type_profile.observe(self.ip - 1 + i, arg_type);
-                                    }
+                                if self.hotspot_detector.record_function_call(&name) {
+                                    debug!("Hot function detected: {}", name);
+                                }
+                                // Track argument types
+                                let args_start = self.stack.len() - arg_count;
+                                for (i, arg) in self.stack[args_start..].iter().enumerate() {
+                                    let arg_type = WalrusType::from_value(arg);
+                                    self.type_profile.observe(self.ip - 1 + i, arg_type);
                                 }
                             }
                         }
@@ -1343,6 +782,13 @@ impl<'a> VM<'a> {
                                         });
                                     }
 
+                                    if func.is_async {
+                                        let args = self.pop_n(arg_count, opcode, span)?;
+                                        let task = self.create_task_for_function_key(key, args);
+                                        self.push(task);
+                                        continue;
+                                    }
+
                                     // Create a new call frame instead of a child VM
                                     let new_frame = CallFrame {
                                         return_ip: self.ip,                          // Where to return after this function
@@ -1352,6 +798,7 @@ impl<'a> VM<'a> {
                                         function_name: String::new(),
                                         return_override: None,
                                         module_binding: func.module_binding.clone(),
+                                        awaiting_task: None,
                                     };
 
                                     // Push the new frame
@@ -1364,36 +811,11 @@ impl<'a> VM<'a> {
                                     // Start execution at the beginning of the new function
                                     self.ip = 0;
                                 }
-                                WalrusFunction::Rust(func) => {
-                                    let func = func.clone();
-                                    let args = self.pop_n(arg_count, opcode, span)?;
-                                    if args.len() != func.args {
-                                        return Err(WalrusError::InvalidArgCount {
-                                            name: func.name.clone(),
-                                            expected: func.args,
-                                            got: args.len(),
-                                            span,
-                                            src: self.source_ref.source().into(),
-                                            filename: self.source_ref.filename().into(),
-                                        });
-                                    }
-                                    let result = func.call(args, self.source_ref, span)?;
-                                    self.push(result);
-                                }
                                 WalrusFunction::Native(native_fn) => {
                                     let native_fn = *native_fn;
                                     let args = self.pop_n(arg_count, opcode, span)?;
                                     let result = self.call_native(native_fn, args, span)?;
                                     self.push(result);
-                                }
-                                _ => {
-                                    // In theory, this should never happen because the compiler
-                                    // should not compile a call to a node function (but just in case)
-                                    return Err(WalrusError::NodeFunctionNotSupportedInVm {
-                                        span,
-                                        src: self.source_ref.source().into(),
-                                        filename: self.source_ref.filename().into(),
-                                    });
                                 }
                             }
                         }
@@ -1435,6 +857,7 @@ impl<'a> VM<'a> {
                                         function_name: format!("{}::init", struct_name),
                                         return_override: Some(instance_value),
                                         module_binding: init_func.module_binding.clone(),
+                                        awaiting_task: None,
                                     };
 
                                     self.call_stack.push(new_frame);
@@ -1508,38 +931,6 @@ impl<'a> VM<'a> {
                             let func = self.get_heap().get_function(key)?;
 
                             match func {
-                                WalrusFunction::Rust(func) => {
-                                    let func = func.clone();
-                                    let args = self.pop_n(arg_count, opcode, span)?;
-                                    // Rust functions don't use call frames, so just call and return
-                                    if args.len() != func.args {
-                                        return Err(WalrusError::InvalidArgCount {
-                                            name: func.name.clone(),
-                                            expected: func.args,
-                                            got: args.len(),
-                                            span,
-                                            src: self.source_ref.source().into(),
-                                            filename: self.source_ref.filename().into(),
-                                        });
-                                    }
-                                    let result = func.call(args, self.source_ref, span)?;
-
-                                    // For a tail call, we need to return this result
-                                    // Pop the current frame and push the result
-                                    let frame = self
-                                        .call_stack
-                                        .pop()
-                                        .expect("Call stack should never be empty on tail call");
-                                    self.clear_exception_handlers_from_frame(self.call_stack.len());
-
-                                    if self.call_stack.is_empty() {
-                                        return Ok(result);
-                                    }
-
-                                    self.locals.truncate(frame.frame_pointer);
-                                    self.ip = frame.return_ip;
-                                    self.push(result);
-                                }
                                 WalrusFunction::Native(native_fn) => {
                                     let native_fn = *native_fn;
                                     let args = self.pop_n(arg_count, opcode, span)?;
@@ -1551,9 +942,13 @@ impl<'a> VM<'a> {
                                         .pop()
                                         .expect("Call stack should never be empty on tail call");
                                     self.clear_exception_handlers_from_frame(self.call_stack.len());
+                                    self.complete_task_on_frame_return(
+                                        frame.awaiting_task,
+                                        result,
+                                    )?;
 
                                     if self.call_stack.is_empty() {
-                                        return Ok(result);
+                                        return Ok(RunSignal::Returned(result));
                                     }
 
                                     self.locals.truncate(frame.frame_pointer);
@@ -1570,6 +965,30 @@ impl<'a> VM<'a> {
                                             src: self.source_ref.source().into(),
                                             filename: self.source_ref.filename().into(),
                                         });
+                                    }
+
+                                    if func.is_async {
+                                        let args = self.pop_n(arg_count, opcode, span)?;
+                                        let result = self.create_task_for_function_key(key, args);
+                                        let frame = self.call_stack.pop().expect(
+                                            "Call stack should never be empty on tail call",
+                                        );
+                                        self.clear_exception_handlers_from_frame(
+                                            self.call_stack.len(),
+                                        );
+                                        self.complete_task_on_frame_return(
+                                            frame.awaiting_task,
+                                            result,
+                                        )?;
+
+                                        if self.call_stack.is_empty() {
+                                            return Ok(RunSignal::Returned(result));
+                                        }
+
+                                        self.locals.truncate(frame.frame_pointer);
+                                        self.ip = frame.return_ip;
+                                        self.push(result);
+                                        continue;
                                     }
 
                                     // Clone what we need before mutating self
@@ -1600,13 +1019,6 @@ impl<'a> VM<'a> {
 
                                     // Reset IP to start of the new function
                                     self.ip = 0;
-                                }
-                                _ => {
-                                    return Err(WalrusError::NodeFunctionNotSupportedInVm {
-                                        span,
-                                        src: self.source_ref.source().into(),
-                                        filename: self.source_ref.filename().into(),
-                                    });
                                 }
                             }
                         }
@@ -1694,9 +1106,13 @@ impl<'a> VM<'a> {
                                         .pop()
                                         .expect("Call stack should never be empty on tail call");
                                     self.clear_exception_handlers_from_frame(self.call_stack.len());
+                                    self.complete_task_on_frame_return(
+                                        frame.awaiting_task,
+                                        result,
+                                    )?;
 
                                     if self.call_stack.is_empty() {
-                                        return Ok(result);
+                                        return Ok(RunSignal::Returned(result));
                                     }
 
                                     self.locals.truncate(frame.frame_pointer);
@@ -2513,6 +1929,40 @@ impl<'a> VM<'a> {
                         }
                     }
                 }
+                Opcode::Await => {
+                    let awaited = self.pop(opcode, span)?;
+                    let task_key = match awaited {
+                        Value::Task(task_key) => task_key,
+                        other => {
+                            return Err(WalrusError::TypeMismatch {
+                                expected: "task".to_string(),
+                                found: other.get_type().to_string(),
+                                span,
+                                src: self.source_ref.source().into(),
+                                filename: self.source_ref.filename().into(),
+                            });
+                        }
+                    };
+                    match self.poll_task_resolution(task_key)? {
+                        TaskResolution::Ready(value) => {
+                            self.push(value);
+                        }
+                        TaskResolution::Failed(error_value) => {
+                            self.throw_value(error_value, span)?;
+                            continue 'vm;
+                        }
+                        TaskResolution::Cancelled => {
+                            let cancelled = self.cancelled_task_error_value();
+                            self.throw_value(cancelled, span)?;
+                            continue 'vm;
+                        }
+                        TaskResolution::Pending => {
+                            self.ip -= 1;
+                            self.push(Value::Task(task_key));
+                            return Ok(RunSignal::Suspended(task_key));
+                        }
+                    }
+                }
                 Opcode::Return => {
                     let mut return_value = self.pop(opcode, span)?;
 
@@ -2526,10 +1976,11 @@ impl<'a> VM<'a> {
                     if let Some(override_value) = frame.return_override {
                         return_value = override_value;
                     }
+                    self.complete_task_on_frame_return(frame.awaiting_task, return_value)?;
 
                     // If this was the last frame (main), return the value
                     if self.call_stack.is_empty() {
-                        return Ok(return_value);
+                        return Ok(RunSignal::Returned(return_value));
                     }
 
                     // Truncate locals back to the frame pointer (cleanup this frame's locals)
@@ -2777,6 +2228,7 @@ impl<'a> VM<'a> {
                                     function_name: String::new(),
                                     return_override: None,
                                     module_binding: method_binding,
+                                    awaiting_task: None,
                                 };
 
                                 self.call_stack.push(new_frame);
@@ -2815,9 +2267,30 @@ impl<'a> VM<'a> {
                                         });
                                     }
                                     None => {
-                                        return Err(WalrusError::MethodNotFound {
+                                        // No method found — check if there's a field holding a callable function
+                                        let field_func = {
+                                            let inst = self.get_heap().get_struct_inst(inst_key)?;
+                                            inst.get_field(&method_name).copied()
+                                        };
+
+                                        if let Some(Value::Function(func_key)) = field_func {
+                                            // Field holds a function — call it (no self prepended)
+                                            let args = self.pop_n(arg_count, opcode, span)?;
+                                            let _ = self.pop(opcode, span)?; // pop object
+
+                                            let func =
+                                                self.get_heap().get_function(func_key)?.clone();
+                                            if let Some(result) =
+                                                self.call_exported_function(func, args, span)?
+                                            {
+                                                self.push(result);
+                                            }
+                                            continue;
+                                        }
+
+                                        return Err(WalrusError::MemberNotFound {
                                             type_name,
-                                            method: method_name,
+                                            member: method_name,
                                             span,
                                             src: self.source_ref.source().into(),
                                             filename: self.source_ref.filename().into(),
@@ -2845,6 +2318,7 @@ impl<'a> VM<'a> {
                                     function_name: String::new(),
                                     return_override: None,
                                     module_binding: method_binding,
+                                    awaiting_task: None,
                                 };
 
                                 self.call_stack.push(new_frame);
@@ -3027,6 +2501,7 @@ impl<'a> VM<'a> {
                                     function_name: String::new(),
                                     return_override: None,
                                     module_binding: func.module_binding.clone(),
+                                    awaiting_task: None,
                                 };
 
                                 self.call_stack.push(new_frame);
@@ -3081,6 +2556,7 @@ impl<'a> VM<'a> {
                                     function_name: String::new(),
                                     return_override: None,
                                     module_binding: func.module_binding.clone(),
+                                    awaiting_task: None,
                                 };
 
                                 self.call_stack.push(new_frame);
@@ -3280,87 +2756,5 @@ impl<'a> VM<'a> {
                 }
             }
         }
-    }
-
-    #[inline(always)]
-    fn push(&mut self, value: Value) {
-        self.stack.push(value);
-    }
-
-    #[inline]
-    fn pop(&mut self, op: Opcode, span: Span) -> WalrusResult<Value> {
-        self.stack.pop().ok_or_else(|| WalrusError::StackUnderflow {
-            op,
-            span,
-            src: self.source_ref.source().to_string(),
-            filename: self.source_ref.filename().to_string(),
-        })
-    }
-
-    /// Fast path pop - only use when stack is guaranteed to have values
-    #[inline(always)]
-    fn pop_unchecked(&mut self) -> Value {
-        // SAFETY: caller guarantees stack is not empty
-        unsafe { self.stack.pop().unwrap_unchecked() }
-    }
-
-    fn pop_n(&mut self, n: usize, op: Opcode, span: Span) -> WalrusResult<Vec<Value>> {
-        if self.stack.len() < n {
-            return Err(WalrusError::StackUnderflow {
-                op,
-                span,
-                src: self.source_ref.source().to_string(),
-                filename: self.source_ref.filename().to_string(),
-            });
-        }
-
-        let split_at = self.stack.len() - n;
-        Ok(self.stack.split_off(split_at))
-    }
-
-    fn stack_trace(&self) {
-        for (i, frame) in self.stack.iter().enumerate() {
-            debug!("| {} | {}: {}", self.function_name(), i, frame);
-        }
-    }
-
-    /// Run the debugger prompt and return the command
-    fn run_debugger_prompt(
-        &mut self,
-        instructions: &InstructionSet,
-    ) -> WalrusResult<debugger::DebuggerCommand> {
-        // Build call stack info for debugger
-        let call_stack: Vec<debugger::DebugCallFrame> = self
-            .call_stack
-            .iter()
-            .map(|f| debugger::DebugCallFrame {
-                function_name: if f.function_name.is_empty() {
-                    "<fn>".to_string()
-                } else {
-                    f.function_name.clone()
-                },
-                return_ip: f.return_ip,
-                frame_pointer: f.frame_pointer,
-            })
-            .collect();
-
-        let ctx = debugger::DebugContext {
-            ip: self.ip,
-            stack: &self.stack,
-            locals: &self.locals,
-            globals: &self.globals,
-            call_stack: &call_stack,
-            debug_info: instructions.debug_info.as_ref(),
-            instructions: &instructions.instructions,
-            source: self.source_ref.source(),
-        };
-
-        let cmd = if let Some(ref mut dbg) = self.debugger {
-            debugger::debug_prompt(dbg, &ctx)
-        } else {
-            debugger::DebuggerCommand::Continue
-        };
-
-        Ok(cmd)
     }
 }

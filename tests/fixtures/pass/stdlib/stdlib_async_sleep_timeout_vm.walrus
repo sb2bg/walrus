@@ -1,0 +1,13 @@
+import "std/async" as asyncx;
+import "std/core" as core;
+
+let sleeper = asyncx.sleep(1);
+println(core.type(sleeper));
+println(core.type(await sleeper));
+
+async fn quick : {
+    return 9;
+}
+
+let wrapped = asyncx.timeout(quick(), 10);
+println(await wrapped);

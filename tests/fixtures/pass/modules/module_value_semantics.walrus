@@ -1,0 +1,14 @@
+import "../../modules/math_ops.walrus" as math_a;
+import "../../modules/math_ops.walrus" as math_b;
+import "../../modules/alt_ops.walrus" as alt;
+import "std/core" as core;
+
+println(core.len(math_a));
+println(math_a.answer);
+println(math_a["answer"]);
+println(math_a.add(20, 22));
+println(math_a["add"](20, 22));
+println(math_a.name == math_a["name"]);
+println(math_a == math_b);
+println(math_a == alt);
+println(math_a != alt);

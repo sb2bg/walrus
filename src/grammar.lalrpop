@@ -2,7 +2,6 @@ use crate::ast::{Node, NodeKind};
 use crate::vm::opcode::Opcode;
 use crate::span::{Span, Spanned};
 use crate::error::{RecoveredParseError, parse_int, parse_float, escape_string, parse_fstring};
-use lalrpop_util::ErrorRecovery;
 
 grammar;
 
@@ -53,6 +52,7 @@ Statement: Node = {
     <RawSp<Import>> ";",
     <RawSp<Print>> ";",
     <RawSp<Throw>> ";",
+    RawSp<Try>,
     <RawSp<Try>> ";",
     <RawSp<Free>> ";",
     <RawSp<Defer>> ";",
@@ -72,6 +72,7 @@ MathFactor = BinOp<FactorOp, Unary>;
 
 Unary = {
     <o: UnaryOp> <e: Sp<Unary>> => NodeKind::UnaryOp(o, e),
+    "await" <e: Sp<Unary>> => NodeKind::Await(e),
     Pow,
 };
 
@@ -189,6 +190,7 @@ For: NodeKind = {
 };
 
 Func: NodeKind = {
+    "async" "fn" <n: IdentStr> ":" <a: Comma<IdentStr>> <b: SpBlock> => NodeKind::AsyncFunctionDefinition(n, a, b),
     "fn" <n: IdentStr> ":" <a: Comma<IdentStr>> <b: SpBlock> => NodeKind::FunctionDefinition(n, a, b),
 };
 
@@ -209,6 +211,7 @@ StructFunc: NodeKind = {
 };
 
 Lambda: NodeKind = {
+    "async" ":" <a: Comma<IdentStr>> <b: SpBlock> => NodeKind::AsyncAnonFunctionDefinition(a, b),
     ":" <a: Comma<IdentStr>> <b: SpBlock> => NodeKind::AnonFunctionDefinition(a, b),
 };
 

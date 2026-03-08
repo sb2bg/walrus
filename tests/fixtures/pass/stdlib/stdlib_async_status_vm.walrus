@@ -1,0 +1,19 @@
+import "std/async" as asyncx;
+
+async fn work : { return 42; }
+
+let task = work();
+println(asyncx.status(task));
+
+let result = await task;
+println(asyncx.status(task));
+println(result);
+
+async fn bad : { throw "oops"; }
+let fail_task = bad();
+try { await fail_task; } catch err {};
+println(asyncx.status(fail_task));
+
+let cancel_task = asyncx.sleep(100);
+asyncx.cancel(cancel_task);
+println(asyncx.status(cancel_task));

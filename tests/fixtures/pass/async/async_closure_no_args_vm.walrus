@@ -1,0 +1,3 @@
+let work = async : { return 99; };
+let task = work();
+println(await task);

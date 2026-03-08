@@ -1,0 +1,22 @@
+// Regression: dict.get(key, default) returns default when key missing
+
+let d = {"a": 1, "b": 2};
+
+// Existing key returns value
+println(d.get("a", 99));
+
+// Missing key returns default
+println(d.get("c", 99));
+
+// Works with different default types
+println(d.get("missing", "fallback"));
+println(d.get("missing", void));
+println(d.get("missing", false));
+
+// Nested dict safe access
+let headers = {"content-type": "text/plain"};
+let conn = headers.get("connection", "");
+println(conn == "");
+
+let conn2 = headers.get("content-type", "");
+println conn2;

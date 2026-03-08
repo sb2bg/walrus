@@ -1,0 +1,8 @@
+async fn bump : x {
+    return x + 1;
+}
+
+let task = bump(41);
+println(task);
+println(await task);
+println(await task);

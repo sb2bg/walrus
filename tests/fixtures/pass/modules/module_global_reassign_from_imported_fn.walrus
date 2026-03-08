@@ -1,0 +1,6 @@
+import "../../modules/edge_counter.walrus" as c;
+
+println(c.get());
+println(c.inc());
+println(c.inc());
+println(c.get());

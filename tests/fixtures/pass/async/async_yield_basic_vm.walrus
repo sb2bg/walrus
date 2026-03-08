@@ -1,0 +1,23 @@
+import "std/async" as asyncx;
+
+let log = [];
+
+async fn worker: name {
+    log = log + [f"{name}:start"];
+    asyncx.yield();
+    log = log + [f"{name}:end"];
+    return name;
+}
+
+let a = asyncx.spawn(worker, ["A"]);
+let b = asyncx.spawn(worker, ["B"]);
+
+let result_a = await a;
+let result_b = await b;
+
+println result_a;
+println result_b;
+
+for entry in log {
+    println entry;
+}

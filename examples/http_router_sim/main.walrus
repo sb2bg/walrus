@@ -1,0 +1,89 @@
+import "std/net" as net;
+import "std/http" as http;
+import "std/async" as asyncx;
+import "std/json" as json;
+import "./router.walrus" as router;
+import "std/io" as io;
+
+let app = router.new_app();
+let body = io.read_file("examples/http_router_sim/index.html");
+
+// --- Middleware ---
+
+// Request logger middleware (runs before every route)
+app.use(: req {
+    let method = req["method"];
+    let path = req["path"];
+});
+
+// --- Routes ---
+
+app.get("/", : req {
+    return router.html(200, body);
+});
+
+app.get("/health", : req {
+    return router.json(200, json.encode({"status": "ok", "uptime": core.timestamp()}));
+});
+
+app.get("/users/:id", : req {
+    let id = req["params"]["id"];
+    return router.json(200, json.encode({"id": id, "name": f"User {id}"}));
+});
+
+app.get("/users/:id/posts/:post_id", : req {
+    let user_id = req["params"]["id"];
+    let post_id = req["params"]["post_id"];
+    return router.json(200, json.encode({
+        "user_id": user_id,
+        "post_id": post_id
+    }));
+});
+
+app.post("/echo", : req {
+    let body = req["body"];
+    let parsed = json.decode(body);
+    let response = {"echo": parsed, "timestamp": core.timestamp()};
+    return router.json(200, json.encode(response));
+});
+
+// Simulate a slow endpoint — other requests are served concurrently
+app.get("/slow", async : req {
+    await asyncx.sleep(1000);
+    return router.text(200, "done (after 1s delay)\n");
+});
+
+app.get("/assets/*", : req {
+    let suffix = req["wildcard"];
+    return router.text(200, f"serving asset: {suffix}\n");
+});
+
+// Custom 404
+app.set_not_found(: req {
+    let method = req["method"];
+    let path = req["path"];
+    return router.text(404, f"404 - nothing here: {method} {path}\n");
+});
+
+// Custom error handler
+app.set_error_handler(: err, req {
+    return router.text(500, f"500 - server error: {err}\n");
+});
+
+// --- Start ---
+
+println "=== Walrus HTTP Server ===";
+println "Express-style routing with concurrent connection handling";
+println "";
+println "Try in another terminal:";
+println "  curl http://127.0.0.1:8081/";
+println "  curl http://127.0.0.1:8081/health";
+println "  curl http://127.0.0.1:8081/users/42";
+println "  curl http://127.0.0.1:8081/users/42/posts/7";
+println "  curl -X POST http://127.0.0.1:8081/echo -d 'hello walrus'";
+println "  curl http://127.0.0.1:8081/slow  (takes 1s, doesn't block others)";
+println "  curl http://127.0.0.1:8081/assets/js/app.js";
+println "";
+
+// Serve 8 requests then exit (use app.listen for unlimited)
+app.listen_for("127.0.0.1", 8081, 8);

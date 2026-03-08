@@ -1,0 +1,10 @@
+import "std/async" as asyncx;
+import "std/core" as core;
+
+fn plus_one : x {
+    return x + 1;
+}
+
+let task = asyncx.spawn(plus_one, [41]);
+println(core.type(task));
+println(await task);

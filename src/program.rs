@@ -5,13 +5,14 @@ use std::fs;
 use std::io::{BufRead, Write, stdout};
 use std::path::{Path, PathBuf};
 
+use lalrpop_util::ParseError;
 use log::debug;
 
-use crate::arenas::{HeapValue, with_arena_mut};
+use crate::WalrusResult;
+use crate::arenas::{DictKey, HeapValue, with_arena, with_arena_mut};
 use crate::ast::{Node, NodeKind};
 use crate::error::{WalrusError, parser_err_mapper, preprocess_fstrings_for_lexer};
 use crate::grammar::ProgramParser;
-use crate::interpreter::{Interpreter, InterpreterResult};
 use crate::package;
 use crate::source_ref::{OwnedSourceRef, SourceRef};
 use crate::span::Span;
@@ -28,7 +29,6 @@ thread_local! {
 #[derive(Debug, Clone, Copy)]
 pub enum Opts {
     Compile,
-    Interpret,
     Disassemble,
 }
 
@@ -52,28 +52,6 @@ pub struct Program {
     jit_opts: JitOpts,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ModuleCacheMode {
-    Compile,
-    Interpret,
-}
-
-impl ModuleCacheMode {
-    fn from_opts(opts: Opts) -> Self {
-        match opts {
-            Opts::Interpret => Self::Interpret,
-            Opts::Compile | Opts::Disassemble => Self::Compile,
-        }
-    }
-
-    fn as_cache_prefix(self) -> &'static str {
-        match self {
-            Self::Compile => "compile",
-            Self::Interpret => "interpret",
-        }
-    }
-}
-
 enum ResolvedImport {
     Std(String),
     File(PathBuf),
@@ -84,15 +62,23 @@ struct PreludeInjection {
     inserted_core: bool,
 }
 
-impl Program {
-    pub fn new(
-        file: Option<PathBuf>,
-        parser: Option<ProgramParser>,
-        opts: Opts,
-    ) -> Result<Self, WalrusError> {
-        Self::new_with_jit_opts(file, parser, opts, JitOpts::default())
-    }
+struct ReplState {
+    module_key: DictKey,
+    global_names: Vec<String>,
+}
 
+enum ReplParseOutcome {
+    Complete(Node),
+    Incomplete,
+}
+
+pub type ProgramResult = WalrusResult<Value>;
+
+const REPL_FILENAME: &str = "<repl>";
+const REPL_PROMPT: &str = "> ";
+const REPL_CONTINUATION_PROMPT: &str = "... ";
+
+impl Program {
     pub fn new_with_jit_opts(
         file: Option<PathBuf>,
         parser: Option<ProgramParser>,
@@ -112,7 +98,7 @@ impl Program {
         })
     }
 
-    pub fn execute(&mut self) -> InterpreterResult {
+    pub fn execute(&mut self) -> ProgramResult {
         let source_ref = match &self.source_ref {
             Some(source_ref) => SourceRef::from(source_ref),
             None => return self.execute_repl(),
@@ -133,19 +119,18 @@ impl Program {
 
         let result = match self.opts {
             Opts::Compile => self.compile(ast, source_ref),
-            Opts::Interpret => self.interpret(ast, source_ref),
             Opts::Disassemble => self.disassemble(ast, source_ref),
         }?;
 
         Ok(result)
     }
 
-    pub fn execute_as_module(&mut self) -> InterpreterResult {
+    pub fn execute_as_module(&mut self) -> ProgramResult {
         let source_ref = match &self.source_ref {
             Some(source_ref) => SourceRef::from(source_ref),
             None => {
                 return Err(WalrusError::GenericError {
-                    message: "Cannot load modules from REPL context".to_string(),
+                    message: "Cannot load a module without a backing file".to_string(),
                 });
             }
         };
@@ -157,15 +142,10 @@ impl Program {
             .map_err(|err| parser_err_mapper(err, source_ref.source(), source_ref.filename()))?;
         let PreludeInjection { ast, inserted_core } = inject_core_prelude(ast);
 
-        match self.opts {
-            Opts::Interpret => self.interpret_module(ast, source_ref, inserted_core),
-            Opts::Compile | Opts::Disassemble => {
-                self.compile_module(ast, source_ref, inserted_core)
-            }
-        }
+        self.compile_module(ast, source_ref, inserted_core)
     }
 
-    fn compile(&self, ast: Node, source_ref: SourceRef) -> InterpreterResult {
+    fn compile(&self, ast: Node, source_ref: SourceRef) -> ProgramResult {
         let span = *ast.span();
         let mut emitter = BytecodeEmitter::new(source_ref);
         emitter.emit(ast)?;
@@ -223,12 +203,71 @@ impl Program {
         Ok(result)
     }
 
-    fn interpret(&self, ast: Node, source_ref: SourceRef) -> InterpreterResult {
-        let mut interpreter = Interpreter::new(source_ref, self);
-        interpreter.interpret(ast)
+    fn compile_repl(
+        &self,
+        ast: Node,
+        source_ref: SourceRef,
+        repl_state: &mut ReplState,
+    ) -> ProgramResult {
+        let (ast, echo_result) = prepare_repl_ast(ast);
+        let span = *ast.span();
+        let mut emitter = BytecodeEmitter::new_with_globals(source_ref, &repl_state.global_names);
+        emitter.emit(ast)?;
+
+        if echo_result {
+            emitter.emit_return(span);
+        } else {
+            emitter.emit_void(span);
+            emitter.emit_return(span);
+        }
+
+        if self.jit_opts.enable_debugger {
+            emitter.build_debug_info();
+        }
+
+        let instruction_set = emitter.instruction_set();
+        let mut vm =
+            VM::new_with_module_binding(source_ref, instruction_set, repl_state.module_key)?;
+
+        #[cfg(feature = "jit")]
+        let jit_requested = self.jit_opts.enable_jit;
+        #[cfg(not(feature = "jit"))]
+        let jit_requested = false;
+
+        let profiling_enabled =
+            !self.jit_opts.disable_profiling && (jit_requested || self.jit_opts.show_stats);
+        vm.set_profiling(profiling_enabled);
+
+        if self.jit_opts.enable_debugger {
+            vm.enable_debugger();
+        }
+
+        #[cfg(feature = "jit")]
+        vm.set_jit_enabled(self.jit_opts.enable_jit);
+
+        let result = vm.run();
+        repl_state.refresh_global_names()?;
+        let result = result?;
+
+        if self.jit_opts.show_stats {
+            let stats = vm.hotspot_stats();
+            eprintln!("\n{}", stats);
+
+            let profile = vm.type_profile();
+            if !profile.is_empty() {
+                eprintln!("Type Profile: {} locations observed", profile.len());
+            }
+
+            #[cfg(feature = "jit")]
+            if let Some(jit_stats) = vm.jit_stats() {
+                eprintln!("{}", jit_stats);
+            }
+        }
+
+        Ok(result)
     }
 
-    fn disassemble(&self, ast: Node, source_ref: SourceRef) -> InterpreterResult {
+    fn disassemble(&self, ast: Node, source_ref: SourceRef) -> ProgramResult {
         let mut emitter = BytecodeEmitter::new(source_ref);
         emitter.emit(ast)?;
 
@@ -237,12 +276,34 @@ impl Program {
         Ok(Value::Void)
     }
 
+    fn disassemble_repl(
+        &self,
+        ast: Node,
+        source_ref: SourceRef,
+        repl_state: &ReplState,
+    ) -> ProgramResult {
+        let (ast, echo_result) = prepare_repl_ast(ast);
+        let span = *ast.span();
+        let mut emitter = BytecodeEmitter::new_with_globals(source_ref, &repl_state.global_names);
+        emitter.emit(ast)?;
+
+        if echo_result {
+            emitter.emit_return(span);
+        } else {
+            emitter.emit_void(span);
+            emitter.emit_return(span);
+        }
+
+        println!("{}", emitter.instruction_set());
+        Ok(Value::Void)
+    }
+
     fn compile_module(
         &self,
         ast: Node,
         source_ref: SourceRef,
         strip_implicit_core_export: bool,
-    ) -> InterpreterResult {
+    ) -> ProgramResult {
         let span = *ast.span();
         let mut emitter = BytecodeEmitter::new(source_ref);
         emitter.emit(ast)?;
@@ -259,86 +320,96 @@ impl Program {
         strip_implicit_core_export_from_module(module, strip_implicit_core_export)
     }
 
-    fn interpret_module(
-        &self,
-        ast: Node,
-        source_ref: SourceRef,
-        strip_implicit_core_export: bool,
-    ) -> InterpreterResult {
-        let mut interpreter = Interpreter::new(source_ref, self);
-        let module = interpreter.interpret_module(ast)?;
-        strip_implicit_core_export_from_module(module, strip_implicit_core_export)
-    }
-
-    const REPL_FILENAME: &'static str = "<repl>";
-
-    // todo: newline support and other advanced repl features
-    fn execute_repl(&mut self) -> InterpreterResult {
+    fn execute_repl(&mut self) -> ProgramResult {
+        let stdin = std::io::stdin();
+        let mut handle = stdin.lock();
         let mut input = String::new();
-        // todo: find a way to pass source and update it
-        let mut interpreter = Interpreter::new(SourceRef::new("", Self::REPL_FILENAME), self);
+        let mut buffer = String::new();
+        let mut repl_state = ReplState::new()?;
 
         loop {
-            prompt()?;
+            prompt(!buffer.is_empty())?;
 
-            let stdin = std::io::stdin();
-            let mut handle = stdin.lock();
-
-            handle
+            input.clear();
+            let read = handle
                 .read_line(&mut input)
                 .map_err(|source| WalrusError::IOError { source })?;
 
-            if input.trim().is_empty() {
-                continue;
+            if read == 0 {
+                if !buffer.trim().is_empty() {
+                    eprintln!(
+                        "{}",
+                        WalrusError::UnexpectedEndOfInput {
+                            filename: REPL_FILENAME.to_string(),
+                        }
+                    );
+                }
+                return Ok(Value::Void);
             }
 
-            let parse_input = preprocess_fstrings_for_lexer(&input);
-            let ast = self
-                .parser
-                .parse(&parse_input)
-                .map_err(|err| parser_err_mapper(err, &input, Self::REPL_FILENAME))?;
+            if buffer.is_empty() {
+                match input.trim() {
+                    "" => continue,
+                    ".exit" | ".quit" | ":exit" | ":quit" => return Ok(Value::Void),
+                    _ => {}
+                }
+            }
+
+            buffer.push_str(&input);
+
+            let parse_outcome = match self.parse_repl_input(&buffer) {
+                Ok(outcome) => outcome,
+                Err(err) => {
+                    eprintln!("{err}");
+                    buffer.clear();
+                    continue;
+                }
+            };
+
+            let ReplParseOutcome::Complete(ast) = parse_outcome else {
+                continue;
+            };
+
             let PreludeInjection { ast, .. } = inject_core_prelude(ast);
+            let source_ref = SourceRef::new(&buffer, REPL_FILENAME);
+            let result = match self.opts {
+                Opts::Compile => self.compile_repl(ast, source_ref, &mut repl_state),
+                Opts::Disassemble => self.disassemble_repl(ast, source_ref, &repl_state),
+            };
 
-            debug!("AST > {:?}", ast);
+            match result {
+                Ok(value) if matches!(self.opts, Opts::Compile) && value != Value::Void => {
+                    println!("{}", value.stringify()?);
+                }
+                Ok(_) => {}
+                Err(err) => eprintln!("{err}"),
+            }
 
-            let result = interpreter.interpret(ast)?;
-            debug!("Result > {:?}", result);
-
-            input.clear();
+            buffer.clear();
         }
     }
 
-    pub fn load_module(&self, module_name: &str, importer_filename: &str) -> InterpreterResult {
-        let mode = ModuleCacheMode::from_opts(self.opts);
-        load_module_with_mode(module_name, importer_filename, mode, self.jit_opts)
+    fn parse_repl_input(&self, input: &str) -> Result<ReplParseOutcome, WalrusError> {
+        let parse_source = preprocess_fstrings_for_lexer(input);
+        match self.parser.parse(&parse_source) {
+            Ok(ast) => Ok(ReplParseOutcome::Complete(ast)),
+            Err(err) if parser_err_is_incomplete(&err) => Ok(ReplParseOutcome::Incomplete),
+            Err(err) => Err(parser_err_mapper(err, input, REPL_FILENAME)),
+        }
     }
 }
 
-pub fn load_module_for_vm(module_name: &str, importer_filename: &str) -> InterpreterResult {
-    load_module_with_mode(
-        module_name,
-        importer_filename,
-        ModuleCacheMode::Compile,
-        JitOpts::default(),
-    )
+pub fn load_module_for_vm(module_name: &str, importer_filename: &str) -> ProgramResult {
+    load_module(module_name, importer_filename, JitOpts::default())
 }
 
 pub fn cached_module_roots() -> Vec<Value> {
     MODULE_CACHE.with(|cache| cache.borrow().values().copied().collect())
 }
 
-fn load_module_with_mode(
-    module_name: &str,
-    importer_filename: &str,
-    mode: ModuleCacheMode,
-    jit_opts: JitOpts,
-) -> InterpreterResult {
+fn load_module(module_name: &str, importer_filename: &str, jit_opts: JitOpts) -> ProgramResult {
     let resolved = resolve_import(module_name, importer_filename)?;
-    let cache_key = format!(
-        "{}::{}",
-        mode.as_cache_prefix(),
-        module_cache_name(&resolved)
-    );
+    let cache_key = module_cache_name(&resolved);
 
     if let Some(value) = MODULE_CACHE.with(|cache| cache.borrow().get(&cache_key).copied()) {
         return Ok(value);
@@ -356,27 +427,12 @@ fn load_module_with_mode(
     });
 
     let result = match resolved {
-        ResolvedImport::Std(module) => match mode {
-            ModuleCacheMode::Compile => Err(WalrusError::GenericError {
-                message: format!(
-                    "Module '{module}' is native stdlib and only available in VM mode"
-                ),
-            }),
-            ModuleCacheMode::Interpret => crate::stdlib::interpreter_module(&module).ok_or_else(
-                || WalrusError::GenericError {
-                    message: format!(
-                        "Module '{module}' is native stdlib and not available in interpreter mode"
-                    ),
-                },
-            ),
-        },
+        ResolvedImport::Std(module) => Err(WalrusError::GenericError {
+            message: format!("Module '{module}' is native stdlib and only available in VM mode"),
+        }),
         ResolvedImport::File(path) => {
-            let opts = match mode {
-                ModuleCacheMode::Compile => Opts::Compile,
-                ModuleCacheMode::Interpret => Opts::Interpret,
-            };
-
-            let mut program = Program::new_with_jit_opts(Some(path), None, opts, jit_opts)?;
+            let mut program =
+                Program::new_with_jit_opts(Some(path), None, Opts::Compile, jit_opts)?;
             program.execute_as_module()
         }
     };
@@ -474,7 +530,7 @@ fn import_base_dir(importer_filename: &str) -> PathBuf {
 fn strip_implicit_core_export_from_module(
     module: Value,
     strip_implicit_core_export: bool,
-) -> InterpreterResult {
+) -> ProgramResult {
     if !strip_implicit_core_export {
         return Ok(module);
     }
@@ -549,12 +605,88 @@ fn get_source(file: PathBuf) -> Result<OwnedSourceRef, WalrusError> {
     Ok(OwnedSourceRef::new(src, filename.to_string()))
 }
 
-fn prompt() -> Result<(), WalrusError> {
-    print!("> ");
+impl ReplState {
+    fn new() -> WalrusResult<Self> {
+        let module_key = create_repl_module()?;
+        Ok(Self {
+            module_key,
+            global_names: Vec::new(),
+        })
+    }
 
+    fn refresh_global_names(&mut self) -> WalrusResult<()> {
+        let mut discovered = with_arena(|arena| -> Result<Vec<String>, WalrusError> {
+            let module = arena.get_module(self.module_key)?;
+            let mut names = Vec::with_capacity(module.len());
+
+            for key in module.keys() {
+                let Value::String(name_key) = key else {
+                    continue;
+                };
+                names.push(arena.get_string(*name_key)?.to_string());
+            }
+
+            Ok(names)
+        })?;
+
+        discovered.sort_unstable();
+
+        for name in discovered {
+            if !self.global_names.contains(&name) {
+                self.global_names.push(name);
+            }
+        }
+
+        Ok(())
+    }
+}
+
+fn create_repl_module() -> WalrusResult<DictKey> {
+    let module = with_arena_mut(|arena| arena.push(HeapValue::Module(Default::default())));
+    let Value::Module(module_key) = module else {
+        unreachable!("module allocation should return a module key");
+    };
+    Ok(module_key)
+}
+
+fn prepare_repl_ast(ast: Node) -> (Node, bool) {
+    let span = *ast.span();
+
+    match ast.into_kind() {
+        NodeKind::Program(nodes)
+        | NodeKind::Statements(nodes)
+        | NodeKind::UnscopedStatements(nodes) => prepare_repl_body(nodes, span),
+        other => (Node::new(other, span), false),
+    }
+}
+
+fn prepare_repl_body(mut nodes: Vec<Node>, span: Span) -> (Node, bool) {
+    if let Some(last) = nodes.last() {
+        if let NodeKind::ExpressionStatement(expr) = last.kind() {
+            let expr = (**expr).clone();
+            *nodes.last_mut().expect("last node should exist") = expr;
+            return (Node::new(NodeKind::Program(nodes), span), true);
+        }
+    }
+
+    (Node::new(NodeKind::Program(nodes), span), false)
+}
+
+fn prompt(continuation: bool) -> Result<(), WalrusError> {
+    let prompt = if continuation {
+        REPL_CONTINUATION_PROMPT
+    } else {
+        REPL_PROMPT
+    };
+
+    print!("{prompt}");
     stdout()
         .flush()
         .map_err(|source| WalrusError::IOError { source })?;
 
     Ok(())
+}
+
+fn parser_err_is_incomplete<T, E>(err: &ParseError<usize, T, E>) -> bool {
+    matches!(err, ParseError::UnrecognizedEOF { .. })
 }

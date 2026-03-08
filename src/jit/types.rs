@@ -40,6 +40,8 @@ pub enum WalrusType {
     Function,
     /// Iterator
     Iter,
+    /// Async task handle
+    Task,
     /// Struct definition
     StructDef,
     /// Struct instance (with optional def key for specialization)
@@ -100,6 +102,7 @@ impl WalrusType {
             Value::Range(_) => WalrusType::Range,
             Value::Function(_) => WalrusType::Function,
             Value::Iter(_) => WalrusType::Iter,
+            Value::Task(_) => WalrusType::Task,
             Value::StructDef(_) => WalrusType::StructDef,
             Value::StructInst(_) => WalrusType::StructInst(None),
             Value::Void => WalrusType::Void,
@@ -169,6 +172,7 @@ impl Display for WalrusType {
             WalrusType::Range => write!(f, "range"),
             WalrusType::Function => write!(f, "function"),
             WalrusType::Iter => write!(f, "iter"),
+            WalrusType::Task => write!(f, "task"),
             WalrusType::StructDef => write!(f, "struct_def"),
             WalrusType::StructInst(_) => write!(f, "struct"),
             WalrusType::Void => write!(f, "void"),

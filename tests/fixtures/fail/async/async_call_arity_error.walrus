@@ -1,0 +1,6 @@
+async fn fetch_data : url {
+    return url;
+}
+
+let task = fetch_data();
+println(await task);

@@ -1,0 +1,21 @@
+// Regression: try/catch should work without a trailing semicolon
+
+let result = "none";
+
+try {
+    result = "tried";
+    throw "oops";
+} catch err {
+    result = f"caught: {err}";
+}
+
+println result;
+
+// Also works with semicolon
+try {
+    throw "again";
+} catch err {
+    println f"caught: {err}";
+};
+
+println "done";

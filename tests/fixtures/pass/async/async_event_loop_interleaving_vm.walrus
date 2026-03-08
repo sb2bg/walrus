@@ -1,0 +1,16 @@
+let order = "";
+
+async fn slow : {
+    order += "a";
+    return 1;
+}
+
+async fn fast : {
+    order += "b";
+    return 2;
+}
+
+let slow_task = slow();
+let fast_task = fast();
+println(await fast_task);
+println(order);

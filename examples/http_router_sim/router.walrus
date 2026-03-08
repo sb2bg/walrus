@@ -1,0 +1,269 @@
+import "std/http" as http;
+import "std/net" as net;
+import "std/async" as asyncx;
+
+// --- Response helpers ---
+
+fn text : status, body {
+    return http.make_response(status, body);
+}
+
+fn html : status, body {
+    return http.make_response_with_headers(status, body, {"content-type": "text/html"});
+}
+
+fn text_with_headers : status, body, headers {
+    return http.make_response_with_headers(status, body, headers);
+}
+
+fn json : status, body {
+    return http.make_response_with_headers(status, body, {"content-type": "application/json"});
+}
+
+fn redirect : url {
+    return http.make_response_with_headers(302, "", {"location": url});
+}
+
+// --- Middleware support ---
+
+struct Middleware {
+    fn init : self {
+        self.stack = [];
+    }
+
+    fn use : self, handler {
+        self.stack = self.stack + [handler];
+    }
+
+    fn settle : self, value {
+        if core.type(value) == "task" {
+            return await value;
+        }
+        return value;
+    }
+
+    fn run : self, request, next {
+        let i = 0;
+        let n = core.len(self.stack);
+
+        while i < n {
+            let mw = self.stack[i];
+            let result = self.settle(mw(request));
+
+            // If middleware returns a response, short-circuit
+            if result != void {
+                return result;
+            }
+
+            i = i + 1;
+        }
+
+        // All middleware passed, call the route handler
+        return self.settle(next(request));
+    }
+}
+
+// --- App ---
+
+struct App {
+    fn init : self {
+        self.routes = [];
+        self.middleware = Middleware();
+        self.not_found_handler = void;
+        self.error_handler = void;
+    }
+
+    // Register middleware that runs before every route
+    fn use : self, handler {
+        self.middleware.use(handler);
+    }
+
+    fn add : self, method, pattern, handler {
+        let route = {
+            "method": method,
+            "pattern": pattern,
+            "handler": handler
+        };
+        self.routes = self.routes + [route];
+    }
+
+    fn get : self, pattern, handler {
+        self.add("GET", pattern, handler);
+    }
+
+    fn post : self, pattern, handler {
+        self.add("POST", pattern, handler);
+    }
+
+    fn put : self, pattern, handler {
+        self.add("PUT", pattern, handler);
+    }
+
+    fn patch : self, pattern, handler {
+        self.add("PATCH", pattern, handler);
+    }
+
+    fn delete : self, pattern, handler {
+        self.add("DELETE", pattern, handler);
+    }
+
+    fn all : self, pattern, handler {
+        self.add("*", pattern, handler);
+    }
+
+    fn set_not_found : self, handler {
+        self.not_found_handler = handler;
+    }
+
+    fn set_error_handler : self, handler {
+        self.error_handler = handler;
+    }
+
+    fn settle : self, value {
+        if core.type(value) == "task" {
+            return await value;
+        }
+        return value;
+    }
+
+    fn dispatch : self, request {
+        let i = 0;
+        let n = core.len(self.routes);
+
+        while i < n {
+            let route = self.routes[i];
+
+            if route["method"] == request["method"] or route["method"] == "*" {
+                let matched = http.match_route(route["pattern"], request["path"]);
+
+                if matched["found"] {
+                    request["params"] = matched["params"];
+                    request["wildcard"] = matched["wildcard"];
+
+                    let handler = route["handler"];
+                    return self.middleware.run(request, handler);
+                }
+            }
+
+            i = i + 1;
+        }
+
+        if self.not_found_handler != void {
+            return self.settle(self.not_found_handler(request));
+        }
+
+        let method = request["method"];
+        let path = request["path"];
+        return text(404, f"not found: {method} {path}\n");
+    }
+
+    // Handle a connection — loops to support keep-alive
+    fn handle_connection : self, stream {
+        while true {
+            let request = await http.read_request(stream, 65536);
+
+            if request == void {
+                // Client closed the connection (EOF)
+                net.tcp_close(stream);
+                return void;
+            }
+
+            let response = void;
+            let close = false;
+
+            if request["ok"] == false {
+                let body = "bad request: " + request["error"] + "\n";
+                response = http.make_response_with_headers(400, body, {"connection": "close"});
+                close = true;
+            } else {
+                try {
+                    response = self.dispatch(request);
+                } catch err {
+                    if self.error_handler != void {
+                        response = self.settle(self.error_handler(err, request));
+                    } else {
+                        response = text(500, "internal server error\n");
+                    }
+                };
+            }
+
+            let status = response["status"];
+            let body = response["body"];
+            let headers = response["headers"];
+
+            await net.tcp_write(stream, http.serialize_response(response));
+
+            let method = "";
+            let path = "";
+            if request["ok"] != false {
+                method = request["method"];
+                path = request["path"];
+
+                // Check if client requested close
+                let conn = request["headers"].get("connection", "");
+                if conn == "close" {
+                    close = true;
+                }
+            } else {
+                method = "???";
+                path = "???";
+            }
+            println f"  {method} {path} -> {status}";
+
+            if close {
+                net.tcp_close(stream);
+                return void;
+            }
+        }
+    }
+
+    // Start the server — accepts connections concurrently using async tasks
+    fn listen : self, host, port {
+        let listener = net.tcp_bind(host, port);
+        let actual_port = net.tcp_local_port(listener);
+
+        println f"Walrus HTTP server listening on http://{host}:{actual_port}";
+        println "Press Ctrl+C to stop.";
+        println "";
+
+        while true {
+            let stream = await net.tcp_accept(listener);
+
+            // Spawn each connection handler as an async task
+            // This lets us accept the next connection immediately
+            asyncx.spawn(self.handle_connection, [self, stream]);
+        }
+    }
+
+    // Start the server, but stop after N requests (for testing/demos)
+    fn listen_for : self, host, port, max_requests {
+        let listener = net.tcp_bind(host, port);
+        let actual_port = net.tcp_local_port(listener);
+
+        println f"Walrus HTTP server listening on http://{host}:{actual_port}";
+        println f"(will stop after {max_requests} requests)";
+        println "";
+
+        let served = 0;
+        let tasks = [];
+
+        while served < max_requests {
+            let stream = await net.tcp_accept(listener);
+
+            let task = asyncx.spawn(self.handle_connection, [self, stream]);
+            tasks = tasks + [task];
+            served = served + 1;
+        }
+
+        // Wait for all in-flight handlers to finish
+        await asyncx.gather(tasks);
+
+        net.tcp_close_listener(listener);
+        println "";
+        println f"Server stopped after {served} requests.";
+    }
+}
+
+fn new_app : {
+    return App();
+}

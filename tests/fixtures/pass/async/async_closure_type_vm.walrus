@@ -1,0 +1,8 @@
+import "std/core" as core;
+
+let f = async : x { return x; };
+println(core.type(f));
+
+let task = f(7);
+println(core.type(task));
+println(await task);

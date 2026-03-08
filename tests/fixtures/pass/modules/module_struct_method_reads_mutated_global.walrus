@@ -1,0 +1,5 @@
+import "../../modules/edge_struct_globals.walrus" as g;
+
+println(g.greet_name("hi"));
+g.set_suffix("?");
+println(g.greet_name("hi"));

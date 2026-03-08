@@ -7,7 +7,6 @@ use log::{LevelFilter, trace};
 use simplelog::SimpleLogger;
 
 use crate::error::WalrusError;
-use crate::interpreter::InterpreterResult;
 use crate::program::{JitOpts, Opts, Program};
 
 mod arenas;
@@ -15,14 +14,12 @@ mod ast;
 mod error;
 mod function;
 mod gc;
-mod interpreter;
 mod iter;
 pub mod jit;
 mod native_registry;
 mod package;
 mod program;
 mod range;
-mod scope;
 mod source_ref;
 mod span;
 mod stdlib;
@@ -46,9 +43,6 @@ lalrpop_mod!(#[allow(clippy::all)] pub grammar);
 struct Args {
     #[clap(help = "The script file to run", index = 1)]
     file: Option<PathBuf>,
-
-    #[clap(short = 'i', long = "interpreted", help = "Run with the interpreter")]
-    interpreted: bool,
 
     #[clap(short = 'c', long = "compile", help = "Compile the script to bytecode")]
     compile: bool,
@@ -135,17 +129,10 @@ fn try_main() -> WalrusResult<()> {
         LevelFilter::Warn
     })?;
 
-    // TODO: make this more idiomatic
-    let opts = match (args.interpreted, args.disassemble) {
-        (true, false) => Opts::Interpret,
-        (false, true) => Opts::Disassemble,
-        (false, false) => Opts::Compile,
-        (true, true) => {
-            return Err(WalrusError::InvalidArgumentCombination {
-                first_arg: "--interpreted".to_string(),
-                second_arg: "--disassemble".to_string(),
-            });
-        }
+    let opts = if args.disassemble {
+        Opts::Disassemble
+    } else {
+        Opts::Compile
     };
 
     let jit_opts = JitOpts {
@@ -159,8 +146,9 @@ fn try_main() -> WalrusResult<()> {
     Ok(())
 }
 
-pub fn create_shell(file: Option<PathBuf>, opts: Opts, jit_opts: JitOpts) -> InterpreterResult {
-    Program::new_with_jit_opts(file, None, opts, jit_opts)?.execute()
+pub fn create_shell(file: Option<PathBuf>, opts: Opts, jit_opts: JitOpts) -> WalrusResult<()> {
+    let _ = Program::new_with_jit_opts(file, None, opts, jit_opts)?.execute()?;
+    Ok(())
 }
 
 fn setup_logger(level: LevelFilter) -> WalrusResult<()> {

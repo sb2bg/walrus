@@ -1,0 +1,27 @@
+import "std/async" as asyncx;
+
+// Basic channel communication between tasks
+
+let ch = asyncx.channel();
+let tx = ch[0];
+let rx = ch[1];
+
+async fn producer: tx {
+    asyncx.send(tx, "hello");
+    asyncx.send(tx, "world");
+    asyncx.send(tx, 42);
+}
+
+let p = asyncx.spawn(producer, [tx]);
+
+// Receive values
+let v1 = await asyncx.recv(rx);
+let v2 = await asyncx.recv(rx);
+let v3 = await asyncx.recv(rx);
+
+println v1;
+println v2;
+println v3;
+
+await p;
+println "done";

@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Walrus HTTP Server Test</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        background: #111;
+        color: #eee;
+        margin: 40px;
+      }
+      h1 {
+        color: #6cf;
+      }
+      button {
+        margin: 6px;
+        padding: 10px 14px;
+        font-size: 14px;
+        border: none;
+        border-radius: 6px;
+        background: #2d6cdf;
+        color: white;
+        cursor: pointer;
+      }
+      button:hover {
+        background: #1f52aa;
+      }
+      #output {
+        margin-top: 20px;
+        padding: 12px;
+        background: #1b1b1b;
+        border-radius: 8px;
+        white-space: pre-wrap;
+        font-family: monospace;
+      }
+    </style>
+  </head>
+
+  <body>
+    <h1>Walrus HTTP Server Test</h1>
+
+    <p>Use the buttons below to test different routes.</p>
+
+    <button onclick="req('/')">GET /</button>
+    <button onclick="req('/health')">GET /health</button>
+    <button onclick="req('/users/42')">GET /users/:id</button>
+    <button onclick="req('/users/42/posts/7')">
+      GET /users/:id/posts/:post_id
+    </button>
+    <button onclick="postEcho()">POST /echo</button>
+    <button onclick="slow()">GET /slow</button>
+    <button onclick="req('/assets/js/app.js')">GET /assets/*</button>
+    <button onclick="req('/nonexistent')">GET /nonexistent (404)</button>
+
+    <div id="output">Response output will appear here...</div>
+
+    <script>
+      async function req(path) {
+        const out = document.getElementById("output");
+        out.textContent = "Requesting " + path + "...";
+
+        try {
+          const res = await fetch(path);
+          const text = await res.text();
+
+          out.textContent = "Status: " + res.status + "\n\n" + text;
+        } catch (e) {
+          out.textContent = "Error: " + e;
+        }
+      }
+
+      async function postEcho() {
+        const out = document.getElementById("output");
+        out.textContent = "Sending POST /echo...";
+
+        try {
+          const res = await fetch("/echo", {
+            method: "POST",
+            body: "hello walrus",
+            headers: {
+              "Content-Type": "text/plain",
+            },
+          });
+
+          const text = await res.text();
+
+          out.textContent = "Status: " + res.status + "\n\n" + text;
+        } catch (e) {
+          out.textContent = "Error: " + e;
+        }
+      }
+
+      async function slow() {
+        const out = document.getElementById("output");
+        out.textContent = "Requesting /slow (should take ~1s)...";
+
+        const start = performance.now();
+
+        try {
+          const res = await fetch("/slow");
+          const text = await res.text();
+
+          const elapsed = (performance.now() - start).toFixed(0);
+
+          out.textContent =
+            "Status: " + res.status + "\nTime: " + elapsed + "ms\n\n" + text;
+        } catch (e) {
+          out.textContent = "Error: " + e;
+        }
+      }
+    </script>
+  </body>
+</html>

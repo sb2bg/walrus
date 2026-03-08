@@ -1,368 +1,371 @@
-struct ParserState {
+struct JsonParser {
     fn init : self, text {
         self.source = text;
         self.index = 0;
         self.length = core.len(text);
     }
-}
 
-fn fail : state, message {
-    let index = state.index;
-    throw f"JSON parse error at index {index}: {message}";
-    return void;
-}
-
-fn is_eof : state {
-    return state.index >= state.length;
-}
-
-fn peek : state {
-    return state.source[state.index];
-}
-
-fn advance : state {
-    state.index = state.index + 1;
-}
-
-fn skip_whitespace : state {
-    while is_eof(state) == false {
-        let ch = peek(state);
-        if ch == " " or ch == "\n" or ch == "\r" or ch == "\t" {
-            advance(state);
-        } else {
-            break;
-        }
-    }
-}
-
-fn digit_value : ch {
-    if ch == "0" {
-        return 0;
-    }
-    if ch == "1" {
-        return 1;
-    }
-    if ch == "2" {
-        return 2;
-    }
-    if ch == "3" {
-        return 3;
-    }
-    if ch == "4" {
-        return 4;
-    }
-    if ch == "5" {
-        return 5;
-    }
-    if ch == "6" {
-        return 6;
-    }
-    if ch == "7" {
-        return 7;
-    }
-    if ch == "8" {
-        return 8;
-    }
-    if ch == "9" {
-        return 9;
+    fn fail : self, message {
+        let index = self.index;
+        throw f"JSON parse error at index {index}: {message}";
+        return void;
     }
 
-    return -1;
-}
-
-fn is_digit : ch {
-    return digit_value(ch) >= 0;
-}
-
-fn consume_literal : state, expected {
-    let saved_index = state.index;
-    let i = 0;
-    let expected_len = core.len(expected);
-
-    while i < expected_len {
-        if is_eof(state) {
-            state.index = saved_index;
-            return false;
-        }
-
-        if peek(state) != expected[i] {
-            state.index = saved_index;
-            return false;
-        }
-
-        advance(state);
-        i = i + 1;
+    fn is_eof : self {
+        return self.index >= self.length;
     }
 
-    return true;
-}
-
-fn parse_digits : state {
-    let saw_digit = false;
-    let value = 0;
-
-    while is_eof(state) == false {
-        let digit = digit_value(peek(state));
-        if digit < 0 {
-            break;
-        }
-
-        saw_digit = true;
-        value = value * 10 + digit;
-        advance(state);
+    fn peek : self {
+        return self.source[self.index];
     }
 
-    if saw_digit == false {
-        fail(state, "expected a number");
+    fn advance : self {
+        self.index = self.index + 1;
     }
 
-    return value;
-}
-
-fn parse_fraction : state {
-    let saw_digit = false;
-    let value = 0.0;
-    let place = 0.1;
-
-    while is_eof(state) == false {
-        let digit = digit_value(peek(state));
-        if digit < 0 {
-            break;
-        }
-
-        saw_digit = true;
-        value = value + digit * place;
-        place = place / 10.0;
-        advance(state);
-    }
-
-    if saw_digit == false {
-        fail(state, "expected digits after decimal point");
-    }
-
-    return value;
-}
-
-fn parse_number : state {
-    let sign = 1;
-
-    if peek(state) == "-" {
-        sign = -1;
-        advance(state);
-    }
-
-    let int_part = parse_digits(state);
-    let value = int_part * sign;
-
-    if is_eof(state) == false and peek(state) == "." {
-        advance(state);
-        let frac_part = parse_fraction(state);
-        value = value + frac_part * sign;
-    }
-
-    return value;
-}
-
-fn parse_string : state {
-    if is_eof(state) or peek(state) != "\"" {
-        fail(state, "expected string");
-    }
-
-    advance(state);
-    let out = "";
-
-    while true {
-        if is_eof(state) {
-            fail(state, "unterminated string");
-        }
-
-        let ch = peek(state);
-        advance(state);
-
-        if ch == "\"" {
-            break;
-        }
-
-        if ch == "\\" {
-            if is_eof(state) {
-                fail(state, "unterminated escape sequence");
-            }
-
-            let esc = peek(state);
-            advance(state);
-
-            if esc == "\"" {
-                out = out + "\"";
-            } else if esc == "\\" {
-                out = out + "\\";
-            } else if esc == "/" {
-                out = out + "/";
-            } else if esc == "n" {
-                out = out + "\n";
-            } else if esc == "r" {
-                out = out + "\r";
-            } else if esc == "t" {
-                out = out + "\t";
+    fn skip_whitespace : self {
+        while self.is_eof() == false {
+            let ch = self.peek();
+            if ch == " " or ch == "\n" or ch == "\r" or ch == "\t" {
+                self.advance();
             } else {
-                fail(state, f"unsupported escape: \\{esc}");
+                break;
             }
-        } else {
-            out = out + ch;
         }
     }
 
-    return out;
-}
+    fn digit_value : self, ch {
+        if ch == "0" {
+            return 0;
+        }
+        if ch == "1" {
+            return 1;
+        }
+        if ch == "2" {
+            return 2;
+        }
+        if ch == "3" {
+            return 3;
+        }
+        if ch == "4" {
+            return 4;
+        }
+        if ch == "5" {
+            return 5;
+        }
+        if ch == "6" {
+            return 6;
+        }
+        if ch == "7" {
+            return 7;
+        }
+        if ch == "8" {
+            return 8;
+        }
+        if ch == "9" {
+            return 9;
+        }
 
-fn parse_array : state {
-    if is_eof(state) or peek(state) != "[" {
-        fail(state, "expected '['");
+        return -1;
     }
 
-    advance(state);
-    skip_whitespace(state);
+    fn is_digit : self, ch {
+        return self.digit_value(ch) >= 0;
+    }
 
-    let items = [];
+    fn consume_literal : self, expected {
+        let saved_index = self.index;
+        let i = 0;
+        let expected_len = core.len(expected);
 
-    if is_eof(state) == false and peek(state) == "]" {
-        advance(state);
+        while i < expected_len {
+            if self.is_eof() {
+                self.index = saved_index;
+                return false;
+            }
+
+            if self.peek() != expected[i] {
+                self.index = saved_index;
+                return false;
+            }
+
+            self.advance();
+            i = i + 1;
+        }
+
+        return true;
+    }
+
+    fn parse_digits : self {
+        let saw_digit = false;
+        let value = 0;
+
+        while self.is_eof() == false {
+            let digit = self.digit_value(self.peek());
+            if digit < 0 {
+                break;
+            }
+
+            saw_digit = true;
+            value = value * 10 + digit;
+            self.advance();
+        }
+
+        if saw_digit == false {
+            self.fail("expected a number");
+        }
+
+        return value;
+    }
+
+    fn parse_fraction : self {
+        let saw_digit = false;
+        let value = 0.0;
+        let place = 0.1;
+
+        while self.is_eof() == false {
+            let digit = self.digit_value(self.peek());
+            if digit < 0 {
+                break;
+            }
+
+            saw_digit = true;
+            value = value + digit * place;
+            place = place / 10.0;
+            self.advance();
+        }
+
+        if saw_digit == false {
+            self.fail("expected digits after decimal point");
+        }
+
+        return value;
+    }
+
+    fn parse_number : self {
+        let sign = 1;
+
+        if self.peek() == "-" {
+            sign = -1;
+            self.advance();
+        }
+
+        let int_part = self.parse_digits();
+        let value = int_part * sign;
+
+        if self.is_eof() == false and self.peek() == "." {
+            self.advance();
+            let frac_part = self.parse_fraction();
+            value = value + frac_part * sign;
+        }
+
+        return value;
+    }
+
+    fn parse_string : self {
+        if self.is_eof() or self.peek() != "\"" {
+            self.fail("expected string");
+        }
+
+        self.advance();
+        let out = "";
+
+        while true {
+            if self.is_eof() {
+                self.fail("unterminated string");
+            }
+
+            let ch = self.peek();
+            self.advance();
+
+            if ch == "\"" {
+                break;
+            }
+
+            if ch == "\\" {
+                if self.is_eof() {
+                    self.fail("unterminated escape sequence");
+                }
+
+                let esc = self.peek();
+                self.advance();
+
+                if esc == "\"" {
+                    out = out + "\"";
+                } else if esc == "\\" {
+                    out = out + "\\";
+                } else if esc == "/" {
+                    out = out + "/";
+                } else if esc == "n" {
+                    out = out + "\n";
+                } else if esc == "r" {
+                    out = out + "\r";
+                } else if esc == "t" {
+                    out = out + "\t";
+                } else {
+                    self.fail(f"unsupported escape: \\{esc}");
+                }
+            } else {
+                out = out + ch;
+            }
+        }
+
+        return out;
+    }
+
+    fn parse_array : self {
+        if self.is_eof() or self.peek() != "[" {
+            self.fail("expected '['");
+        }
+
+        self.advance();
+        self.skip_whitespace();
+
+        let items = [];
+
+        if self.is_eof() == false and self.peek() == "]" {
+            self.advance();
+            return items;
+        }
+
+        while true {
+            let value = self.parse_value();
+            items = items + [value];
+
+            self.skip_whitespace();
+            if self.is_eof() {
+                self.fail("unterminated array");
+            }
+
+            let ch = self.peek();
+            if ch == "," {
+                self.advance();
+                self.skip_whitespace();
+            } else if ch == "]" {
+                self.advance();
+                break;
+            } else {
+                self.fail("expected ',' or ']' in array");
+            }
+        }
+
         return items;
     }
 
-    while true {
-        let value = parse_value(state);
-        items = items + [value];
-
-        skip_whitespace(state);
-        if is_eof(state) {
-            fail(state, "unterminated array");
+    fn parse_object : self {
+        if self.is_eof() or self.peek() != "{" {
+            self.fail("expected '{'");
         }
 
-        let ch = peek(state);
-        if ch == "," {
-            advance(state);
-            skip_whitespace(state);
-        } else if ch == "]" {
-            advance(state);
-            break;
-        } else {
-            fail(state, "expected ',' or ']' in array");
+        self.advance();
+        self.skip_whitespace();
+
+        let obj = {};
+
+        if self.is_eof() == false and self.peek() == "}" {
+            self.advance();
+            return obj;
         }
-    }
 
-    return items;
-}
+        while true {
+            if self.is_eof() or self.peek() != "\"" {
+                self.fail("expected string key in object");
+            }
 
-fn parse_object : state {
-    if is_eof(state) or peek(state) != "{" {
-        fail(state, "expected '{'");
-    }
+            let key = self.parse_string();
+            self.skip_whitespace();
 
-    advance(state);
-    skip_whitespace(state);
+            if self.is_eof() or self.peek() != ":" {
+                self.fail("expected ':' after object key");
+            }
 
-    let obj = {};
+            self.advance();
+            self.skip_whitespace();
 
-    if is_eof(state) == false and peek(state) == "}" {
-        advance(state);
+            obj[key] = self.parse_value();
+
+            self.skip_whitespace();
+            if self.is_eof() {
+                self.fail("unterminated object");
+            }
+
+            let ch = self.peek();
+            if ch == "," {
+                self.advance();
+                self.skip_whitespace();
+            } else if ch == "}" {
+                self.advance();
+                break;
+            } else {
+                self.fail("expected ',' or '}' in object");
+            }
+        }
+
         return obj;
     }
 
-    while true {
-        if is_eof(state) or peek(state) != "\"" {
-            fail(state, "expected string key in object");
+    fn parse_value : self {
+        self.skip_whitespace();
+
+        if self.is_eof() {
+            self.fail("expected a JSON value");
         }
 
-        let key = parse_string(state);
-        skip_whitespace(state);
+        let ch = self.peek();
 
-        if is_eof(state) or peek(state) != ":" {
-            fail(state, "expected ':' after object key");
+        if ch == "{" {
+            return self.parse_object();
         }
 
-        advance(state);
-        skip_whitespace(state);
-
-        obj[key] = parse_value(state);
-
-        skip_whitespace(state);
-        if is_eof(state) {
-            fail(state, "unterminated object");
+        if ch == "[" {
+            return self.parse_array();
         }
 
-        let ch = peek(state);
-        if ch == "," {
-            advance(state);
-            skip_whitespace(state);
-        } else if ch == "}" {
-            advance(state);
-            break;
-        } else {
-            fail(state, "expected ',' or '}' in object");
+        if ch == "\"" {
+            return self.parse_string();
         }
-    }
 
-    return obj;
-}
-
-fn parse_value : state {
-    skip_whitespace(state);
-
-    if is_eof(state) {
-        fail(state, "expected a JSON value");
-    }
-
-    let ch = peek(state);
-
-    if ch == "{" {
-        return parse_object(state);
-    }
-
-    if ch == "[" {
-        return parse_array(state);
-    }
-
-    if ch == "\"" {
-        return parse_string(state);
-    }
-
-    if ch == "t" {
-        if consume_literal(state, "true") {
-            return true;
+        if ch == "t" {
+            if self.consume_literal("true") {
+                return true;
+            }
+            self.fail("invalid literal");
         }
-        fail(state, "invalid literal");
-    }
 
-    if ch == "f" {
-        if consume_literal(state, "false") {
-            return false;
+        if ch == "f" {
+            if self.consume_literal("false") {
+                return false;
+            }
+            self.fail("invalid literal");
         }
-        fail(state, "invalid literal");
-    }
 
-    if ch == "n" {
-        if consume_literal(state, "null") {
-            return void;
+        if ch == "n" {
+            if self.consume_literal("null") {
+                return void;
+            }
+            self.fail("invalid literal");
         }
-        fail(state, "invalid literal");
+
+        if ch == "-" or self.is_digit(ch) {
+            return self.parse_number();
+        }
+
+        self.fail(f"unexpected token: {ch}");
     }
 
-    if ch == "-" or is_digit(ch) {
-        return parse_number(state);
-    }
+    fn parse : self {
+        let value = self.parse_value();
+        self.skip_whitespace();
 
-    fail(state, f"unexpected token: {ch}");
+        if self.is_eof() == false {
+            self.fail("unexpected trailing characters");
+        }
+
+        return value;
+    }
 }
 
 fn parse_json : text {
-    let state = ParserState(text);
-
-    let value = parse_value(state);
-    skip_whitespace(state);
-
-    if is_eof(state) == false {
-        fail(state, "unexpected trailing characters");
-    }
-
-    return value;
+    let parser = JsonParser(text);
+    return parser.parse();
 }

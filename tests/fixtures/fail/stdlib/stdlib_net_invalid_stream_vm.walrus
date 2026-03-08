@@ -1,0 +1,3 @@
+import "std/net" as net;
+
+net.tcp_close(999999);

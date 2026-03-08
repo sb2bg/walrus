@@ -1,0 +1,6 @@
+fn value : {
+    return 123;
+}
+
+let v = await value();
+println(v);

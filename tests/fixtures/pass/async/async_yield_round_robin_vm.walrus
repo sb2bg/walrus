@@ -1,0 +1,23 @@
+import "std/async" as asyncx;
+
+let log = [];
+
+async fn counter: id, n {
+    let i = 0;
+    while i < n {
+        log = log + [f"{id}:{i}"];
+        asyncx.yield();
+        i = i + 1;
+    }
+    return id;
+}
+
+let a = asyncx.spawn(counter, ["A", 3]);
+let b = asyncx.spawn(counter, ["B", 2]);
+
+await a;
+await b;
+
+for entry in log {
+    println entry;
+}

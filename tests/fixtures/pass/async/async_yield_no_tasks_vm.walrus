@@ -1,0 +1,7 @@
+import "std/async" as asyncx;
+
+// yield with no queued tasks is a no-op
+asyncx.yield();
+println "before";
+asyncx.yield();
+println "after";

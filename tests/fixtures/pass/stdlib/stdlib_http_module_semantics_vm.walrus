@@ -1,0 +1,7 @@
+import "std/http" as http;
+import "std/core" as core;
+
+println(core.type(http));
+println(core.type(http.parse_request_line));
+println(core.len(http) >= 8);
+println(core.type(http["response"]));

@@ -1,0 +1,14 @@
+// Regression: core.timestamp() returns epoch milliseconds
+
+let t1 = core.timestamp();
+let t2 = core.timestamp();
+
+// Should be a positive integer (epoch ms)
+if t1 > 1000000000000 {
+    println "timestamp is valid epoch ms";
+}
+
+// Second call should be >= first
+if t2 >= t1 {
+    println "timestamps are monotonic";
+}
