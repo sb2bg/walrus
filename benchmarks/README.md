@@ -11,6 +11,14 @@ cd benchmarks
 ./run_benchmarks.sh
 ```
 
+The harness does repeated high-resolution timings and reports median, mean, and best run.
+Useful options:
+
+```bash
+./run_benchmarks.sh --iterations 7 --warmups 1
+./run_benchmarks.sh --filter iteration
+```
+
 ### Run individual benchmarks:
 
 ```bash
@@ -83,7 +91,7 @@ cargo run --release -- benchmarks/01_quicksort.walrus
 ## Interpreting Results
 
 - **Lower times are better**
-- The benchmark script shows which language is faster for each test
+- The benchmark script compares median runtime across repeated runs
 - Results may vary based on:
   - Python version (3.11+ has JIT optimizations)
   - System hardware and load
@@ -93,6 +101,7 @@ cargo run --release -- benchmarks/01_quicksort.walrus
 
 - Walrus compilation time is included in the benchmark (parsing + bytecode generation)
 - Python startup time is also included (interpreter initialization)
+- Warmup runs are excluded from the reported timings
 - Both languages are running equivalent algorithms for fair comparison
 - Memory usage is not directly measured, only GC stress patterns
 - Some Walrus syntax differs from Python (e.g., `0..n` vs `range(n)`)
