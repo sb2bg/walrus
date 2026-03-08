@@ -8,15 +8,12 @@ use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
 use crate::function::NativeFunction;
-
-mod core;
 mod http;
 mod io;
 mod math;
 mod net;
 mod sys;
 
-pub use core::*;
 pub use http::*;
 pub use io::*;
 pub use math::*;
@@ -31,8 +28,6 @@ thread_local! {
 
 struct FileEntry {
     file: File,
-    path: String,
-    mode: String,
 }
 
 struct FileTable {
@@ -61,10 +56,10 @@ impl FileTable {
         }
     }
 
-    fn insert(&mut self, file: File, path: String, mode: String) -> i64 {
+    fn insert(&mut self, file: File) -> i64 {
         let handle = self.next_handle;
         self.next_handle += 1;
-        self.files.insert(handle, FileEntry { file, path, mode });
+        self.files.insert(handle, FileEntry { file });
         handle
     }
 

@@ -12,7 +12,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use instruction_set::InstructionSet;
 
 use crate::WalrusResult;
-use crate::arenas::{FuncKey, HeapValue};
+use crate::arenas::{DictKey, FuncKey, HeapValue};
 use crate::error::WalrusError;
 use crate::function::{VmModuleBinding, WalrusFunction};
 use crate::iter::ValueIterator;
@@ -25,7 +25,6 @@ use crate::vm::opcode::Opcode;
 
 pub mod compiler;
 pub mod debugger;
-pub mod handlers;
 pub mod instruction_set;
 mod io_pool;
 pub mod methods;
@@ -251,6 +250,20 @@ impl<'a> VM<'a> {
         }
     }
 
+    pub fn new_with_module_binding(
+        source_ref: SourceRef<'a>,
+        is: InstructionSet,
+        module_key: DictKey,
+    ) -> WalrusResult<Self> {
+        let mut vm = Self::new(source_ref, is);
+        let binding = vm.build_module_binding(module_key)?;
+        vm.call_stack
+            .last_mut()
+            .expect("main frame should exist")
+            .module_binding = Some(binding);
+        Ok(vm)
+    }
+
     /// Enable the debugger
     pub fn enable_debugger(&mut self) {
         self.debug_mode = true;
@@ -367,6 +380,30 @@ impl<'a> VM<'a> {
             .and_then(|frame| frame.module_binding.clone())
     }
 
+    fn build_module_binding(&mut self, module_key: DictKey) -> WalrusResult<Rc<VmModuleBinding>> {
+        let global_names = self.global_names.clone();
+        let mut global_values = Vec::with_capacity(global_names.len());
+
+        for name in &global_names {
+            let key = Value::String(self.get_heap_mut().push_ident(name));
+            let value = self
+                .get_heap()
+                .get_module(module_key)?
+                .get(&key)
+                .copied()
+                .unwrap_or(Value::Void);
+            global_values.push(value);
+        }
+
+        Ok(Rc::new(VmModuleBinding {
+            module_key,
+            global_names: Rc::new(global_names),
+            global_values: Rc::new(global_values),
+            source: Rc::new(self.source_ref.source().to_string()),
+            filename: Rc::new(self.source_ref.filename().to_string()),
+        }))
+    }
+
     fn undefined_global_error(
         &self,
         index: usize,
@@ -428,6 +465,7 @@ impl<'a> VM<'a> {
             };
 
             let key = Value::String(self.get_heap_mut().push_ident(name));
+            let value = self.bind_exported_value_to_module(value, &binding)?;
             self.get_heap_mut()
                 .get_mut_module(binding.module_key)?
                 .insert(key, value);
@@ -742,15 +780,7 @@ impl<'a> VM<'a> {
                 let function = self.get_heap().get_function(function_key)?;
                 let expected = match function {
                     WalrusFunction::Vm(func) => func.arity,
-                    WalrusFunction::Rust(func) => func.args,
                     WalrusFunction::Native(func) => func.arity(),
-                    WalrusFunction::TreeWalk(_) => {
-                        return Err(WalrusError::NodeFunctionNotSupportedInVm {
-                            span,
-                            src: self.source_ref.source().into(),
-                            filename: self.source_ref.filename().into(),
-                        });
-                    }
                 };
                 if args.len() != expected {
                     return Err(WalrusError::InvalidArgCount {
@@ -1629,32 +1659,6 @@ impl<'a> VM<'a> {
                     }
                 }
             }
-            WalrusFunction::Rust(rust_fn) => {
-                if args.len() != rust_fn.args {
-                    self.restore_context(caller_context);
-                    return self.fail_task_with_error(
-                        task_key,
-                        WalrusError::InvalidArgCount {
-                            name: rust_fn.name.clone(),
-                            expected: rust_fn.args,
-                            got: args.len(),
-                            span,
-                            src: self.source_ref.source().into(),
-                            filename: self.source_ref.filename().into(),
-                        },
-                    );
-                }
-                let result = match rust_fn.call(args, self.source_ref, span) {
-                    Ok(value) => value,
-                    Err(err) => {
-                        self.restore_context(caller_context);
-                        return self.fail_task_with_error(task_key, err);
-                    }
-                };
-                self.complete_task_on_frame_return(Some(task_key), result)?;
-                self.restore_context(caller_context);
-                self.wake_task_waiters(task_key)?;
-            }
             WalrusFunction::Native(native_fn) => {
                 let result = match self.call_native(native_fn, args, span) {
                     Ok(value) => value,
@@ -1666,17 +1670,6 @@ impl<'a> VM<'a> {
                 self.complete_task_on_frame_return(Some(task_key), result)?;
                 self.restore_context(caller_context);
                 self.wake_task_waiters(task_key)?;
-            }
-            WalrusFunction::TreeWalk(_) => {
-                self.restore_context(caller_context);
-                return self.fail_task_with_error(
-                    task_key,
-                    WalrusError::NodeFunctionNotSupportedInVm {
-                        span,
-                        src: self.source_ref.source().into(),
-                        filename: self.source_ref.filename().into(),
-                    },
-                );
             }
         }
 
@@ -1692,21 +1685,6 @@ impl<'a> VM<'a> {
         match function {
             WalrusFunction::Native(native) => {
                 let result = self.call_native(native, args, span)?;
-                Ok(Some(result))
-            }
-            WalrusFunction::Rust(rust_fn) => {
-                if args.len() != rust_fn.args {
-                    return Err(WalrusError::InvalidArgCount {
-                        name: rust_fn.name.clone(),
-                        expected: rust_fn.args,
-                        got: args.len(),
-                        span,
-                        src: self.source_ref.source().into(),
-                        filename: self.source_ref.filename().into(),
-                    });
-                }
-
-                let result = rust_fn.call(args, self.source_ref, span)?;
                 Ok(Some(result))
             }
             WalrusFunction::Vm(func) => {
@@ -1743,11 +1721,6 @@ impl<'a> VM<'a> {
                 self.ip = 0;
                 Ok(None)
             }
-            WalrusFunction::TreeWalk(_) => Err(WalrusError::NodeFunctionNotSupportedInVm {
-                span,
-                src: self.source_ref.source().into(),
-                filename: self.source_ref.filename().into(),
-            }),
         }
     }
 
@@ -2095,7 +2068,7 @@ impl<'a> VM<'a> {
                         self.try_compile_hot_range_loop(loop_header_ip, exit_ip);
                     }
 
-                    // Standard interpreted execution
+                    // Standard execution
                     let fp = self.frame_pointer();
                     let idx = fp + local_idx as usize;
                     // SAFETY: compiler guarantees range-loop locals are allocated at idx and idx+1.
@@ -2450,19 +2423,16 @@ impl<'a> VM<'a> {
                             if let Ok(func_ref) = self.get_heap().get_function(key) {
                                 let name = match func_ref {
                                     WalrusFunction::Vm(f) => f.name.clone(),
-                                    WalrusFunction::Rust(f) => f.name.clone(),
-                                    _ => String::new(),
+                                    WalrusFunction::Native(f) => f.name().to_string(),
                                 };
-                                if !name.is_empty() {
-                                    if self.hotspot_detector.record_function_call(&name) {
-                                        debug!("Hot function detected: {}", name);
-                                    }
-                                    // Track argument types
-                                    let args_start = self.stack.len() - arg_count;
-                                    for (i, arg) in self.stack[args_start..].iter().enumerate() {
-                                        let arg_type = WalrusType::from_value(arg);
-                                        self.type_profile.observe(self.ip - 1 + i, arg_type);
-                                    }
+                                if self.hotspot_detector.record_function_call(&name) {
+                                    debug!("Hot function detected: {}", name);
+                                }
+                                // Track argument types
+                                let args_start = self.stack.len() - arg_count;
+                                for (i, arg) in self.stack[args_start..].iter().enumerate() {
+                                    let arg_type = WalrusType::from_value(arg);
+                                    self.type_profile.observe(self.ip - 1 + i, arg_type);
                                 }
                             }
                         }
@@ -2514,36 +2484,11 @@ impl<'a> VM<'a> {
                                     // Start execution at the beginning of the new function
                                     self.ip = 0;
                                 }
-                                WalrusFunction::Rust(func) => {
-                                    let func = func.clone();
-                                    let args = self.pop_n(arg_count, opcode, span)?;
-                                    if args.len() != func.args {
-                                        return Err(WalrusError::InvalidArgCount {
-                                            name: func.name.clone(),
-                                            expected: func.args,
-                                            got: args.len(),
-                                            span,
-                                            src: self.source_ref.source().into(),
-                                            filename: self.source_ref.filename().into(),
-                                        });
-                                    }
-                                    let result = func.call(args, self.source_ref, span)?;
-                                    self.push(result);
-                                }
                                 WalrusFunction::Native(native_fn) => {
                                     let native_fn = *native_fn;
                                     let args = self.pop_n(arg_count, opcode, span)?;
                                     let result = self.call_native(native_fn, args, span)?;
                                     self.push(result);
-                                }
-                                _ => {
-                                    // In theory, this should never happen because the compiler
-                                    // should not compile a call to a node function (but just in case)
-                                    return Err(WalrusError::NodeFunctionNotSupportedInVm {
-                                        span,
-                                        src: self.source_ref.source().into(),
-                                        filename: self.source_ref.filename().into(),
-                                    });
                                 }
                             }
                         }
@@ -2659,42 +2604,6 @@ impl<'a> VM<'a> {
                             let func = self.get_heap().get_function(key)?;
 
                             match func {
-                                WalrusFunction::Rust(func) => {
-                                    let func = func.clone();
-                                    let args = self.pop_n(arg_count, opcode, span)?;
-                                    // Rust functions don't use call frames, so just call and return
-                                    if args.len() != func.args {
-                                        return Err(WalrusError::InvalidArgCount {
-                                            name: func.name.clone(),
-                                            expected: func.args,
-                                            got: args.len(),
-                                            span,
-                                            src: self.source_ref.source().into(),
-                                            filename: self.source_ref.filename().into(),
-                                        });
-                                    }
-                                    let result = func.call(args, self.source_ref, span)?;
-
-                                    // For a tail call, we need to return this result
-                                    // Pop the current frame and push the result
-                                    let frame = self
-                                        .call_stack
-                                        .pop()
-                                        .expect("Call stack should never be empty on tail call");
-                                    self.clear_exception_handlers_from_frame(self.call_stack.len());
-                                    self.complete_task_on_frame_return(
-                                        frame.awaiting_task,
-                                        result,
-                                    )?;
-
-                                    if self.call_stack.is_empty() {
-                                        return Ok(RunSignal::Returned(result));
-                                    }
-
-                                    self.locals.truncate(frame.frame_pointer);
-                                    self.ip = frame.return_ip;
-                                    self.push(result);
-                                }
                                 WalrusFunction::Native(native_fn) => {
                                     let native_fn = *native_fn;
                                     let args = self.pop_n(arg_count, opcode, span)?;
@@ -2783,13 +2692,6 @@ impl<'a> VM<'a> {
 
                                     // Reset IP to start of the new function
                                     self.ip = 0;
-                                }
-                                _ => {
-                                    return Err(WalrusError::NodeFunctionNotSupportedInVm {
-                                        span,
-                                        src: self.source_ref.source().into(),
-                                        filename: self.source_ref.filename().into(),
-                                    });
                                 }
                             }
                         }

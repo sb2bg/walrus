@@ -67,6 +67,14 @@ impl<'a> BytecodeEmitter<'a> {
         }
     }
 
+    pub fn new_with_globals(source_ref: SourceRef<'a>, global_names: &[String]) -> Self {
+        let mut emitter = Self::new(source_ref);
+        for name in global_names {
+            emitter.instructions.push_global(name.clone());
+        }
+        emitter
+    }
+
     fn new_child(&self) -> Self {
         Self {
             instructions: InstructionSet::new_child_with_globals(self.instructions.globals.clone()),

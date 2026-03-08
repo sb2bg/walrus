@@ -100,13 +100,7 @@ impl ValueHolder {
                     }
                 }
             }
-            WalrusFunction::TreeWalk(node_fn) => {
-                // Closures keep captured values alive.
-                for captured in node_fn.captures.values().copied() {
-                    self.mark(captured);
-                }
-            }
-            WalrusFunction::Rust(_) | WalrusFunction::Native(_) => {}
+            WalrusFunction::Native(_) => {}
         }
     }
 
@@ -864,10 +858,6 @@ new_key_type! {
     pub struct StringKey;
 }
 
-pub trait Free {
-    fn free(&mut self) -> bool;
-}
-
 /// Trait for resolving arena keys to their values.
 /// Returns owned/cloned data for safety (no dangling references).
 /// For performance-critical code, use with_arena/with_arena_mut directly.
@@ -876,20 +866,7 @@ pub trait Resolve {
     fn resolve(self) -> WalrusResult<Self::Output>;
 }
 
-/// Trait for resolving arena keys to mutable values.
-/// Returns cloned data. To persist changes, use with_arena_mut directly.
-pub trait ResolveMut {
-    type Output;
-    fn resolve_mut(self) -> WalrusResult<Self::Output>;
-}
-
-impl Free for Value {
-    fn free(&mut self) -> bool {
-        with_arena_mut(|arena| arena.free(*self))
-    }
-}
-
-// Note: These Resolve/ResolveMut implementations clone data for safety.
+// Note: These Resolve implementations clone data for safety.
 // The previous implementation used fabricated lifetimes with unsafe code.
 // For performance-critical code, use with_arena/with_arena_mut directly.
 
@@ -953,41 +930,6 @@ impl Resolve for TaskKey {
     type Output = AsyncTask;
 
     fn resolve(self) -> WalrusResult<Self::Output> {
-        with_arena(|arena| arena.get_task(self).cloned())
-    }
-}
-
-// ResolveMut now returns cloned data that the caller can modify.
-// To persist changes, use with_arena_mut directly.
-
-impl ResolveMut for ListKey {
-    type Output = Vec<Value>;
-
-    fn resolve_mut(self) -> WalrusResult<Self::Output> {
-        with_arena(|arena| arena.get_list(self).cloned())
-    }
-}
-
-impl ResolveMut for DictKey {
-    type Output = FxHashMap<Value, Value>;
-
-    fn resolve_mut(self) -> WalrusResult<Self::Output> {
-        with_arena(|arena| arena.get_dict(self).cloned())
-    }
-}
-
-impl ResolveMut for StructInstKey {
-    type Output = StructInstance;
-
-    fn resolve_mut(self) -> WalrusResult<Self::Output> {
-        with_arena(|arena| arena.get_struct_inst(self).cloned())
-    }
-}
-
-impl ResolveMut for TaskKey {
-    type Output = AsyncTask;
-
-    fn resolve_mut(self) -> WalrusResult<Self::Output> {
         with_arena(|arena| arena.get_task(self).cloned())
     }
 }

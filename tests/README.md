@@ -12,10 +12,6 @@ This directory contains the language-level test suite for Walrus.
 - Optional `*.stdin` sidecar file: bytes piped to program stdin before assertion
 - `tests/fixtures/fail/*.walrus`: programs that must report an error
 - `tests/fixtures/fail/*.stderr`: required stderr snippet for each failing program
-- Optional `*.modes` sidecar file:
-  - `vm` -> run only in VM mode
-  - `interpreted` -> run only in interpreted mode
-  - `both` -> run in both modes (default if omitted)
 
 ## Running
 
@@ -23,9 +19,4 @@ This directory contains the language-level test suite for Walrus.
 cargo test --test language_suite
 ```
 
-This runs the fixture suite twice:
-
-- VM mode (`walrus <file>`)
-- interpreted mode (`walrus <file> --interpreted`)
-
-Fixtures tagged with mode restrictions only run where they apply.
+This runs the fixture suite in VM mode (`walrus <file>`).
