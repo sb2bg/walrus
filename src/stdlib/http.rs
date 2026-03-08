@@ -1,6 +1,5 @@
 use std::fmt::Write as FmtWrite;
 use std::io::Read;
-use std::net::TcpStream;
 use std::sync::{Arc, Mutex};
 
 use hyper::http::header::{CONNECTION, CONTENT_LENGTH, CONTENT_TYPE, HeaderName, HeaderValue};
@@ -295,22 +294,23 @@ pub fn http_build_response(
 }
 
 pub fn http_read_request_from_shared_stream(
-    stream: &Arc<Mutex<TcpStream>>,
+    stream: &Arc<Mutex<super::SharedTcpStream>>,
     max_body_bytes: usize,
 ) -> Result<HttpReadOutcome, String> {
     let mut stream = stream
         .lock()
         .map_err(|_| "http.read_request: stream lock poisoned".to_string())?;
-    http_read_request_from_stream(&mut stream, max_body_bytes)
+    let stream = &mut *stream;
+    let (reader, read_buffer) = (&mut stream.stream, &mut stream.read_buffer);
+    http_read_request_from_reader(reader, read_buffer, max_body_bytes)
 }
 
-/// Read and parse an HTTP request directly from a TcpStream.
-/// This is the thread-safe version that can be called from worker threads.
-pub fn http_read_request_from_stream(
-    stream: &mut TcpStream,
+fn http_read_request_from_reader<R: Read>(
+    reader: &mut R,
+    read_buffer: &mut Vec<u8>,
     max_body_bytes: usize,
 ) -> Result<HttpReadOutcome, String> {
-    let mut buf = Vec::with_capacity(HTTP_READ_CHUNK_BYTES);
+    let mut buf = std::mem::take(read_buffer);
     let mut temp = [0u8; HTTP_READ_CHUNK_BYTES];
 
     let parsed_head = loop {
@@ -323,7 +323,7 @@ pub fn http_read_request_from_stream(
                     ));
                 }
 
-                let read = stream
+                let read = reader
                     .read(&mut temp)
                     .map_err(|err| format!("http.read_request: read failed: {err}"))?;
 
@@ -349,21 +349,22 @@ pub fn http_read_request_from_stream(
         )));
     }
 
-    let mut body_bytes = if parsed_head.bytes_consumed < buf.len() {
-        buf[parsed_head.bytes_consumed..].to_vec()
+    let remaining = if parsed_head.bytes_consumed < buf.len() {
+        &buf[parsed_head.bytes_consumed..]
     } else {
-        Vec::new()
+        &[]
     };
-
-    if body_bytes.len() > parsed_head.content_length {
-        body_bytes.truncate(parsed_head.content_length);
+    let split_at = remaining.len().min(parsed_head.content_length);
+    let mut body_bytes = remaining[..split_at].to_vec();
+    if remaining.len() > parsed_head.content_length {
+        read_buffer.extend_from_slice(&remaining[parsed_head.content_length..]);
     }
 
     while body_bytes.len() < parsed_head.content_length {
         let remaining = parsed_head.content_length - body_bytes.len();
         let to_read = remaining.min(HTTP_READ_CHUNK_BYTES);
 
-        let read = stream
+        let read = reader
             .read(&mut temp[..to_read])
             .map_err(|err| format!("http.read_request: read failed: {err}"))?;
 

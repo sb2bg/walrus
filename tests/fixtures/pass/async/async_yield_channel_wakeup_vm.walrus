@@ -1,0 +1,19 @@
+import "std/async" as asyncx;
+
+async fn waiter: rx {
+    return await asyncx.recv(rx);
+}
+
+let ch = asyncx.channel();
+let tx = ch[0];
+let rx = ch[1];
+
+let task = asyncx.spawn(waiter, [rx]);
+
+asyncx.yield();
+println(asyncx.status(task));
+
+println(asyncx.send(tx, "ready"));
+asyncx.yield();
+println(asyncx.status(task));
+println(await task);

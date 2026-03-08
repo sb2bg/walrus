@@ -394,6 +394,7 @@ impl<'a> VM<'a> {
     }
 
     pub(crate) fn run_queued_tasks(&mut self, span: Span) -> WalrusResult<()> {
+        self.refresh_waiting_tasks()?;
         while let Some(task_key) = self.next_runnable_task()? {
             self.run_pending_task_to_completion(task_key, span)?;
             self.refresh_waiting_tasks()?;
