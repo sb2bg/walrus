@@ -11,7 +11,7 @@ lalrpop = "0.19.9"
 dotenvy = "0.15"
 
 [profile.release]
-debug = true
+debug = false
 
 [features]
 dhat-heap = []

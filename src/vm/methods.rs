@@ -185,19 +185,19 @@ pub fn dispatch_string_method(
             check_arity("upper", 0, args.len(), span, src, filename)?;
             let s = heap.get_string(key)?;
             let upper = s.to_uppercase();
-            Ok(heap.push(HeapValue::String(&upper)))
+            Ok(heap.push_string_owned(upper))
         }
         "lower" => {
             check_arity("lower", 0, args.len(), span, src, filename)?;
             let s = heap.get_string(key)?;
             let lower = s.to_lowercase();
-            Ok(heap.push(HeapValue::String(&lower)))
+            Ok(heap.push_string_owned(lower))
         }
         "trim" => {
             check_arity("trim", 0, args.len(), span, src, filename)?;
             let s = heap.get_string(key)?;
             let trimmed = s.trim().to_string();
-            Ok(heap.push(HeapValue::String(&trimmed)))
+            Ok(heap.push_string_owned(trimmed))
         }
         "split" => {
             check_arity("split", 1, args.len(), span, src, filename)?;
@@ -300,7 +300,7 @@ pub fn dispatch_string_method(
             };
             let s = heap.get_string(key)?;
             let replaced = s.replace(&from, &to);
-            Ok(heap.push(HeapValue::String(&replaced)))
+            Ok(heap.push_string_owned(replaced))
         }
         _ => Err(WalrusError::MethodNotFound {
             type_name: "string".to_string(),

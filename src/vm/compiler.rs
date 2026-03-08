@@ -46,6 +46,8 @@ pub struct BytecodeEmitter<'a> {
     loop_stack: Vec<LoopContext>,   // Track nested loops for break/continue
     current_struct: Option<String>, // Name of struct currently being compiled (for method access)
     current_struct_methods: Option<FxHashSet<String>>, // Known method names for current struct
+    known_int_globals: FxHashSet<String>,
+    known_int_scopes: Vec<FxHashSet<String>>,
 }
 
 struct LoopContext {
@@ -64,6 +66,8 @@ impl<'a> BytecodeEmitter<'a> {
             loop_stack: Vec::new(),
             current_struct: None,
             current_struct_methods: None,
+            known_int_globals: FxHashSet::default(),
+            known_int_scopes: vec![FxHashSet::default()],
         }
     }
 
@@ -83,6 +87,79 @@ impl<'a> BytecodeEmitter<'a> {
             loop_stack: Vec::new(), // Functions get their own loop stack
             current_struct: self.current_struct.clone(),
             current_struct_methods: self.current_struct_methods.clone(),
+            known_int_globals: FxHashSet::default(),
+            known_int_scopes: vec![FxHashSet::default(), FxHashSet::default()],
+        }
+    }
+
+    fn is_known_int_name(&self, name: &str) -> bool {
+        if let Some(depth) = self.instructions.resolve_depth(name) {
+            return self
+                .known_int_scopes
+                .get(depth)
+                .is_some_and(|scope| scope.contains(name));
+        }
+
+        self.known_int_globals.contains(name)
+    }
+
+    fn is_known_int_expr(&self, node: &Node) -> bool {
+        match node.kind() {
+            NodeKind::Int(_) => true,
+            NodeKind::Ident(name) => self.is_known_int_name(name),
+            NodeKind::UnaryOp(Opcode::Negate, expr) => self.is_known_int_expr(expr),
+            NodeKind::BinOp(left, op, right) => {
+                matches!(
+                    op,
+                    Opcode::Add
+                        | Opcode::Subtract
+                        | Opcode::Multiply
+                        | Opcode::Divide
+                        | Opcode::Modulo
+                ) && self.is_known_int_expr(left)
+                    && self.is_known_int_expr(right)
+            }
+            _ => false,
+        }
+    }
+
+    fn specialized_int_opcode(&self, op: Opcode, left: &Node, right: &Node) -> Option<Opcode> {
+        if !self.is_known_int_expr(left) || !self.is_known_int_expr(right) {
+            return None;
+        }
+
+        match op {
+            Opcode::Add => Some(Opcode::AddInt),
+            Opcode::Subtract => Some(Opcode::SubtractInt),
+            Opcode::Multiply => Some(Opcode::MultiplyInt),
+            Opcode::Divide => Some(Opcode::DivideInt),
+            Opcode::Modulo => Some(Opcode::ModuloInt),
+            Opcode::Less => Some(Opcode::LessInt),
+            Opcode::LessEqual => Some(Opcode::LessEqualInt),
+            _ => None,
+        }
+    }
+
+    fn mark_known_int(&mut self, name: &str, is_global: bool, known: bool) {
+        if is_global {
+            if known {
+                self.known_int_globals.insert(name.to_string());
+            } else {
+                self.known_int_globals.remove(name);
+            }
+            return;
+        }
+
+        let Some(depth) = self.instructions.resolve_depth(name) else {
+            return;
+        };
+        let Some(scope) = self.known_int_scopes.get_mut(depth) else {
+            return;
+        };
+        if known {
+            scope.insert(name.to_string());
+        } else {
+            scope.remove(name);
         }
     }
 
@@ -286,9 +363,11 @@ impl<'a> BytecodeEmitter<'a> {
                     }
                     _ => {
                         // Normal binary operations
+                        let specialized = self.specialized_int_opcode(op, &left, &right);
                         self.emit(*left)?;
                         self.emit(*right)?;
-                        self.instructions.push(Instruction::new(op, span));
+                        self.instructions
+                            .push(Instruction::new(specialized.unwrap_or(op), span));
                     }
                 }
             }
@@ -408,6 +487,7 @@ impl<'a> BytecodeEmitter<'a> {
 
                     // The loop variable slot (also outside depth scope for simplicity)
                     let var_idx = self.instructions.push_local(name.clone());
+                    self.mark_known_int(&name, false, true);
 
                     let jump = self.instructions.len();
 
@@ -593,10 +673,15 @@ impl<'a> BytecodeEmitter<'a> {
             }
             NodeKind::Index(node, index) => {
                 self.emit(*node)?;
-                self.emit(*index)?;
-
-                self.instructions
-                    .push(Instruction::new(Opcode::Index, span));
+                if let Some(constant) = optimize::try_get_constant(&index) {
+                    let constant_index = self.instructions.push_constant(constant);
+                    self.instructions
+                        .push(Instruction::new(Opcode::IndexConst(constant_index), span));
+                } else {
+                    self.emit(*index)?;
+                    self.instructions
+                        .push(Instruction::new(Opcode::Index, span));
+                }
             }
             NodeKind::Println(node) => {
                 self.emit(*node)?;
@@ -700,6 +785,7 @@ impl<'a> BytecodeEmitter<'a> {
             }
             NodeKind::Assign(name, node) => {
                 let is_global = self.depth == 0;
+                let value_is_known_int = self.is_known_int_expr(&node);
 
                 if !is_global {
                     // Check for redefinition only in local scopes
@@ -718,9 +804,11 @@ impl<'a> BytecodeEmitter<'a> {
                 self.emit(*node)?;
 
                 if is_global {
-                    self.define_global_variable(name, span);
+                    self.define_global_variable(name.clone(), span);
+                    self.mark_known_int(&name, true, value_is_known_int);
                 } else {
-                    self.define_variable(name, span);
+                    self.define_variable(name.clone(), span);
+                    self.mark_known_int(&name, false, value_is_known_int);
                 }
             }
             NodeKind::Reassign(name, node, op) => {
@@ -746,16 +834,34 @@ impl<'a> BytecodeEmitter<'a> {
                         optimize::ReassignOptimization::Increment => {
                             self.instructions
                                 .push(Instruction::new(Opcode::IncrementLocal(index), span));
+                            if self.is_known_int_name(name.value()) {
+                                self.mark_known_int(name.value(), false, true);
+                            }
                             return Ok(());
                         }
                         optimize::ReassignOptimization::Decrement => {
                             self.instructions
                                 .push(Instruction::new(Opcode::DecrementLocal(index), span));
+                            if self.is_known_int_name(name.value()) {
+                                self.mark_known_int(name.value(), false, true);
+                            }
                             return Ok(());
                         }
                         optimize::ReassignOptimization::None => {}
                     }
                 }
+
+                let current_is_known_int = self.is_known_int_name(name.value());
+                let rhs_is_known_int = self.is_known_int_expr(&node);
+                let new_is_known_int = match op {
+                    Opcode::Equal => rhs_is_known_int,
+                    Opcode::Add
+                    | Opcode::Subtract
+                    | Opcode::Multiply
+                    | Opcode::Divide
+                    | Opcode::Modulo => current_is_known_int && rhs_is_known_int,
+                    _ => false,
+                };
 
                 // For compound assignments (+=, -=, etc.), we need to load the current value first
                 match op {
@@ -775,7 +881,19 @@ impl<'a> BytecodeEmitter<'a> {
                         // Emit the right-hand side
                         self.emit(*node)?;
                         // Perform the operation
-                        self.instructions.push(Instruction::new(op, span));
+                        let opcode = if current_is_known_int && rhs_is_known_int {
+                            match op {
+                                Opcode::Add => Opcode::AddInt,
+                                Opcode::Subtract => Opcode::SubtractInt,
+                                Opcode::Multiply => Opcode::MultiplyInt,
+                                Opcode::Divide => Opcode::DivideInt,
+                                Opcode::Modulo => Opcode::ModuloInt,
+                                _ => op,
+                            }
+                        } else {
+                            op
+                        };
+                        self.instructions.push(Instruction::new(opcode, span));
                     }
                     _ => {
                         // Simple assignment (=), just emit the new value
@@ -787,9 +905,11 @@ impl<'a> BytecodeEmitter<'a> {
                 if is_global {
                     self.instructions
                         .push(Instruction::new(Opcode::ReassignGlobal(index), span));
+                    self.mark_known_int(name.value(), true, new_is_known_int);
                 } else {
                     self.instructions
                         .push(Instruction::new(Opcode::Reassign(index), span));
+                    self.mark_known_int(name.value(), false, new_is_known_int);
                 }
             }
             NodeKind::Statements(nodes) => {
@@ -955,6 +1075,8 @@ impl<'a> BytecodeEmitter<'a> {
                             emitter.emit_return(span);
 
                             // Create the method function
+                            let method_key =
+                                self.instructions.get_heap_mut().push_ident(&method_name);
                             let func = crate::function::WalrusFunction::Vm(
                                 crate::function::VmFunction::new(
                                     format!("{}::{}", name, method_name),
@@ -963,7 +1085,7 @@ impl<'a> BytecodeEmitter<'a> {
                                 ),
                             );
 
-                            struct_def.add_method(method_name, func);
+                            struct_def.add_method(method_key, func);
                         }
                         _ => {
                             return Err(WalrusError::TodoError {
@@ -1166,10 +1288,14 @@ impl<'a> BytecodeEmitter<'a> {
 
     fn inc_depth(&mut self) {
         self.instructions.inc_depth();
+        self.known_int_scopes.push(FxHashSet::default());
     }
 
     fn dec_depth(&mut self, span: Span) {
         let popped = self.instructions.dec_depth();
+        if self.known_int_scopes.len() > 1 {
+            self.known_int_scopes.pop();
+        }
 
         if popped > 0 {
             self.instructions
@@ -1348,6 +1474,26 @@ impl<'a> BytecodeEmitter<'a> {
                     .push(Instruction::new(Opcode::Return, span));
             }
             return Ok(());
+        }
+
+        if !is_tail_call {
+            if let NodeKind::Ident(name) = func.kind() {
+                if self.instructions.resolve_local_index(name).is_none() {
+                    if let Some(index) = self.instructions.resolve_global_index(name) {
+                        let arg_len = args.len();
+
+                        for arg in args {
+                            self.emit(arg)?;
+                        }
+
+                        self.instructions.push(Instruction::new(
+                            Opcode::CallGlobal(index as u32, arg_len as u32),
+                            span,
+                        ));
+                        return Ok(());
+                    }
+                }
+            }
         }
 
         // Regular or tail function call

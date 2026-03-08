@@ -180,6 +180,8 @@ pub fn try_get_constant(node: &Node) -> Option<Value> {
         NodeKind::Int(v) => Some(Value::Int(*v)),
         NodeKind::Float(v) => Some(Value::Float(*v)),
         NodeKind::Bool(v) => Some(Value::Bool(*v)),
+        NodeKind::String(v) => Some(crate::arenas::HeapValue::String(v).alloc()),
+        NodeKind::Void => Some(Value::Void),
 
         // Recursively fold nested binary operations
         NodeKind::BinOp(left, op, right) => try_fold_binop(left, *op, right),

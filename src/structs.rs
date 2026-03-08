@@ -1,7 +1,7 @@
 use rustc_hash::FxHashMap;
 use std::fmt::{Display, Formatter};
 
-use crate::arenas::StructDefKey;
+use crate::arenas::{StringKey, StructDefKey};
 use crate::function::WalrusFunction;
 use crate::value::Value;
 
@@ -9,7 +9,7 @@ use crate::value::Value;
 #[derive(Debug, Clone)]
 pub struct StructDefinition {
     name: String,
-    methods: FxHashMap<String, WalrusFunction>,
+    methods: FxHashMap<StringKey, WalrusFunction>,
 }
 
 impl StructDefinition {
@@ -24,15 +24,15 @@ impl StructDefinition {
         &self.name
     }
 
-    pub fn add_method(&mut self, name: String, function: WalrusFunction) {
+    pub fn add_method(&mut self, name: StringKey, function: WalrusFunction) {
         self.methods.insert(name, function);
     }
 
-    pub fn get_method(&self, name: &str) -> Option<&WalrusFunction> {
-        self.methods.get(name)
+    pub fn get_method(&self, name: StringKey) -> Option<&WalrusFunction> {
+        self.methods.get(&name)
     }
 
-    pub fn methods(&self) -> &FxHashMap<String, WalrusFunction> {
+    pub fn methods(&self) -> &FxHashMap<StringKey, WalrusFunction> {
         &self.methods
     }
 }

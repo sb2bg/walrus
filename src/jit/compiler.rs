@@ -498,7 +498,7 @@ impl JitCompiler {
                 // Note: String constants are loaded via LoadConst, but we allow those
                 // for now since they might be used in non-print contexts
                 // Function calls make the loop not JIT-able (for now)
-                Opcode::Call(_) => {
+                Opcode::Call(_) | Opcode::CallGlobal(_, _) => {
                     return Err(JitError::NotJitCompatible(
                         "Loop contains function calls".into(),
                     ));

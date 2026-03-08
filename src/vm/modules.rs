@@ -96,10 +96,28 @@ impl<'a> VM<'a> {
                 .copied()
                 .unwrap_or(Value::Void))
         } else {
-            self.globals
-                .get(index)
-                .copied()
-                .ok_or_else(|| self.undefined_global_error(index, span, None))
+            if index < self.globals.len() {
+                Ok(unsafe { *self.globals.get_unchecked(index) })
+            } else {
+                Err(self.undefined_global_error(index, span, None))
+            }
+        }
+    }
+
+    #[inline(always)]
+    pub(super) fn load_global_value_fast(
+        &mut self,
+        index: usize,
+        span: Span,
+    ) -> WalrusResult<Value> {
+        if self.current_frame().module_binding.is_none() {
+            if index < self.globals.len() {
+                Ok(unsafe { *self.globals.get_unchecked(index) })
+            } else {
+                Err(self.undefined_global_error(index, span, None))
+            }
+        } else {
+            self.load_global_value(index, span)
         }
     }
 

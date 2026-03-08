@@ -189,6 +189,12 @@ pub struct VM<'a> {
 }
 
 impl<'a> VM<'a> {
+    #[inline(always)]
+    fn copy_stack_tail_to_locals(&mut self, start: usize) {
+        self.locals.extend_from_slice(&self.stack[start..]);
+        self.stack.truncate(start);
+    }
+
     /// Run the VM and add stack trace information to any errors
     pub fn run(&mut self) -> WalrusResult<Value> {
         loop {
@@ -427,23 +433,23 @@ impl<'a> VM<'a> {
                     }
                 }
                 Opcode::LoadGlobal(index) => {
-                    let value = self.load_global_value(index as usize, span)?;
+                    let value = self.load_global_value_fast(index as usize, span)?;
                     self.push(value);
                 }
                 Opcode::LoadGlobal0 => {
-                    let value = self.load_global_value(0, span)?;
+                    let value = self.load_global_value_fast(0, span)?;
                     self.push(value);
                 }
                 Opcode::LoadGlobal1 => {
-                    let value = self.load_global_value(1, span)?;
+                    let value = self.load_global_value_fast(1, span)?;
                     self.push(value);
                 }
                 Opcode::LoadGlobal2 => {
-                    let value = self.load_global_value(2, span)?;
+                    let value = self.load_global_value_fast(2, span)?;
                     self.push(value);
                 }
                 Opcode::LoadGlobal3 => {
-                    let value = self.load_global_value(3, span)?;
+                    let value = self.load_global_value_fast(3, span)?;
                     self.push(value);
                 }
                 Opcode::Store => {
@@ -599,13 +605,15 @@ impl<'a> VM<'a> {
                     match value {
                         Value::StructInst(inst_key) => {
                             let (struct_name, iter_method, has_next) = {
+                                let iter_key = self.get_heap_mut().push_ident("iter");
+                                let next_key = self.get_heap_mut().push_ident("next");
                                 let heap = self.get_heap();
                                 let inst = heap.get_struct_inst(inst_key)?;
                                 let struct_def = heap.get_struct_def(inst.struct_def())?;
                                 (
                                     struct_def.name().to_string(),
-                                    struct_def.get_method("iter").cloned(),
-                                    struct_def.get_method("next").is_some(),
+                                    struct_def.get_method(iter_key).cloned(),
+                                    struct_def.get_method(next_key).is_some(),
                                 )
                             };
 
@@ -731,6 +739,180 @@ impl<'a> VM<'a> {
                         }
                     }
                 }
+                Opcode::CallGlobal(global_index, args) => {
+                    let arg_count = args as usize;
+
+                    if self.stack.len() < arg_count {
+                        return Err(WalrusError::StackUnderflow {
+                            op: opcode,
+                            span,
+                            src: self.source_ref.source().to_string(),
+                            filename: self.source_ref.filename().to_string(),
+                        });
+                    }
+
+                    let func = self.load_global_value_fast(global_index as usize, span)?;
+
+                    // JIT PROFILING: Track function calls and argument types
+                    if profiling_enabled {
+                        if let Value::Function(key) = func {
+                            if let Ok(func_ref) = self.get_heap().get_function(key) {
+                                let name = match func_ref {
+                                    WalrusFunction::Vm(f) => f.name.clone(),
+                                    WalrusFunction::Native(f) => f.name().to_string(),
+                                };
+                                if self.hotspot_detector.record_function_call(&name) {
+                                    debug!("Hot function detected: {}", name);
+                                }
+                                let args_start = self.stack.len() - arg_count;
+                                for (i, arg) in self.stack[args_start..].iter().enumerate() {
+                                    let arg_type = WalrusType::from_value(arg);
+                                    self.type_profile.observe(self.ip - 1 + i, arg_type);
+                                }
+                            }
+                        }
+                    }
+
+                    match func {
+                        Value::Function(key) => {
+                            let func = self.get_heap().get_function(key)?;
+
+                            match func {
+                                WalrusFunction::Vm(func) => {
+                                    if arg_count != func.arity {
+                                        return Err(WalrusError::InvalidArgCount {
+                                            name: func.name.clone(),
+                                            expected: func.arity,
+                                            got: arg_count,
+                                            span,
+                                            src: self.source_ref.source().into(),
+                                            filename: self.source_ref.filename().into(),
+                                        });
+                                    }
+
+                                    if func.is_async {
+                                        let args = self.pop_n(arg_count, opcode, span)?;
+                                        let task = self.create_task_for_function_key(key, args);
+                                        self.push(task);
+                                        continue;
+                                    }
+
+                                    let new_frame = CallFrame {
+                                        return_ip: self.ip,
+                                        frame_pointer: self.locals.len(),
+                                        stack_pointer: self.stack.len() - arg_count,
+                                        instructions: Rc::clone(&func.code),
+                                        function_name: String::new(),
+                                        return_override: None,
+                                        module_binding: func.module_binding.clone(),
+                                        awaiting_task: None,
+                                    };
+
+                                    self.call_stack.push(new_frame);
+
+                                    let args_start = self.stack.len() - arg_count;
+                                    self.copy_stack_tail_to_locals(args_start);
+
+                                    self.ip = 0;
+                                }
+                                WalrusFunction::Native(native_fn) => {
+                                    let native_fn = *native_fn;
+                                    let args = self.pop_n(arg_count, opcode, span)?;
+                                    let result = self.call_native(native_fn, args, span)?;
+                                    self.push(result);
+                                }
+                            }
+                        }
+                        Value::StructDef(struct_def_key) => {
+                            let (struct_name, init_method) = {
+                                let init_key = self.get_heap_mut().push_ident("init");
+                                let struct_def = self.get_heap().get_struct_def(struct_def_key)?;
+                                (
+                                    struct_def.name().to_string(),
+                                    struct_def.get_method(init_key).cloned(),
+                                )
+                            };
+
+                            match init_method {
+                                Some(WalrusFunction::Vm(init_func)) => {
+                                    let expected_without_self = init_func.arity.saturating_sub(1);
+                                    if arg_count != expected_without_self {
+                                        return Err(WalrusError::InvalidArgCount {
+                                            name: format!("{}::init", struct_name),
+                                            expected: expected_without_self,
+                                            got: arg_count,
+                                            span,
+                                            src: self.source_ref.source().into(),
+                                            filename: self.source_ref.filename().into(),
+                                        });
+                                    }
+
+                                    let instance = crate::structs::StructInstance::new(
+                                        struct_name.clone(),
+                                        struct_def_key,
+                                    );
+                                    let instance_value =
+                                        self.get_heap_mut().push(HeapValue::StructInst(instance));
+
+                                    let new_frame = CallFrame {
+                                        return_ip: self.ip,
+                                        frame_pointer: self.locals.len(),
+                                        stack_pointer: self.stack.len() - arg_count,
+                                        instructions: Rc::clone(&init_func.code),
+                                        function_name: format!("{}::init", struct_name),
+                                        return_override: Some(instance_value),
+                                        module_binding: init_func.module_binding.clone(),
+                                        awaiting_task: None,
+                                    };
+
+                                    self.call_stack.push(new_frame);
+
+                                    self.locals.push(instance_value);
+                                    let args_start = self.stack.len() - arg_count;
+                                    self.copy_stack_tail_to_locals(args_start);
+                                    self.ip = 0;
+                                }
+                                Some(_) => {
+                                    return Err(WalrusError::StructMethodMustBeVmFunction {
+                                        span,
+                                        src: self.source_ref.source().into(),
+                                        filename: self.source_ref.filename().into(),
+                                    });
+                                }
+                                None => {
+                                    if arg_count != 0 {
+                                        self.pop_n(arg_count, opcode, span)?;
+                                        return Err(WalrusError::InvalidArgCount {
+                                            name: struct_name,
+                                            expected: 0,
+                                            got: arg_count,
+                                            span,
+                                            src: self.source_ref.source().into(),
+                                            filename: self.source_ref.filename().into(),
+                                        });
+                                    }
+
+                                    let instance = crate::structs::StructInstance::new(
+                                        struct_name,
+                                        struct_def_key,
+                                    );
+                                    let instance_value =
+                                        self.get_heap_mut().push(HeapValue::StructInst(instance));
+                                    self.push(instance_value);
+                                }
+                            }
+                        }
+                        _ => {
+                            self.pop_n(arg_count, opcode, span)?;
+                            return Err(WalrusError::NotCallable {
+                                value: func.get_type().to_string(),
+                                span,
+                                src: self.source_ref.source().into(),
+                                filename: self.source_ref.filename().into(),
+                            });
+                        }
+                    }
+                }
                 Opcode::Call(args) => {
                     let arg_count = args as usize;
                     let func = self.pop(opcode, span)?;
@@ -806,7 +988,7 @@ impl<'a> VM<'a> {
 
                                     // Move arguments directly from operand stack to locals.
                                     let args_start = self.stack.len() - arg_count;
-                                    self.locals.extend(self.stack.drain(args_start..));
+                                    self.copy_stack_tail_to_locals(args_start);
 
                                     // Start execution at the beginning of the new function
                                     self.ip = 0;
@@ -821,10 +1003,11 @@ impl<'a> VM<'a> {
                         }
                         Value::StructDef(struct_def_key) => {
                             let (struct_name, init_method) = {
+                                let init_key = self.get_heap_mut().push_ident("init");
                                 let struct_def = self.get_heap().get_struct_def(struct_def_key)?;
                                 (
                                     struct_def.name().to_string(),
-                                    struct_def.get_method("init").cloned(),
+                                    struct_def.get_method(init_key).cloned(),
                                 )
                             };
 
@@ -864,7 +1047,7 @@ impl<'a> VM<'a> {
 
                                     self.locals.push(instance_value);
                                     let args_start = self.stack.len() - arg_count;
-                                    self.locals.extend(self.stack.drain(args_start..));
+                                    self.copy_stack_tail_to_locals(args_start);
                                     self.ip = 0;
                                 }
                                 Some(_) => {
@@ -1006,7 +1189,7 @@ impl<'a> VM<'a> {
 
                                     // Move the new arguments from operand stack to locals.
                                     let args_start = self.stack.len() - arg_count;
-                                    self.locals.extend(self.stack.drain(args_start..));
+                                    self.copy_stack_tail_to_locals(args_start);
 
                                     // Update the current frame in place (reuse it)
                                     // Keep the same return_ip and frame_pointer, just update instructions and name
@@ -1024,10 +1207,11 @@ impl<'a> VM<'a> {
                         }
                         Value::StructDef(struct_def_key) => {
                             let (struct_name, init_method) = {
+                                let init_key = self.get_heap_mut().push_ident("init");
                                 let struct_def = self.get_heap().get_struct_def(struct_def_key)?;
                                 (
                                     struct_def.name().to_string(),
-                                    struct_def.get_method("init").cloned(),
+                                    struct_def.get_method(init_key).cloned(),
                                 )
                             };
 
@@ -1060,7 +1244,7 @@ impl<'a> VM<'a> {
                                     self.locals.push(instance_value);
 
                                     let args_start = self.stack.len() - arg_count;
-                                    self.locals.extend(self.stack.drain(args_start..));
+                                    self.copy_stack_tail_to_locals(args_start);
 
                                     if let Some(current_frame) = self.call_stack.last_mut() {
                                         current_frame.instructions = new_instructions;
@@ -1189,11 +1373,85 @@ impl<'a> VM<'a> {
                         });
                     }
                 }
+                Opcode::MultiplyInt => {
+                    let b = self.pop_unchecked();
+                    let a = self.pop_unchecked();
+                    if let (Value::Int(a), Value::Int(b)) = (a, b) {
+                        self.push(Value::Int(a * b));
+                    } else {
+                        return Err(WalrusError::TypeMismatch {
+                            expected: "int and int".to_string(),
+                            found: format!("{} and {}", a.get_type(), b.get_type()),
+                            span,
+                            src: self.source_ref.source().into(),
+                            filename: self.source_ref.filename().into(),
+                        });
+                    }
+                }
+                Opcode::DivideInt => {
+                    let b = self.pop_unchecked();
+                    let a = self.pop_unchecked();
+                    if let (Value::Int(a), Value::Int(b)) = (a, b) {
+                        if b == 0 {
+                            return Err(WalrusError::DivisionByZero {
+                                span,
+                                src: self.source_ref.source().to_string(),
+                                filename: self.source_ref.filename().to_string(),
+                            });
+                        }
+                        self.push(Value::Int(a / b));
+                    } else {
+                        return Err(WalrusError::TypeMismatch {
+                            expected: "int and int".to_string(),
+                            found: format!("{} and {}", a.get_type(), b.get_type()),
+                            span,
+                            src: self.source_ref.source().into(),
+                            filename: self.source_ref.filename().into(),
+                        });
+                    }
+                }
+                Opcode::ModuloInt => {
+                    let b = self.pop_unchecked();
+                    let a = self.pop_unchecked();
+                    if let (Value::Int(a), Value::Int(b)) = (a, b) {
+                        if b == 0 {
+                            return Err(WalrusError::DivisionByZero {
+                                span,
+                                src: self.source_ref.source().to_string(),
+                                filename: self.source_ref.filename().to_string(),
+                            });
+                        }
+                        self.push(Value::Int(a % b));
+                    } else {
+                        return Err(WalrusError::TypeMismatch {
+                            expected: "int and int".to_string(),
+                            found: format!("{} and {}", a.get_type(), b.get_type()),
+                            span,
+                            src: self.source_ref.source().into(),
+                            filename: self.source_ref.filename().into(),
+                        });
+                    }
+                }
                 Opcode::LessInt => {
                     let b = self.pop_unchecked();
                     let a = self.pop_unchecked();
                     if let (Value::Int(a), Value::Int(b)) = (a, b) {
                         self.push(Value::Bool(a < b));
+                    } else {
+                        return Err(WalrusError::TypeMismatch {
+                            expected: "int and int".to_string(),
+                            found: format!("{} and {}", a.get_type(), b.get_type()),
+                            span,
+                            src: self.source_ref.source().into(),
+                            filename: self.source_ref.filename().into(),
+                        });
+                    }
+                }
+                Opcode::LessEqualInt => {
+                    let b = self.pop_unchecked();
+                    let a = self.pop_unchecked();
+                    if let (Value::Int(a), Value::Int(b)) = (a, b) {
+                        self.push(Value::Bool(a <= b));
                     } else {
                         return Err(WalrusError::TypeMismatch {
                             expected: "int and int".to_string(),
@@ -1238,7 +1496,7 @@ impl<'a> VM<'a> {
                             s.push_str(a);
                             s.push_str(b);
 
-                            let value = self.get_heap_mut().push(HeapValue::String(&s));
+                            let value = self.get_heap_mut().push_string_owned(s);
                             self.push(value);
                         }
                         (Value::List(a), Value::List(b)) => {
@@ -1316,7 +1574,7 @@ impl<'a> VM<'a> {
                                 s.push_str(a);
                             }
 
-                            let value = self.get_heap_mut().push(HeapValue::String(&s));
+                            let value = self.get_heap_mut().push_string_owned(s);
                             self.push(value);
                         }
                         _ => return Err(self.construct_err(opcode, a, Some(b), span)),
@@ -1592,223 +1850,12 @@ impl<'a> VM<'a> {
                 Opcode::Index => {
                     let b = self.pop_unchecked();
                     let a = self.pop_unchecked();
-
-                    // Fast path for the hottest case in numeric code: list[int]
-                    if let (Value::List(list_key), Value::Int(idx)) = (a, b) {
-                        let list = self.get_heap().get_list(list_key)?;
-                        if idx >= 0 {
-                            let idx_usize = idx as usize;
-                            if idx_usize < list.len() {
-                                // SAFETY: bounds checked above
-                                self.push(unsafe { *list.get_unchecked(idx_usize) });
-                                continue;
-                            }
-                        }
-
-                        let mut normalized = idx;
-                        let original = idx;
-                        if normalized < 0 {
-                            normalized += list.len() as i64;
-                        }
-
-                        if normalized < 0 || normalized >= list.len() as i64 {
-                            return Err(WalrusError::IndexOutOfBounds {
-                                index: original,
-                                len: list.len(),
-                                span,
-                                src: self.source_ref.source().to_string(),
-                                filename: self.source_ref.filename().to_string(),
-                            });
-                        }
-
-                        self.push(list[normalized as usize]);
-                        continue;
-                    }
-
-                    match (a, b) {
-                        (Value::List(_), Value::Int(_)) => unreachable!(),
-                        (Value::String(a), Value::Int(b)) => {
-                            let a = self.get_heap().get_string(a)?;
-                            let char_len = a.chars().count();
-                            let original = b;
-
-                            let Some(char_idx) = Self::normalize_index(b, char_len) else {
-                                return Err(WalrusError::IndexOutOfBounds {
-                                    index: original,
-                                    len: char_len,
-                                    span,
-                                    src: self.source_ref.source().to_string(),
-                                    filename: self.source_ref.filename().to_string(),
-                                });
-                            };
-
-                            let res = a
-                                .chars()
-                                .nth(char_idx)
-                                .map(|ch| ch.to_string())
-                                .ok_or_else(|| WalrusError::IndexOutOfBounds {
-                                    index: original,
-                                    len: char_len,
-                                    span,
-                                    src: self.source_ref.source().to_string(),
-                                    filename: self.source_ref.filename().to_string(),
-                                })?;
-                            let value = self.get_heap_mut().push(HeapValue::String(&res));
-
-                            self.push(value);
-                        }
-                        (Value::Dict(a), b) => {
-                            let a = self.get_heap().get_dict(a)?;
-
-                            if let Some(value) = a.get(&b) {
-                                self.push(*value);
-                            } else {
-                                // fixme: sometimes this is thrown even when the key exists
-                                // this is because it compares the key, not the value, which
-                                // means while the key may be different, the contents of the
-                                // key may be the same
-                                let b_str = b.stringify()?;
-
-                                return Err(WalrusError::KeyNotFound {
-                                    key: b_str,
-                                    span: span,
-                                    src: self.source_ref.source().to_string(),
-                                    filename: self.source_ref.filename().to_string(),
-                                });
-                            }
-                        }
-                        (Value::Module(a), b) => {
-                            let a = self.get_heap().get_module(a)?;
-
-                            if let Some(value) = a.get(&b) {
-                                self.push(*value);
-                            } else {
-                                let b_str = b.stringify()?;
-
-                                return Err(WalrusError::KeyNotFound {
-                                    key: b_str,
-                                    span,
-                                    src: self.source_ref.source().to_string(),
-                                    filename: self.source_ref.filename().to_string(),
-                                });
-                            }
-                        }
-                        (Value::String(a), Value::Range(range)) => {
-                            let a = self.get_heap().get_string(a)?;
-                            let a_len = a.chars().count();
-
-                            let start = if range.start < 0 {
-                                a_len as i64 + range.start + 1
-                            } else {
-                                range.start
-                            };
-
-                            let end = if range.end < 0 {
-                                a_len as i64 + range.end + 1
-                            } else {
-                                range.end
-                            };
-
-                            if start < 0
-                                || end < 0
-                                || start as usize > a_len
-                                || end as usize > a_len
-                            {
-                                return Err(WalrusError::IndexOutOfBounds {
-                                    index: range.start,
-                                    len: a_len,
-                                    span,
-                                    src: self.source_ref.source().to_string(),
-                                    filename: self.source_ref.filename().to_string(),
-                                });
-                            }
-
-                            if start > end {
-                                return Err(WalrusError::InvalidRange {
-                                    start: range.start,
-                                    end: range.end,
-                                    span,
-                                    src: self.source_ref.source().to_string(),
-                                    filename: self.source_ref.filename().to_string(),
-                                });
-                            }
-
-                            let start = start as usize;
-                            let end = end as usize;
-
-                            let start_byte =
-                                Self::char_to_byte_offset(a, start).ok_or_else(|| {
-                                    WalrusError::IndexOutOfBounds {
-                                        index: range.start,
-                                        len: a_len,
-                                        span,
-                                        src: self.source_ref.source().to_string(),
-                                        filename: self.source_ref.filename().to_string(),
-                                    }
-                                })?;
-                            let end_byte = Self::char_to_byte_offset(a, end).ok_or_else(|| {
-                                WalrusError::IndexOutOfBounds {
-                                    index: range.end,
-                                    len: a_len,
-                                    span,
-                                    src: self.source_ref.source().to_string(),
-                                    filename: self.source_ref.filename().to_string(),
-                                }
-                            })?;
-
-                            let res = a[start_byte..end_byte].to_string();
-                            let value = self.get_heap_mut().push(HeapValue::String(&res));
-
-                            self.push(value);
-                        }
-                        (Value::List(a), Value::Range(range)) => {
-                            let a = self.get_heap().get_list(a)?;
-                            let a_len = a.len();
-
-                            let start = if range.start < 0 {
-                                a_len as i64 + range.start + 1
-                            } else {
-                                range.start
-                            };
-
-                            let end = if range.end < 0 {
-                                a_len as i64 + range.end + 1
-                            } else {
-                                range.end
-                            };
-
-                            if start < 0
-                                || end < 0
-                                || start as usize > a_len
-                                || end as usize > a_len
-                            {
-                                return Err(WalrusError::IndexOutOfBounds {
-                                    index: range.start,
-                                    len: a.len(),
-                                    span,
-                                    src: self.source_ref.source().to_string(),
-                                    filename: self.source_ref.filename().to_string(),
-                                });
-                            }
-
-                            if start > end {
-                                return Err(WalrusError::InvalidRange {
-                                    start: range.start,
-                                    end: range.end,
-                                    span,
-                                    src: self.source_ref.source().to_string(),
-                                    filename: self.source_ref.filename().to_string(),
-                                });
-                            }
-
-                            let res = a[start as usize..end as usize].to_vec();
-                            let value = self.get_heap_mut().push(HeapValue::List(res));
-
-                            self.push(value);
-                        }
-                        // maybe add dict range indexing later
-                        _ => return Err(self.construct_err(opcode, a, Some(b), span)),
-                    }
+                    self.index_value(a, b, opcode, span)?;
+                }
+                Opcode::IndexConst(index) => {
+                    let object = self.pop_unchecked();
+                    let key = self.current_frame().instructions.get_constant(index);
+                    self.index_value(object, key, opcode, span)?;
                 }
                 Opcode::StoreIndex => {
                     // Stack: [object, index, value]
@@ -1887,7 +1934,7 @@ impl<'a> VM<'a> {
                 Opcode::Str => {
                     let a = self.pop(opcode, span)?;
                     let s = self.stringify_value(a)?;
-                    let value = self.get_heap_mut().push(HeapValue::String(&s));
+                    let value = self.get_heap_mut().push_string_owned(s);
                     self.push(value);
                 }
                 // Import system - returns a module namespace with native functions
@@ -2051,12 +2098,13 @@ impl<'a> VM<'a> {
                     match (member_name_value, object_value) {
                         // Struct method access
                         (Value::String(method_name_sym), Value::StructDef(struct_def_key)) => {
-                            let method_name = self.get_heap().get_string(method_name_sym)?;
                             let method_clone = {
                                 let struct_def = self.get_heap().get_struct_def(struct_def_key)?;
-                                if let Some(method) = struct_def.get_method(method_name) {
+                                if let Some(method) = struct_def.get_method(method_name_sym) {
                                     method.clone()
                                 } else {
+                                    let method_name =
+                                        self.get_heap().get_string(method_name_sym)?;
                                     return Err(WalrusError::MethodNotFound {
                                         type_name: struct_def.name().to_string(),
                                         method: method_name.to_string(),
@@ -2089,7 +2137,7 @@ impl<'a> VM<'a> {
                                     ResolvedInstanceMember::Field(value)
                                 } else {
                                     let struct_def = heap.get_struct_def(inst.struct_def())?;
-                                    if let Some(method) = struct_def.get_method(&member_name) {
+                                    if let Some(method) = struct_def.get_method(member_name_sym) {
                                         ResolvedInstanceMember::Method(method.clone())
                                     } else {
                                         return Err(WalrusError::MemberNotFound {
@@ -2178,11 +2226,9 @@ impl<'a> VM<'a> {
                         let object_idx = self.stack.len() - arg_count - 1;
                         match self.stack[object_idx] {
                             Value::StructDef(key) => {
-                                let method_name =
-                                    self.get_heap().get_string(method_name_sym)?.to_string();
                                 let (method_arity, method_code, method_binding) = {
                                     let struct_def = self.get_heap().get_struct_def(key)?;
-                                    match struct_def.get_method(&method_name) {
+                                    match struct_def.get_method(method_name_sym) {
                                         Some(WalrusFunction::Vm(func)) => (
                                             func.arity,
                                             Rc::clone(&func.code),
@@ -2198,9 +2244,11 @@ impl<'a> VM<'a> {
                                             );
                                         }
                                         None => {
+                                            let method_name =
+                                                self.get_heap().get_string(method_name_sym)?;
                                             return Err(WalrusError::MethodNotFound {
                                                 type_name: struct_def.name().to_string(),
-                                                method: method_name,
+                                                method: method_name.to_string(),
                                                 span,
                                                 src: self.source_ref.source().into(),
                                                 filename: self.source_ref.filename().into(),
@@ -2210,6 +2258,8 @@ impl<'a> VM<'a> {
                                 };
 
                                 if arg_count != method_arity {
+                                    let method_name =
+                                        self.get_heap().get_string(method_name_sym)?.to_string();
                                     return Err(WalrusError::InvalidArgCount {
                                         name: method_name,
                                         expected: method_arity,
@@ -2234,7 +2284,7 @@ impl<'a> VM<'a> {
                                 self.call_stack.push(new_frame);
 
                                 let args_start = object_idx + 1;
-                                self.locals.extend(self.stack.drain(args_start..));
+                                self.copy_stack_tail_to_locals(args_start);
                                 self.stack.truncate(object_idx);
 
                                 self.ip = 0;
@@ -2248,7 +2298,7 @@ impl<'a> VM<'a> {
                                     let inst = heap.get_struct_inst(inst_key)?;
                                     let struct_def = heap.get_struct_def(inst.struct_def())?;
                                     (
-                                        struct_def.get_method(&method_name).cloned(),
+                                        struct_def.get_method(method_name_sym).cloned(),
                                         struct_def.name().to_string(),
                                     )
                                 };
@@ -2325,7 +2375,7 @@ impl<'a> VM<'a> {
 
                                 self.locals.push(Value::StructInst(inst_key));
                                 let args_start = object_idx + 1;
-                                self.locals.extend(self.stack.drain(args_start..));
+                                self.copy_stack_tail_to_locals(args_start);
                                 self.stack.truncate(object_idx);
 
                                 self.ip = 0;
@@ -2467,7 +2517,7 @@ impl<'a> VM<'a> {
                             let method_name = self.get_heap().get_string(method_name_sym)?;
                             let method = {
                                 let struct_def = self.get_heap().get_struct_def(key)?;
-                                if let Some(method) = struct_def.get_method(method_name) {
+                                if let Some(method) = struct_def.get_method(method_name_sym) {
                                     method.clone()
                                 } else {
                                     return Err(WalrusError::MethodNotFound {
@@ -2530,7 +2580,7 @@ impl<'a> VM<'a> {
                                 let inst = heap.get_struct_inst(inst_key)?;
                                 let struct_def = heap.get_struct_def(inst.struct_def())?;
                                 (
-                                    struct_def.get_method(&method_name).cloned(),
+                                    struct_def.get_method(method_name_sym).cloned(),
                                     struct_def.name().to_string(),
                                 )
                             };
@@ -2624,6 +2674,219 @@ impl<'a> VM<'a> {
                 filename: self.source_ref.filename().to_string(),
             }
         }
+    }
+
+    fn index_value(
+        &mut self,
+        object: Value,
+        index: Value,
+        opcode: Opcode,
+        span: Span,
+    ) -> WalrusResult<()> {
+        // Fast path for the hottest case in numeric code: list[int]
+        if let (Value::List(list_key), Value::Int(idx)) = (object, index) {
+            let list = self.get_heap().get_list(list_key)?;
+            if idx >= 0 {
+                let idx_usize = idx as usize;
+                if idx_usize < list.len() {
+                    // SAFETY: bounds checked above
+                    self.push(unsafe { *list.get_unchecked(idx_usize) });
+                    return Ok(());
+                }
+            }
+
+            let mut normalized = idx;
+            let original = idx;
+            if normalized < 0 {
+                normalized += list.len() as i64;
+            }
+
+            if normalized < 0 || normalized >= list.len() as i64 {
+                return Err(WalrusError::IndexOutOfBounds {
+                    index: original,
+                    len: list.len(),
+                    span,
+                    src: self.source_ref.source().to_string(),
+                    filename: self.source_ref.filename().to_string(),
+                });
+            }
+
+            self.push(list[normalized as usize]);
+            return Ok(());
+        }
+
+        match (object, index) {
+            (Value::List(_), Value::Int(_)) => unreachable!(),
+            (Value::String(a), Value::Int(b)) => {
+                let a = self.get_heap().get_string(a)?;
+                let char_len = a.chars().count();
+                let original = b;
+
+                let Some(char_idx) = Self::normalize_index(b, char_len) else {
+                    return Err(WalrusError::IndexOutOfBounds {
+                        index: original,
+                        len: char_len,
+                        span,
+                        src: self.source_ref.source().to_string(),
+                        filename: self.source_ref.filename().to_string(),
+                    });
+                };
+
+                let res = a
+                    .chars()
+                    .nth(char_idx)
+                    .map(|ch| ch.to_string())
+                    .ok_or_else(|| WalrusError::IndexOutOfBounds {
+                        index: original,
+                        len: char_len,
+                        span,
+                        src: self.source_ref.source().to_string(),
+                        filename: self.source_ref.filename().to_string(),
+                    })?;
+                let value = self.get_heap_mut().push_string_owned(res);
+
+                self.push(value);
+            }
+            (Value::Dict(a), b) => {
+                let a = self.get_heap().get_dict(a)?;
+
+                if let Some(value) = a.get(&b) {
+                    self.push(*value);
+                } else {
+                    let b_str = b.stringify()?;
+
+                    return Err(WalrusError::KeyNotFound {
+                        key: b_str,
+                        span,
+                        src: self.source_ref.source().to_string(),
+                        filename: self.source_ref.filename().to_string(),
+                    });
+                }
+            }
+            (Value::Module(a), b) => {
+                let a = self.get_heap().get_module(a)?;
+
+                if let Some(value) = a.get(&b) {
+                    self.push(*value);
+                } else {
+                    let b_str = b.stringify()?;
+
+                    return Err(WalrusError::KeyNotFound {
+                        key: b_str,
+                        span,
+                        src: self.source_ref.source().to_string(),
+                        filename: self.source_ref.filename().to_string(),
+                    });
+                }
+            }
+            (Value::String(a), Value::Range(range)) => {
+                let a = self.get_heap().get_string(a)?;
+                let a_len = a.chars().count();
+
+                let start = if range.start < 0 {
+                    a_len as i64 + range.start + 1
+                } else {
+                    range.start
+                };
+
+                let end = if range.end < 0 {
+                    a_len as i64 + range.end + 1
+                } else {
+                    range.end
+                };
+
+                if start < 0 || end < 0 || start as usize > a_len || end as usize > a_len {
+                    return Err(WalrusError::IndexOutOfBounds {
+                        index: range.start,
+                        len: a_len,
+                        span,
+                        src: self.source_ref.source().to_string(),
+                        filename: self.source_ref.filename().to_string(),
+                    });
+                }
+
+                if start > end {
+                    return Err(WalrusError::InvalidRange {
+                        start: range.start,
+                        end: range.end,
+                        span,
+                        src: self.source_ref.source().to_string(),
+                        filename: self.source_ref.filename().to_string(),
+                    });
+                }
+
+                let start = start as usize;
+                let end = end as usize;
+
+                let start_byte = Self::char_to_byte_offset(a, start).ok_or_else(|| {
+                    WalrusError::IndexOutOfBounds {
+                        index: range.start,
+                        len: a_len,
+                        span,
+                        src: self.source_ref.source().to_string(),
+                        filename: self.source_ref.filename().to_string(),
+                    }
+                })?;
+                let end_byte = Self::char_to_byte_offset(a, end).ok_or_else(|| {
+                    WalrusError::IndexOutOfBounds {
+                        index: range.end,
+                        len: a_len,
+                        span,
+                        src: self.source_ref.source().to_string(),
+                        filename: self.source_ref.filename().to_string(),
+                    }
+                })?;
+
+                let res = a[start_byte..end_byte].to_string();
+                let value = self.get_heap_mut().push_string_owned(res);
+
+                self.push(value);
+            }
+            (Value::List(a), Value::Range(range)) => {
+                let a = self.get_heap().get_list(a)?;
+                let a_len = a.len();
+
+                let start = if range.start < 0 {
+                    a_len as i64 + range.start + 1
+                } else {
+                    range.start
+                };
+
+                let end = if range.end < 0 {
+                    a_len as i64 + range.end + 1
+                } else {
+                    range.end
+                };
+
+                if start < 0 || end < 0 || start as usize > a_len || end as usize > a_len {
+                    return Err(WalrusError::IndexOutOfBounds {
+                        index: range.start,
+                        len: a.len(),
+                        span,
+                        src: self.source_ref.source().to_string(),
+                        filename: self.source_ref.filename().to_string(),
+                    });
+                }
+
+                if start > end {
+                    return Err(WalrusError::InvalidRange {
+                        start: range.start,
+                        end: range.end,
+                        span,
+                        src: self.source_ref.source().to_string(),
+                        filename: self.source_ref.filename().to_string(),
+                    });
+                }
+
+                let res = a[start as usize..end as usize].to_vec();
+                let value = self.get_heap_mut().push(HeapValue::List(res));
+
+                self.push(value);
+            }
+            (a, b) => return Err(self.construct_err(opcode, a, Some(b), span)),
+        }
+
+        Ok(())
     }
 
     /// Profile a loop iteration for hotspot detection.

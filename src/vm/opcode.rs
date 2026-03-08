@@ -18,8 +18,10 @@ pub enum Opcode {
     IterNext(u32),
     StoreAt(u32),
     StoreGlobal(u32),
+    IndexConst(u32),
     Call(u32),
-    TailCall(u32), // Tail call optimization: reuses current frame instead of pushing new one
+    CallGlobal(u32, u32), // (global index, arg count) for statically known global callees
+    TailCall(u32),        // Tail call optimization: reuses current frame instead of pushing new one
     PushExceptionHandler(u32), // Catch target IP
     PopExceptionHandler,
 
@@ -40,7 +42,11 @@ pub enum Opcode {
     DecrementLocal(u32), // local[idx] -= 1
     AddInt,              // Integer addition (no type checking)
     SubtractInt,         // Integer subtraction (no type checking)
+    MultiplyInt,         // Integer multiplication (no type checking)
+    DivideInt,           // Integer division (no type checking)
+    ModuloInt,           // Integer modulo (no type checking)
     LessInt,             // Integer less-than comparison
+    LessEqualInt,        // Integer less-equal comparison
 
     // Optimized range loops (avoids heap allocation for iterators)
     // ForRangeInit: pops end, start from stack, stores in locals[idx] and locals[idx+1]

@@ -109,7 +109,7 @@ fn native_core_len(vm: &mut VM<'_>, args: &[Value], span: Span) -> WalrusResult<
 
 fn native_core_str(vm: &mut VM<'_>, args: &[Value], _span: Span) -> WalrusResult<Value> {
     let rendered = vm.get_heap().stringify(args[0])?;
-    Ok(vm.get_heap_mut().push(HeapValue::String(&rendered)))
+    Ok(vm.get_heap_mut().push_string_owned(rendered))
 }
 
 fn native_core_type(vm: &mut VM<'_>, args: &[Value], _span: Span) -> WalrusResult<Value> {
@@ -130,7 +130,7 @@ fn native_core_input(vm: &mut VM<'_>, args: &[Value], _span: Span) -> WalrusResu
         .read_line(&mut input)
         .map_err(|source| WalrusError::IOError { source })?;
 
-    Ok(vm.get_heap_mut().push(HeapValue::String(&input)))
+    Ok(vm.get_heap_mut().push_string_owned(input))
 }
 
 fn native_core_gc(vm: &mut VM<'_>, _args: &[Value], _span: Span) -> WalrusResult<Value> {

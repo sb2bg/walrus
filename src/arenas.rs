@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::rc::Rc;
 
 use float_ord::FloatOrd;
 use log::debug;
@@ -70,10 +71,10 @@ pub struct ValueHolder {
     dicts: DenseSlotMap<DictKey, FxHashMap<Value, Value>>,
     lists: DenseSlotMap<ListKey, Vec<Value>>,
     tuples: DenseSlotMap<TupleKey, Vec<Value>>,
-    strings: DenseSlotMap<StringKey, String>,
-    /// Reverse lookup for string interning: content -> key
-    /// This ensures equal strings get the same StringKey
-    string_intern: FxHashMap<String, StringKey>,
+    strings: DenseSlotMap<StringKey, Rc<str>>,
+    /// Reverse lookup for string interning: shared string storage -> canonical key.
+    /// Equal strings share a single backing allocation via `Rc<str>`.
+    string_intern: FxHashMap<Rc<str>, StringKey>,
     functions: DenseSlotMap<FuncKey, WalrusFunction>,
     iterators: DenseSlotMap<IterKey, ValueIter>,
     tasks: DenseSlotMap<TaskKey, AsyncTask>,
@@ -83,6 +84,17 @@ pub struct ValueHolder {
 }
 
 impl ValueHolder {
+    fn intern_owned_string(&mut self, string: String) -> StringKey {
+        if let Some(&key) = self.string_intern.get(string.as_str()) {
+            return key;
+        }
+
+        let shared: Rc<str> = Rc::from(string);
+        let key = self.strings.insert(Rc::clone(&shared));
+        self.string_intern.insert(shared, key);
+        key
+    }
+
     fn trace_function_contents(&mut self, function: WalrusFunction) {
         match function {
             WalrusFunction::Vm(vm_fn) => {
@@ -128,7 +140,7 @@ impl ValueHolder {
             Value::String(key) => {
                 // Also remove from intern table
                 if let Some(s) = self.strings.get(key) {
-                    self.string_intern.remove(s);
+                    self.string_intern.remove(s.as_ref());
                 }
                 self.strings.remove(key).is_some()
             }
@@ -186,16 +198,7 @@ impl ValueHolder {
             HeapValue::Dict(dict) => Value::Dict(self.dicts.insert(dict)),
             HeapValue::Module(dict) => Value::Module(self.dicts.insert(dict)),
             HeapValue::Function(func) => Value::Function(self.functions.insert(func)),
-            HeapValue::String(string) => {
-                // String interning: return existing key if string already exists
-                let string = string.to_string();
-                if let Some(&key) = self.string_intern.get(&string) {
-                    return Value::String(key);
-                }
-                let key = self.strings.insert(string.clone());
-                self.string_intern.insert(string, key);
-                Value::String(key)
-            }
+            HeapValue::String(string) => self.push_string(string),
             HeapValue::Iter(iter) => Value::Iter(self.iterators.insert(iter)),
             HeapValue::Task(task) => Value::Task(self.tasks.insert(task)),
             HeapValue::StructDef(def) => Value::StructDef(self.struct_defs.insert(def)),
@@ -438,7 +441,7 @@ impl ValueHolder {
         for key in unmarked_strings {
             // Remove from intern table before removing from strings
             if let Some(s) = self.strings.get(key) {
-                self.string_intern.remove(s);
+                self.string_intern.remove(s.as_ref());
             }
             self.strings.remove(key);
             freed += 1;
@@ -548,10 +551,15 @@ impl ValueHolder {
             return key;
         }
 
-        let owned = ident.to_string();
-        let key = self.strings.insert(owned.clone());
-        self.string_intern.insert(owned, key);
-        key
+        self.intern_owned_string(ident.to_string())
+    }
+
+    pub fn push_string(&mut self, string: &str) -> Value {
+        Value::String(self.push_ident(string))
+    }
+
+    pub fn push_string_owned(&mut self, string: String) -> Value {
+        Value::String(self.intern_owned_string(string))
     }
 
     pub fn get_mut_dict(&mut self, key: DictKey) -> WalrusResult<&mut FxHashMap<Value, Value>> {
@@ -583,7 +591,7 @@ impl ValueHolder {
     }
 
     pub fn get_string(&self, key: StringKey) -> WalrusResult<&str> {
-        Self::check(self.strings.get(key).map(|s| s.as_str()))
+        Self::check(self.strings.get(key).map(|s| s.as_ref()))
     }
 
     pub fn get_function(&self, key: FuncKey) -> WalrusResult<&WalrusFunction> {
