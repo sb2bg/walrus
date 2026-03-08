@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fs::File;
+use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
 
@@ -37,8 +38,49 @@ struct FileTable {
 
 struct NetState {
     listeners: HashMap<i64, Arc<TcpListener>>,
-    streams: HashMap<i64, Arc<Mutex<TcpStream>>>,
+    streams: HashMap<i64, Arc<Mutex<SharedTcpStream>>>,
     next_handle: i64,
+}
+
+pub(crate) struct SharedTcpStream {
+    pub(crate) stream: TcpStream,
+    pub(crate) read_buffer: Vec<u8>,
+}
+
+impl SharedTcpStream {
+    fn new(stream: TcpStream) -> Self {
+        Self {
+            stream,
+            read_buffer: Vec::new(),
+        }
+    }
+}
+
+impl Read for SharedTcpStream {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if buf.is_empty() {
+            return Ok(0);
+        }
+
+        if !self.read_buffer.is_empty() {
+            let buffered = buf.len().min(self.read_buffer.len());
+            buf[..buffered].copy_from_slice(&self.read_buffer[..buffered]);
+            self.read_buffer.drain(..buffered);
+            return Ok(buffered);
+        }
+
+        self.stream.read(buf)
+    }
+}
+
+impl Write for SharedTcpStream {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.stream.write(buf)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.stream.flush()
+    }
 }
 
 fn new_rng() -> StdRng {
@@ -95,7 +137,8 @@ impl NetState {
 
     fn insert_stream(&mut self, stream: TcpStream) -> i64 {
         let handle = self.next();
-        self.streams.insert(handle, Arc::new(Mutex::new(stream)));
+        self.streams
+            .insert(handle, Arc::new(Mutex::new(SharedTcpStream::new(stream))));
         handle
     }
 
@@ -103,7 +146,7 @@ impl NetState {
         self.listeners.get(&handle).cloned()
     }
 
-    fn stream(&self, handle: i64) -> Option<Arc<Mutex<TcpStream>>> {
+    fn stream(&self, handle: i64) -> Option<Arc<Mutex<SharedTcpStream>>> {
         self.streams.get(&handle).cloned()
     }
 
@@ -111,7 +154,7 @@ impl NetState {
         self.listeners.remove(&handle)
     }
 
-    fn remove_stream(&mut self, handle: i64) -> Option<Arc<Mutex<TcpStream>>> {
+    fn remove_stream(&mut self, handle: i64) -> Option<Arc<Mutex<SharedTcpStream>>> {
         self.streams.remove(&handle)
     }
 }

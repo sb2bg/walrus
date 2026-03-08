@@ -71,6 +71,7 @@ pub fn tcp_peer_addr(stream_handle: i64, _span: Span) -> WalrusResult<String> {
             message: "net.tcp_peer_addr: stream lock poisoned".to_string(),
         })?;
         stream
+            .stream
             .peer_addr()
             .map(|addr| addr.to_string())
             .map_err(|err| WalrusError::GenericError {
@@ -94,6 +95,7 @@ pub fn tcp_stream_local_addr(stream_handle: i64, _span: Span) -> WalrusResult<St
             message: "net.tcp_stream_local_addr: stream lock poisoned".to_string(),
         })?;
         stream
+            .stream
             .local_addr()
             .map(|addr| addr.to_string())
             .map_err(|err| WalrusError::GenericError {
@@ -121,6 +123,7 @@ pub fn tcp_set_read_timeout(
             message: "net.tcp_set_read_timeout: stream lock poisoned".to_string(),
         })?;
         stream
+            .stream
             .set_read_timeout(timeout_ms.map(Duration::from_millis))
             .map_err(|err| WalrusError::GenericError {
                 message: format!("net.tcp_set_read_timeout: failed: {err}"),
@@ -147,6 +150,7 @@ pub fn tcp_set_write_timeout(
             message: "net.tcp_set_write_timeout: stream lock poisoned".to_string(),
         })?;
         stream
+            .stream
             .set_write_timeout(timeout_ms.map(Duration::from_millis))
             .map_err(|err| WalrusError::GenericError {
                 message: format!("net.tcp_set_write_timeout: failed: {err}"),
@@ -167,6 +171,7 @@ pub fn tcp_set_nodelay(stream_handle: i64, enabled: bool, _span: Span) -> Walrus
             message: "net.tcp_set_nodelay: stream lock poisoned".to_string(),
         })?;
         stream
+            .stream
             .set_nodelay(enabled)
             .map_err(|err| WalrusError::GenericError {
                 message: format!("net.tcp_set_nodelay: failed: {err}"),
@@ -200,6 +205,7 @@ pub fn tcp_shutdown(stream_handle: i64, how: &str, _span: Span) -> WalrusResult<
             message: "net.tcp_shutdown: stream lock poisoned".to_string(),
         })?;
         stream
+            .stream
             .shutdown(shutdown)
             .map_err(|err| WalrusError::GenericError {
                 message: format!("net.tcp_shutdown: failed: {err}"),
@@ -213,7 +219,7 @@ pub fn tcp_close(stream_handle: i64, _span: Span) -> WalrusResult<()> {
         let mut table = table.borrow_mut();
         if let Some(stream) = table.remove_stream(stream_handle) {
             if let Ok(stream) = stream.lock() {
-                let _ = stream.shutdown(Shutdown::Both);
+                let _ = stream.stream.shutdown(Shutdown::Both);
             }
             Ok(())
         } else {
@@ -260,6 +266,6 @@ pub fn shared_tcp_listener(handle: i64) -> Option<Arc<TcpListener>> {
 
 /// Share a TcpStream for use in background I/O.
 /// Returns None if the handle is invalid.
-pub fn shared_tcp_stream(handle: i64) -> Option<Arc<Mutex<TcpStream>>> {
+pub fn shared_tcp_stream(handle: i64) -> Option<Arc<Mutex<super::SharedTcpStream>>> {
     NET_TABLE.with(|table| table.borrow().stream(handle))
 }
