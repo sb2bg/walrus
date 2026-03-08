@@ -2,7 +2,7 @@
 // Intentionally inefficient to stress test loops
 
 fn bubble_sort : arr {
-    let n = len(arr);
+    let n = core.len(arr);
     for i in 0..n {
         for j in 0..(n - i - 1) {
             if arr[j] > arr[j + 1] {

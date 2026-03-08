@@ -2,11 +2,11 @@
 // Sorts a list of 5000 random-ish numbers
 
 fn quicksort : arr {
-    if len(arr) <= 1 {
+    if core.len(arr) <= 1 {
         return arr;
     }
     
-    let pivot = arr[len(arr) / 2];
+    let pivot = arr[core.len(arr) / 2];
     let left = [];
     let middle = [];
     let right = [];
