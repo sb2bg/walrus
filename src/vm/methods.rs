@@ -333,13 +333,13 @@ pub fn dispatch_dict_method(
         "keys" => {
             check_arity("keys", 0, args.len(), span, src, filename)?;
             let dict = heap.get_dict(key)?;
-            let keys: Vec<Value> = dict.keys().copied().collect();
+            let keys: Vec<Value> = dict.iter().map(|(key, _)| *key).collect();
             Ok(heap.push(HeapValue::List(keys)))
         }
         "values" => {
             check_arity("values", 0, args.len(), span, src, filename)?;
             let dict = heap.get_dict(key)?;
-            let values: Vec<Value> = dict.values().copied().collect();
+            let values: Vec<Value> = dict.iter().map(|(_, value)| *value).collect();
             Ok(heap.push(HeapValue::List(values)))
         }
         "contains" => {

@@ -46,7 +46,12 @@ pub struct BytecodeEmitter<'a> {
     loop_stack: Vec<LoopContext>,   // Track nested loops for break/continue
     current_struct: Option<String>, // Name of struct currently being compiled (for method access)
     current_struct_methods: Option<FxHashSet<String>>, // Known method names for current struct
+    current_function_name: Option<String>,
+    current_function_arity: Option<usize>,
+    top_level_global_names: FxHashSet<String>,
     known_int_globals: FxHashSet<String>,
+    known_int_functions: FxHashSet<String>,
+    known_pure_int_functions: FxHashSet<String>,
     known_int_scopes: Vec<FxHashSet<String>>,
 }
 
@@ -151,7 +156,12 @@ impl<'a> BytecodeEmitter<'a> {
             loop_stack: Vec::new(),
             current_struct: None,
             current_struct_methods: None,
+            current_function_name: None,
+            current_function_arity: None,
+            top_level_global_names: FxHashSet::default(),
             known_int_globals: FxHashSet::default(),
+            known_int_functions: FxHashSet::default(),
+            known_pure_int_functions: FxHashSet::default(),
             known_int_scopes: vec![FxHashSet::default()],
         }
     }
@@ -172,7 +182,12 @@ impl<'a> BytecodeEmitter<'a> {
             loop_stack: Vec::new(), // Functions get their own loop stack
             current_struct: self.current_struct.clone(),
             current_struct_methods: self.current_struct_methods.clone(),
-            known_int_globals: FxHashSet::default(),
+            current_function_name: None,
+            current_function_arity: None,
+            top_level_global_names: self.top_level_global_names.clone(),
+            known_int_globals: self.known_int_globals.clone(),
+            known_int_functions: self.known_int_functions.clone(),
+            known_pure_int_functions: self.known_pure_int_functions.clone(),
             known_int_scopes: vec![FxHashSet::default(), FxHashSet::default()],
         }
     }
@@ -188,11 +203,31 @@ impl<'a> BytecodeEmitter<'a> {
         self.known_int_globals.contains(name)
     }
 
-    fn is_known_int_expr(&self, node: &Node) -> bool {
+    fn is_known_int_function_call(&self, func: &Node, recursive_name: Option<&str>) -> bool {
+        match func.kind() {
+            NodeKind::Ident(name) => {
+                self.instructions.resolve_local_index(name).is_none()
+                    && (self.known_int_functions.contains(name)
+                        || recursive_name.is_some_and(|current| current == name))
+            }
+            NodeKind::MemberAccess(object, method_name) => {
+                matches!(object.kind(), NodeKind::Ident(module_name) if module_name == "core")
+                    && method_name == "len"
+            }
+            _ => false,
+        }
+    }
+
+    fn is_known_int_expr_with_recursion(&self, node: &Node, recursive_name: Option<&str>) -> bool {
         match node.kind() {
             NodeKind::Int(_) => true,
             NodeKind::Ident(name) => self.is_known_int_name(name),
-            NodeKind::UnaryOp(Opcode::Negate, expr) => self.is_known_int_expr(expr),
+            NodeKind::UnaryOp(Opcode::Negate, expr) => {
+                self.is_known_int_expr_with_recursion(expr, recursive_name)
+            }
+            NodeKind::FunctionCall(func, _) => {
+                self.is_known_int_function_call(func, recursive_name)
+            }
             NodeKind::BinOp(left, op, right) => {
                 matches!(
                     op,
@@ -201,8 +236,51 @@ impl<'a> BytecodeEmitter<'a> {
                         | Opcode::Multiply
                         | Opcode::Divide
                         | Opcode::Modulo
-                ) && self.is_known_int_expr(left)
-                    && self.is_known_int_expr(right)
+                ) && self.is_known_int_expr_with_recursion(left, recursive_name)
+                    && self.is_known_int_expr_with_recursion(right, recursive_name)
+            }
+            _ => false,
+        }
+    }
+
+    fn is_known_int_expr(&self, node: &Node) -> bool {
+        self.is_known_int_expr_with_recursion(node, None)
+    }
+
+    fn is_known_int_expr_with_assumptions(
+        &self,
+        node: &Node,
+        recursive_name: Option<&str>,
+        assumed_int_names: &FxHashSet<String>,
+    ) -> bool {
+        match node.kind() {
+            NodeKind::Int(_) => true,
+            NodeKind::Ident(name) => {
+                assumed_int_names.contains(name) || self.is_known_int_name(name)
+            }
+            NodeKind::UnaryOp(Opcode::Negate, expr) => {
+                self.is_known_int_expr_with_assumptions(expr, recursive_name, assumed_int_names)
+            }
+            NodeKind::FunctionCall(func, _) => {
+                self.is_known_int_function_call(func, recursive_name)
+            }
+            NodeKind::BinOp(left, op, right) => {
+                matches!(
+                    op,
+                    Opcode::Add
+                        | Opcode::Subtract
+                        | Opcode::Multiply
+                        | Opcode::Divide
+                        | Opcode::Modulo
+                ) && self.is_known_int_expr_with_assumptions(
+                    left,
+                    recursive_name,
+                    assumed_int_names,
+                ) && self.is_known_int_expr_with_assumptions(
+                    right,
+                    recursive_name,
+                    assumed_int_names,
+                )
             }
             _ => false,
         }
@@ -256,6 +334,567 @@ impl<'a> BytecodeEmitter<'a> {
         } else {
             scope.remove(name);
         }
+    }
+
+    fn name_used_in_int_context(node: &Node, name: &str) -> bool {
+        match node.kind() {
+            NodeKind::BinOp(left, op, right) => {
+                (matches!(
+                    op,
+                    Opcode::Add
+                        | Opcode::Subtract
+                        | Opcode::Multiply
+                        | Opcode::Divide
+                        | Opcode::Modulo
+                        | Opcode::Less
+                        | Opcode::LessEqual
+                        | Opcode::Greater
+                        | Opcode::GreaterEqual
+                ) && (Self::references_name(left, name) || Self::references_name(right, name)))
+                    || Self::name_used_in_int_context(left, name)
+                    || Self::name_used_in_int_context(right, name)
+            }
+            NodeKind::UnaryOp(Opcode::Negate, expr) => {
+                Self::references_name(expr, name) || Self::name_used_in_int_context(expr, name)
+            }
+            NodeKind::Index(_, index) => {
+                Self::references_name(index, name) || Self::name_used_in_int_context(index, name)
+            }
+            NodeKind::Range(Some(start), end) => {
+                Self::name_used_in_int_context(start, name)
+                    || Self::name_used_in_int_context(end, name)
+            }
+            NodeKind::Range(None, end)
+            | NodeKind::Assign(_, end)
+            | NodeKind::ExpressionStatement(end)
+            | NodeKind::Return(end)
+            | NodeKind::Print(end)
+            | NodeKind::Println(end)
+            | NodeKind::Throw(end)
+            | NodeKind::Free(end)
+            | NodeKind::Defer(end)
+            | NodeKind::Await(end) => Self::name_used_in_int_context(end, name),
+            NodeKind::Reassign(_, expr, _) | NodeKind::MemberAccess(expr, _) => {
+                Self::name_used_in_int_context(expr, name)
+            }
+            NodeKind::Program(nodes)
+            | NodeKind::Statements(nodes)
+            | NodeKind::UnscopedStatements(nodes)
+            | NodeKind::List(nodes)
+            | NodeKind::Block(nodes)
+            | NodeKind::StructDefinition(_, nodes) => nodes
+                .iter()
+                .any(|node| Self::name_used_in_int_context(node, name)),
+            NodeKind::Dict(entries) => entries.iter().any(|(key, value)| {
+                Self::name_used_in_int_context(key, name)
+                    || Self::name_used_in_int_context(value, name)
+            }),
+            NodeKind::FunctionCall(func, args) => {
+                Self::name_used_in_int_context(func, name)
+                    || args
+                        .iter()
+                        .any(|arg| Self::name_used_in_int_context(arg, name))
+            }
+            NodeKind::If(condition, then_branch, else_branch) => {
+                Self::name_used_in_int_context(condition, name)
+                    || Self::name_used_in_int_context(then_branch, name)
+                    || else_branch
+                        .as_deref()
+                        .is_some_and(|branch| Self::name_used_in_int_context(branch, name))
+            }
+            NodeKind::Ternary(condition, when_true, when_false) => {
+                Self::name_used_in_int_context(condition, name)
+                    || Self::name_used_in_int_context(when_true, name)
+                    || Self::name_used_in_int_context(when_false, name)
+            }
+            NodeKind::While(condition, body) => {
+                Self::name_used_in_int_context(condition, name)
+                    || Self::name_used_in_int_context(body, name)
+            }
+            NodeKind::For(_, iter, body) => {
+                Self::name_used_in_int_context(iter, name)
+                    || Self::name_used_in_int_context(body, name)
+            }
+            _ => false,
+        }
+    }
+
+    fn int_parameter_names(args: &[String], body: &Node) -> FxHashSet<String> {
+        args.iter()
+            .filter(|arg| Self::name_used_in_int_context(body, arg))
+            .cloned()
+            .collect()
+    }
+
+    fn extend_assumed_int_names(
+        &self,
+        node: &Node,
+        recursive_name: &str,
+        assumed_int_names: &mut FxHashSet<String>,
+    ) {
+        match node.kind() {
+            NodeKind::Program(nodes)
+            | NodeKind::Statements(nodes)
+            | NodeKind::UnscopedStatements(nodes)
+            | NodeKind::Block(nodes)
+            | NodeKind::List(nodes)
+            | NodeKind::StructDefinition(_, nodes) => {
+                for node in nodes {
+                    self.extend_assumed_int_names(node, recursive_name, assumed_int_names);
+                }
+            }
+            NodeKind::Assign(name, expr) => {
+                if self.is_known_int_expr_with_assumptions(
+                    expr,
+                    Some(recursive_name),
+                    assumed_int_names,
+                ) {
+                    assumed_int_names.insert(name.clone());
+                }
+            }
+            NodeKind::Reassign(name, expr, op) => {
+                let current_is_int = assumed_int_names.contains(name.value());
+                let expr_is_int = self.is_known_int_expr_with_assumptions(
+                    expr,
+                    Some(recursive_name),
+                    assumed_int_names,
+                );
+                let next_is_int = match op {
+                    Opcode::Equal => expr_is_int,
+                    Opcode::Add
+                    | Opcode::Subtract
+                    | Opcode::Multiply
+                    | Opcode::Divide
+                    | Opcode::Modulo => current_is_int && expr_is_int,
+                    _ => false,
+                };
+
+                if next_is_int {
+                    assumed_int_names.insert(name.value().to_string());
+                }
+            }
+            NodeKind::Dict(entries) => {
+                for (key, value) in entries {
+                    self.extend_assumed_int_names(key, recursive_name, assumed_int_names);
+                    self.extend_assumed_int_names(value, recursive_name, assumed_int_names);
+                }
+            }
+            NodeKind::BinOp(left, _, right)
+            | NodeKind::Index(left, right)
+            | NodeKind::Range(Some(left), right)
+            | NodeKind::Try(left, _, right) => {
+                self.extend_assumed_int_names(left, recursive_name, assumed_int_names);
+                self.extend_assumed_int_names(right, recursive_name, assumed_int_names);
+            }
+            NodeKind::UnaryOp(_, expr)
+            | NodeKind::ExpressionStatement(expr)
+            | NodeKind::Return(expr)
+            | NodeKind::Print(expr)
+            | NodeKind::Println(expr)
+            | NodeKind::Throw(expr)
+            | NodeKind::Free(expr)
+            | NodeKind::Defer(expr)
+            | NodeKind::Await(expr)
+            | NodeKind::MemberAccess(expr, _)
+            | NodeKind::Range(None, expr) => {
+                self.extend_assumed_int_names(expr, recursive_name, assumed_int_names);
+            }
+            NodeKind::FunctionCall(func, args) => {
+                self.extend_assumed_int_names(func, recursive_name, assumed_int_names);
+                for arg in args {
+                    self.extend_assumed_int_names(arg, recursive_name, assumed_int_names);
+                }
+            }
+            NodeKind::If(condition, then_branch, else_branch) => {
+                self.extend_assumed_int_names(condition, recursive_name, assumed_int_names);
+                self.extend_assumed_int_names(then_branch, recursive_name, assumed_int_names);
+                if let Some(else_branch) = else_branch {
+                    self.extend_assumed_int_names(else_branch, recursive_name, assumed_int_names);
+                }
+            }
+            NodeKind::Ternary(condition, when_true, when_false) => {
+                self.extend_assumed_int_names(condition, recursive_name, assumed_int_names);
+                self.extend_assumed_int_names(when_true, recursive_name, assumed_int_names);
+                self.extend_assumed_int_names(when_false, recursive_name, assumed_int_names);
+            }
+            NodeKind::While(condition, body) => {
+                self.extend_assumed_int_names(condition, recursive_name, assumed_int_names);
+                self.extend_assumed_int_names(body, recursive_name, assumed_int_names);
+            }
+            NodeKind::For(name, iter, body) => {
+                if Self::name_used_in_int_context(iter, name) {
+                    assumed_int_names.insert(name.clone());
+                }
+                self.extend_assumed_int_names(iter, recursive_name, assumed_int_names);
+                self.extend_assumed_int_names(body, recursive_name, assumed_int_names);
+            }
+            _ => {}
+        }
+    }
+
+    fn assumed_int_names_for_function(
+        &self,
+        recursive_name: &str,
+        args: &[String],
+        body: &Node,
+    ) -> FxHashSet<String> {
+        let mut assumed_int_names = Self::int_parameter_names(args, body);
+        self.extend_assumed_int_names(body, recursive_name, &mut assumed_int_names);
+        assumed_int_names
+    }
+
+    fn sequence_guarantees_int_return(
+        &self,
+        nodes: &[Node],
+        recursive_name: &str,
+        assumed_int_names: &FxHashSet<String>,
+    ) -> bool {
+        nodes
+            .iter()
+            .any(|node| self.node_guarantees_int_return(node, recursive_name, assumed_int_names))
+    }
+
+    fn node_guarantees_int_return(
+        &self,
+        node: &Node,
+        recursive_name: &str,
+        assumed_int_names: &FxHashSet<String>,
+    ) -> bool {
+        match node.kind() {
+            NodeKind::Return(expr) => self.is_known_int_expr_with_assumptions(
+                expr,
+                Some(recursive_name),
+                assumed_int_names,
+            ),
+            NodeKind::If(_, then_branch, Some(else_branch)) => {
+                self.node_guarantees_int_return(then_branch, recursive_name, assumed_int_names)
+                    && self.node_guarantees_int_return(
+                        else_branch,
+                        recursive_name,
+                        assumed_int_names,
+                    )
+            }
+            NodeKind::Program(nodes)
+            | NodeKind::Statements(nodes)
+            | NodeKind::UnscopedStatements(nodes)
+            | NodeKind::Block(nodes) => {
+                self.sequence_guarantees_int_return(nodes, recursive_name, assumed_int_names)
+            }
+            _ => false,
+        }
+    }
+
+    fn function_guarantees_int_return(&self, name: &str, args: &[String], body: &Node) -> bool {
+        let assumed_int_names = self.assumed_int_names_for_function(name, args, body);
+        self.node_guarantees_int_return(body, name, &assumed_int_names)
+    }
+
+    fn top_level_binding_name(node: &Node) -> Option<String> {
+        match node.kind() {
+            NodeKind::Assign(name, _) => Some(name.clone()),
+            NodeKind::FunctionDefinition(name, _, _)
+            | NodeKind::AsyncFunctionDefinition(name, _, _)
+            | NodeKind::StructDefinition(name, _) => Some(name.clone()),
+            NodeKind::PackageImport(name, alias) | NodeKind::ModuleImport(name, alias) => {
+                Some(alias.clone().unwrap_or_else(|| name.clone()))
+            }
+            _ => None,
+        }
+    }
+
+    fn top_level_binding_must_be_global(node: &Node) -> bool {
+        matches!(
+            node.kind(),
+            NodeKind::FunctionDefinition(_, _, _)
+                | NodeKind::AsyncFunctionDefinition(_, _, _)
+                | NodeKind::StructDefinition(_, _)
+        )
+    }
+
+    fn top_level_body_references(node: &Node, name: &str) -> bool {
+        match node.kind() {
+            NodeKind::FunctionDefinition(_, _, body)
+            | NodeKind::AsyncFunctionDefinition(_, _, body) => Self::references_name(body, name),
+            NodeKind::StructDefinition(_, members) => {
+                members.iter().any(|member| match member.kind() {
+                    NodeKind::StructFunctionDefinition(_, _, body) => {
+                        Self::references_name(body, name)
+                    }
+                    _ => false,
+                })
+            }
+            _ => false,
+        }
+    }
+
+    fn prepare_top_level_scope(&mut self, nodes: &[Node]) {
+        if self.depth != 0 || !self.top_level_global_names.is_empty() {
+            return;
+        }
+
+        let mut binding_names = FxHashSet::default();
+        let mut global_names = FxHashSet::default();
+
+        for node in nodes {
+            if let Some(name) = Self::top_level_binding_name(node) {
+                binding_names.insert(name.clone());
+                if Self::top_level_binding_must_be_global(node) {
+                    global_names.insert(name);
+                }
+            }
+        }
+
+        for name in &binding_names {
+            if global_names.contains(name) {
+                continue;
+            }
+
+            if nodes
+                .iter()
+                .any(|node| Self::top_level_body_references(node, name))
+            {
+                global_names.insert(name.clone());
+            }
+        }
+
+        self.top_level_global_names = global_names;
+    }
+
+    fn node_is_pure_int_ast(
+        &self,
+        node: &Node,
+        recursive_name: &str,
+        locals: &mut FxHashSet<String>,
+    ) -> bool {
+        match node.kind() {
+            NodeKind::Program(nodes)
+            | NodeKind::Statements(nodes)
+            | NodeKind::UnscopedStatements(nodes)
+            | NodeKind::Block(nodes) => nodes
+                .iter()
+                .all(|node| self.node_is_pure_int_ast(node, recursive_name, locals)),
+            NodeKind::Assign(name, expr) => {
+                if !self.node_is_pure_int_ast(expr, recursive_name, locals) {
+                    return false;
+                }
+                locals.insert(name.clone());
+                true
+            }
+            NodeKind::Reassign(name, expr, _) => {
+                locals.contains(name.value())
+                    && self.node_is_pure_int_ast(expr, recursive_name, locals)
+            }
+            NodeKind::Return(expr)
+            | NodeKind::ExpressionStatement(expr)
+            | NodeKind::UnaryOp(_, expr)
+            | NodeKind::Range(None, expr)
+            | NodeKind::MemberAccess(expr, _) => {
+                self.node_is_pure_int_ast(expr, recursive_name, locals)
+            }
+            NodeKind::Int(_)
+            | NodeKind::Float(_)
+            | NodeKind::String(_)
+            | NodeKind::Bool(_)
+            | NodeKind::Void => true,
+            NodeKind::FString(parts) => parts.iter().all(|part| match part {
+                FStringPart::Literal(_) => true,
+                FStringPart::Expr(expr) => self.node_is_pure_int_ast(expr, recursive_name, locals),
+            }),
+            NodeKind::Ident(name) => locals.contains(name),
+            NodeKind::List(nodes) => nodes
+                .iter()
+                .all(|node| self.node_is_pure_int_ast(node, recursive_name, locals)),
+            NodeKind::Dict(entries) => entries.iter().all(|(key, value)| {
+                self.node_is_pure_int_ast(key, recursive_name, locals)
+                    && self.node_is_pure_int_ast(value, recursive_name, locals)
+            }),
+            NodeKind::BinOp(left, _, right)
+            | NodeKind::Index(left, right)
+            | NodeKind::Range(Some(left), right)
+            | NodeKind::Try(left, _, right) => {
+                self.node_is_pure_int_ast(left, recursive_name, locals)
+                    && self.node_is_pure_int_ast(right, recursive_name, locals)
+            }
+            NodeKind::FunctionCall(func, args) => {
+                let args_are_pure = args
+                    .iter()
+                    .all(|arg| self.node_is_pure_int_ast(arg, recursive_name, locals));
+                if !args_are_pure {
+                    return false;
+                }
+
+                match func.kind() {
+                    NodeKind::Ident(name) => {
+                        !locals.contains(name)
+                            && (name == recursive_name
+                                || self.known_pure_int_functions.contains(name))
+                    }
+                    NodeKind::MemberAccess(object, method_name) => {
+                        matches!(object.kind(), NodeKind::Ident(module_name) if module_name == "core")
+                            && method_name == "len"
+                    }
+                    _ => false,
+                }
+            }
+            NodeKind::If(condition, then_branch, else_branch) => {
+                self.node_is_pure_int_ast(condition, recursive_name, locals)
+                    && self.node_is_pure_int_ast(then_branch, recursive_name, locals)
+                    && else_branch.as_deref().is_none_or(|branch| {
+                        self.node_is_pure_int_ast(branch, recursive_name, locals)
+                    })
+            }
+            NodeKind::Ternary(condition, when_true, when_false) => {
+                self.node_is_pure_int_ast(condition, recursive_name, locals)
+                    && self.node_is_pure_int_ast(when_true, recursive_name, locals)
+                    && self.node_is_pure_int_ast(when_false, recursive_name, locals)
+            }
+            NodeKind::While(condition, body) => {
+                self.node_is_pure_int_ast(condition, recursive_name, locals)
+                    && self.node_is_pure_int_ast(body, recursive_name, locals)
+            }
+            NodeKind::For(name, iter, body) => {
+                if !self.node_is_pure_int_ast(iter, recursive_name, locals) {
+                    return false;
+                }
+                locals.insert(name.clone());
+                self.node_is_pure_int_ast(body, recursive_name, locals)
+            }
+            NodeKind::Print(_)
+            | NodeKind::Println(_)
+            | NodeKind::Throw(_)
+            | NodeKind::Free(_)
+            | NodeKind::Defer(_)
+            | NodeKind::Await(_)
+            | NodeKind::IndexAssign(_, _, _)
+            | NodeKind::AnonFunctionDefinition(_, _)
+            | NodeKind::AsyncAnonFunctionDefinition(_, _)
+            | NodeKind::FunctionDefinition(_, _, _)
+            | NodeKind::AsyncFunctionDefinition(_, _, _)
+            | NodeKind::ExternFunctionDefinition(_, _)
+            | NodeKind::StructDefinition(_, _)
+            | NodeKind::StructFunctionDefinition(_, _, _)
+            | NodeKind::PackageImport(_, _)
+            | NodeKind::ModuleImport(_, _)
+            | NodeKind::Break
+            | NodeKind::Continue => false,
+        }
+    }
+
+    fn function_is_pure_int_ast(&self, name: &str, args: &[String], body: &Node) -> bool {
+        let mut locals: FxHashSet<String> = args.iter().cloned().collect();
+        self.node_is_pure_int_ast(body, name, &mut locals)
+    }
+
+    fn instruction_set_is_pure_int(&self, name: &str, instructions: &InstructionSet) -> bool {
+        instructions
+            .instructions
+            .iter()
+            .all(|instruction| match instruction.opcode() {
+                Opcode::LoadConst(_)
+                | Opcode::LoadConst0
+                | Opcode::LoadConst1
+                | Opcode::Load(_)
+                | Opcode::LoadLocal0
+                | Opcode::LoadLocal1
+                | Opcode::LoadLocal2
+                | Opcode::LoadLocal3
+                | Opcode::LoadLocal4
+                | Opcode::LoadLocal5
+                | Opcode::LoadLocal6
+                | Opcode::LoadLocal7
+                | Opcode::LoadLocal8
+                | Opcode::LoadLocal9
+                | Opcode::LoadLocal10
+                | Opcode::LoadLocal11
+                | Opcode::StoreAt(_)
+                | Opcode::StoreLocal0
+                | Opcode::StoreLocal1
+                | Opcode::StoreLocal2
+                | Opcode::StoreLocal3
+                | Opcode::StoreLocal4
+                | Opcode::StoreLocal5
+                | Opcode::StoreLocal6
+                | Opcode::StoreLocal7
+                | Opcode::StoreLocal8
+                | Opcode::StoreLocal9
+                | Opcode::StoreLocal10
+                | Opcode::StoreLocal11
+                | Opcode::Reassign(_)
+                | Opcode::ReassignLocal0
+                | Opcode::ReassignLocal1
+                | Opcode::ReassignLocal2
+                | Opcode::ReassignLocal3
+                | Opcode::ReassignLocal4
+                | Opcode::ReassignLocal5
+                | Opcode::ReassignLocal6
+                | Opcode::ReassignLocal7
+                | Opcode::ReassignLocal8
+                | Opcode::ReassignLocal9
+                | Opcode::ReassignLocal10
+                | Opcode::ReassignLocal11
+                | Opcode::AddAssignLocal(_)
+                | Opcode::AddAssignLocalInt(_)
+                | Opcode::IncrementLocal(_)
+                | Opcode::DecrementLocal(_)
+                | Opcode::JumpIfFalse(_)
+                | Opcode::Jump(_)
+                | Opcode::PopLocal(_)
+                | Opcode::Index
+                | Opcode::IndexConst(_)
+                | Opcode::IndexLocal(_)
+                | Opcode::IndexLocalConst(_, _)
+                | Opcode::IndexLocalLocal(_, _)
+                | Opcode::IndexLocalLocalAdd1(_, _)
+                | Opcode::List(_)
+                | Opcode::Dict(_)
+                | Opcode::Range
+                | Opcode::True
+                | Opcode::False
+                | Opcode::Void
+                | Opcode::Return
+                | Opcode::Pop
+                | Opcode::Add
+                | Opcode::Subtract
+                | Opcode::Multiply
+                | Opcode::Divide
+                | Opcode::Modulo
+                | Opcode::Negate
+                | Opcode::Equal
+                | Opcode::NotEqual
+                | Opcode::Greater
+                | Opcode::GreaterEqual
+                | Opcode::Less
+                | Opcode::LessEqual
+                | Opcode::AddInt
+                | Opcode::AddInt1
+                | Opcode::SubtractInt
+                | Opcode::SubtractInt1
+                | Opcode::SubtractInt2
+                | Opcode::MultiplyInt
+                | Opcode::DivideInt
+                | Opcode::ModuloInt
+                | Opcode::LessInt
+                | Opcode::LessEqualInt
+                | Opcode::LessEqualInt1
+                | Opcode::ForRangeInit(_)
+                | Opcode::ForRangeNext(_, _)
+                | Opcode::ForRangeNextDiscard(_, _)
+                | Opcode::Nop => true,
+                Opcode::CallSelf(_) | Opcode::CallSelf1 => true,
+                Opcode::CallGlobal1(index) => instructions
+                    .globals
+                    .get_name(index as usize)
+                    .is_some_and(|callee| {
+                        callee == name || self.known_pure_int_functions.contains(callee)
+                    }),
+                Opcode::CallGlobal(index, _) => instructions
+                    .globals
+                    .get_name(index as usize)
+                    .is_some_and(|callee| {
+                        callee == name || self.known_pure_int_functions.contains(callee)
+                    }),
+                _ => false,
+            })
     }
 
     fn references_name(node: &Node, name: &str) -> bool {
@@ -360,6 +999,207 @@ impl<'a> BytecodeEmitter<'a> {
         }
     }
 
+    fn string_constant_index(&mut self, node: &Node) -> Option<u32> {
+        match node.kind() {
+            NodeKind::String(value) => {
+                let string_value = self
+                    .instructions
+                    .get_heap_mut()
+                    .push(HeapValue::String(value));
+                Some(self.instructions.push_constant(string_value))
+            }
+            _ => None,
+        }
+    }
+
+    fn local_int_index_pattern(&self, node: &Node) -> Option<(u32, bool)> {
+        match node.kind() {
+            NodeKind::Ident(name) if self.is_known_int_name(name) => self
+                .instructions
+                .resolve_local_index(name)
+                .map(|index| (index as u32, false)),
+            NodeKind::BinOp(left, Opcode::Add, right)
+                if matches!(right.kind(), NodeKind::Int(1)) =>
+            {
+                match left.kind() {
+                    NodeKind::Ident(name) if self.is_known_int_name(name) => self
+                        .instructions
+                        .resolve_local_index(name)
+                        .map(|index| (index as u32, true)),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    fn local_const_index_pattern(&mut self, node: &Node) -> Option<(u32, u32)> {
+        let NodeKind::Index(object, index) = node.kind() else {
+            return None;
+        };
+        let NodeKind::Ident(name) = object.kind() else {
+            return None;
+        };
+        let local_index = self.instructions.resolve_local_index(name)? as u32;
+        let constant = optimize::try_get_constant(index)?;
+        let constant_index = self.instructions.push_constant(constant);
+        Some((local_index, constant_index))
+    }
+
+    fn local_void_condition_pattern(&self, node: &Node) -> Option<u32> {
+        let NodeKind::BinOp(left, Opcode::Equal, right) = node.kind() else {
+            return None;
+        };
+
+        match (left.kind(), right.kind()) {
+            (NodeKind::Ident(name), NodeKind::Void) | (NodeKind::Void, NodeKind::Ident(name)) => {
+                self.instructions
+                    .resolve_local_index(name)
+                    .map(|index| index as u32)
+            }
+            _ => None,
+        }
+    }
+
+    fn adjacent_local_compare_pattern(
+        &self,
+        left: &Node,
+        op: Opcode,
+        right: &Node,
+    ) -> Option<Opcode> {
+        if op != Opcode::Greater {
+            return None;
+        }
+
+        let NodeKind::Index(left_object, left_index) = left.kind() else {
+            return None;
+        };
+        let NodeKind::Index(right_object, right_index) = right.kind() else {
+            return None;
+        };
+        let NodeKind::Ident(left_name) = left_object.kind() else {
+            return None;
+        };
+        let NodeKind::Ident(right_name) = right_object.kind() else {
+            return None;
+        };
+
+        if left_name != right_name {
+            return None;
+        }
+
+        let local_index = self.instructions.resolve_local_index(left_name)? as u32;
+        let Some((left_index_local, false)) = self.local_int_index_pattern(left_index) else {
+            return None;
+        };
+        let Some((right_index_local, true)) = self.local_int_index_pattern(right_index) else {
+            return None;
+        };
+
+        if left_index_local != right_index_local {
+            return None;
+        }
+
+        Some(Opcode::GreaterIndexLocalLocalAdd1(
+            local_index,
+            left_index_local,
+        ))
+    }
+
+    fn statement_expr(node: &Node) -> &Node {
+        match node.kind() {
+            NodeKind::ExpressionStatement(expr) => expr,
+            _ => node,
+        }
+    }
+
+    fn adjacent_local_swap_pattern(&self, node: &Node) -> Option<(u32, u32)> {
+        let nodes = match node.kind() {
+            NodeKind::Program(nodes)
+            | NodeKind::Statements(nodes)
+            | NodeKind::UnscopedStatements(nodes)
+            | NodeKind::Block(nodes) => nodes,
+            _ => return None,
+        };
+
+        let [first, second, third] = nodes.as_slice() else {
+            return None;
+        };
+
+        let first = Self::statement_expr(first);
+        let second = Self::statement_expr(second);
+        let third = Self::statement_expr(third);
+
+        let NodeKind::Assign(temp_name, first_value) = first.kind() else {
+            return None;
+        };
+        let NodeKind::Index(first_object, first_index) = first_value.kind() else {
+            return None;
+        };
+        let NodeKind::Ident(list_name) = first_object.kind() else {
+            return None;
+        };
+        let list_local = self.instructions.resolve_local_index(list_name)? as u32;
+        let (index_local, false) = self.local_int_index_pattern(first_index)? else {
+            return None;
+        };
+
+        let NodeKind::IndexAssign(second_object, second_index, second_value) = second.kind() else {
+            return None;
+        };
+        let NodeKind::Ident(second_list_name) = second_object.kind() else {
+            return None;
+        };
+        if second_list_name != list_name {
+            return None;
+        }
+        let (second_index_local, false) = self.local_int_index_pattern(second_index)? else {
+            return None;
+        };
+        if second_index_local != index_local {
+            return None;
+        }
+        let NodeKind::Index(second_rhs_object, second_rhs_index) = second_value.kind() else {
+            return None;
+        };
+        let NodeKind::Ident(second_rhs_list_name) = second_rhs_object.kind() else {
+            return None;
+        };
+        if second_rhs_list_name != list_name {
+            return None;
+        }
+        let (second_rhs_index_local, true) = self.local_int_index_pattern(second_rhs_index)? else {
+            return None;
+        };
+        if second_rhs_index_local != index_local {
+            return None;
+        }
+
+        let NodeKind::IndexAssign(third_object, third_index, third_value) = third.kind() else {
+            return None;
+        };
+        let NodeKind::Ident(third_list_name) = third_object.kind() else {
+            return None;
+        };
+        if third_list_name != list_name {
+            return None;
+        }
+        let (third_index_local, true) = self.local_int_index_pattern(third_index)? else {
+            return None;
+        };
+        if third_index_local != index_local {
+            return None;
+        }
+        let NodeKind::Ident(third_value_name) = third_value.kind() else {
+            return None;
+        };
+        if third_value_name != temp_name {
+            return None;
+        }
+
+        Some((list_local, index_local))
+    }
+
     pub fn emit(&mut self, node: Node) -> WalrusResult<()> {
         let kind = node.kind().to_string();
         let span = *node.span();
@@ -367,6 +1207,7 @@ impl<'a> BytecodeEmitter<'a> {
         match node.into_kind() {
             NodeKind::Program(nodes) => {
                 // Two-pass compilation for forward declarations:
+                self.prepare_top_level_scope(&nodes);
                 // Pass 1: Pre-register all top-level function and struct names
                 for node in &nodes {
                     self.pre_register_declarations(node);
@@ -472,6 +1313,26 @@ impl<'a> BytecodeEmitter<'a> {
                     .push(Instruction::new(Opcode::List(cap as u32), span));
             }
             NodeKind::Dict(nodes) => {
+                let constant_keys: Option<Vec<Value>> = nodes
+                    .iter()
+                    .map(|(key, _)| optimize::try_get_constant(key))
+                    .collect();
+
+                if let Some(keys) = constant_keys {
+                    for (_, value) in nodes {
+                        self.emit(value)?;
+                    }
+
+                    let key_tuple = self
+                        .instructions
+                        .get_heap_mut()
+                        .push(HeapValue::Tuple(&keys));
+                    let key_index = self.instructions.push_constant(key_tuple);
+                    self.instructions
+                        .push(Instruction::new(Opcode::DictConstKeys(key_index), span));
+                    return Ok(());
+                }
+
                 let cap = nodes.len();
 
                 for (key, value) in nodes {
@@ -559,6 +1420,12 @@ impl<'a> BytecodeEmitter<'a> {
                         );
                     }
                     _ => {
+                        if let Some(opcode) = self.adjacent_local_compare_pattern(&left, op, &right)
+                        {
+                            self.instructions.push(Instruction::new(opcode, span));
+                            return Ok(());
+                        }
+
                         // Normal binary operations
                         let specialized = self.specialized_int_opcode(op, &left, &right);
                         self.emit(*left)?;
@@ -590,6 +1457,47 @@ impl<'a> BytecodeEmitter<'a> {
                 self.instructions.push(Instruction::new(op, span));
             }
             NodeKind::If(cond, then, otherwise) => {
+                let swap_adjacent = self.adjacent_local_swap_pattern(&then);
+
+                if let Some(local_index) = self.local_void_condition_pattern(&cond) {
+                    let jump = self.instructions.len();
+                    self.instructions.push(Instruction::new(
+                        Opcode::JumpIfLocalNotVoid(local_index, 0),
+                        span,
+                    ));
+
+                    if let Some((list_local, index_local)) = swap_adjacent {
+                        self.instructions.push(Instruction::new(
+                            Opcode::SwapAdjacentLocal(list_local, index_local),
+                            span,
+                        ));
+                    } else {
+                        self.emit(*then)?;
+                    }
+
+                    let jump_else = self.instructions.len();
+                    self.instructions
+                        .push(Instruction::new(Opcode::Jump(0), span));
+
+                    self.instructions.set(
+                        jump,
+                        Instruction::new(
+                            Opcode::JumpIfLocalNotVoid(local_index, self.instructions.len() as u32),
+                            span,
+                        ),
+                    );
+
+                    if let Some(otherwise) = otherwise {
+                        self.emit(*otherwise)?;
+                    }
+
+                    self.instructions.set(
+                        jump_else,
+                        Instruction::new(Opcode::Jump(self.instructions.len() as u32), span),
+                    );
+                    return Ok(());
+                }
+
                 self.emit(*cond)?;
 
                 let jump = self.instructions.len();
@@ -597,7 +1505,14 @@ impl<'a> BytecodeEmitter<'a> {
                 self.instructions
                     .push(Instruction::new(Opcode::JumpIfFalse(0), span));
 
-                self.emit(*then)?;
+                if let Some((list_local, index_local)) = swap_adjacent {
+                    self.instructions.push(Instruction::new(
+                        Opcode::SwapAdjacentLocal(list_local, index_local),
+                        span,
+                    ));
+                } else {
+                    self.emit(*then)?;
+                }
 
                 let jump_else = self.instructions.len();
 
@@ -896,6 +1811,16 @@ impl<'a> BytecodeEmitter<'a> {
             NodeKind::Index(object, index) => {
                 if let NodeKind::Ident(name) = object.kind() {
                     if let Some(local_index) = self.instructions.resolve_local_index(name) {
+                        if let Some((index_local, add_one)) = self.local_int_index_pattern(&index) {
+                            let opcode = if add_one {
+                                Opcode::IndexLocalLocalAdd1(local_index as u32, index_local)
+                            } else {
+                                Opcode::IndexLocalLocal(local_index as u32, index_local)
+                            };
+                            self.instructions.push(Instruction::new(opcode, span));
+                            return Ok(());
+                        }
+
                         if let Some(constant) = optimize::try_get_constant(&index) {
                             let constant_index = self.instructions.push_constant(constant);
                             self.instructions.push(Instruction::new(
@@ -1007,7 +1932,7 @@ impl<'a> BytecodeEmitter<'a> {
                 }
             }
             NodeKind::Assign(name, node) => {
-                let is_global = self.depth == 0;
+                let is_global = self.depth == 0 && self.top_level_global_names.contains(&name);
                 let value_is_known_int = self.is_known_int_expr(&node);
 
                 if !is_global {
@@ -1087,6 +2012,16 @@ impl<'a> BytecodeEmitter<'a> {
                 };
 
                 if op == Opcode::Add {
+                    if !is_global {
+                        if let Some(const_index) = self.string_constant_index(&node) {
+                            self.instructions.push(Instruction::new(
+                                Opcode::AppendStringLocalConst(index, const_index),
+                                span,
+                            ));
+                            return Ok(());
+                        }
+                    }
+
                     self.emit(*node)?;
                     self.instructions.push(Instruction::new(
                         Self::add_assign_opcode(index, is_global, new_is_known_int),
@@ -1097,6 +2032,20 @@ impl<'a> BytecodeEmitter<'a> {
                 }
 
                 if op == Opcode::Equal {
+                    if !is_global {
+                        if let NodeKind::BinOp(lhs, Opcode::Add, rhs) = node.kind() {
+                            if matches!(lhs.kind(), NodeKind::Ident(var) if var == name.value()) {
+                                if let Some(const_index) = self.string_constant_index(rhs) {
+                                    self.instructions.push(Instruction::new(
+                                        Opcode::AppendStringLocalConst(index, const_index),
+                                        span,
+                                    ));
+                                    return Ok(());
+                                }
+                            }
+                        }
+                    }
+
                     let mut add_terms = Vec::new();
                     if Self::collect_accumulator_add_terms(&node, name.value(), &mut add_terms)
                         && current_is_known_int
@@ -1162,6 +2111,7 @@ impl<'a> BytecodeEmitter<'a> {
             NodeKind::Statements(nodes) => {
                 // Two-pass compilation for forward declarations at global scope:
                 if self.depth == 0 {
+                    self.prepare_top_level_scope(&nodes);
                     // Pass 1: Pre-register all top-level function and struct names
                     for node in &nodes {
                         self.pre_register_declarations(node);
@@ -1309,10 +2259,17 @@ impl<'a> BytecodeEmitter<'a> {
                             emitter.current_struct = Some(name.clone());
                             emitter.current_struct_methods = Some(method_names.clone());
                             let arg_len = args.len();
+                            emitter.current_function_name = Some(method_name.clone());
+                            emitter.current_function_arity = Some(arg_len);
+                            let int_params = Self::int_parameter_names(&args, &body);
 
                             // Define method parameters as locals
                             for arg in args {
-                                emitter.define_parameter(arg);
+                                let is_int = int_params.contains(&arg);
+                                emitter.define_parameter(arg.clone());
+                                if is_int {
+                                    emitter.mark_known_int(&arg, false, true);
+                                }
                             }
 
                             emitter.emit(*body)?;
@@ -1398,6 +2355,17 @@ impl<'a> BytecodeEmitter<'a> {
             NodeKind::IndexAssign(object, index, value) => {
                 if let NodeKind::Ident(name) = object.kind() {
                     if let Some(local_index) = self.instructions.resolve_local_index(name) {
+                        if let Some((index_local, add_one)) = self.local_int_index_pattern(&index) {
+                            self.emit(*value)?;
+                            let opcode = if add_one {
+                                Opcode::StoreIndexLocalLocalAdd1(local_index as u32, index_local)
+                            } else {
+                                Opcode::StoreIndexLocalLocal(local_index as u32, index_local)
+                            };
+                            self.instructions.push(Instruction::new(opcode, span));
+                            return Ok(());
+                        }
+
                         self.emit(*index)?;
                         self.emit(*value)?;
                         self.instructions.push(Instruction::new(
@@ -1520,10 +2488,16 @@ impl<'a> BytecodeEmitter<'a> {
     /// This is called in Pass 1 before the main compilation Pass 2.
     fn pre_register_declarations(&mut self, node: &Node) {
         match node.kind() {
-            NodeKind::FunctionDefinition(name, _, _) => {
+            NodeKind::FunctionDefinition(name, args, body) => {
                 // Only pre-register at global scope
                 if self.depth == 0 {
                     self.instructions.push_global(name.clone());
+                    if self.function_guarantees_int_return(name, args, body) {
+                        self.known_int_functions.insert(name.clone());
+                        if self.function_is_pure_int_ast(name, args, body) {
+                            self.known_pure_int_functions.insert(name.clone());
+                        }
+                    }
                 }
             }
             NodeKind::AsyncFunctionDefinition(name, _, _) => {
@@ -1606,9 +2580,16 @@ impl<'a> BytecodeEmitter<'a> {
 
         let mut emitter = self.new_child();
         let arg_len = args.len();
+        emitter.current_function_name = Some(name.clone());
+        emitter.current_function_arity = Some(arg_len);
+        let int_params = Self::int_parameter_names(&args, &body);
 
         for arg in args {
-            emitter.define_parameter(arg);
+            let is_int = int_params.contains(&arg);
+            emitter.define_parameter(arg.clone());
+            if is_int {
+                emitter.mark_known_int(&arg, false, true);
+            }
         }
 
         emitter.emit(body)?;
@@ -1616,6 +2597,12 @@ impl<'a> BytecodeEmitter<'a> {
         emitter.emit_return(span);
 
         let func_instructions = emitter.instruction_set();
+        if is_global
+            && self.known_int_functions.contains(&name)
+            && self.instruction_set_is_pure_int(&name, &func_instructions)
+        {
+            self.known_pure_int_functions.insert(name.clone());
+        }
         self.instructions
             .register_function(name.clone(), 0, arg_len);
 
@@ -1746,8 +2733,55 @@ impl<'a> BytecodeEmitter<'a> {
         if !is_tail_call {
             if let NodeKind::Ident(name) = func.kind() {
                 if self.instructions.resolve_local_index(name).is_none() {
+                    if self.current_function_name.as_deref() == Some(name)
+                        && self.current_function_arity == Some(args.len())
+                    {
+                        let arg_len = args.len();
+
+                        if arg_len == 1 {
+                            if let Some((local_index, const_index)) =
+                                self.local_const_index_pattern(&args[0])
+                            {
+                                self.instructions.push(Instruction::new(
+                                    Opcode::CallSelfIndexLocalConst1(local_index, const_index),
+                                    span,
+                                ));
+                                return Ok(());
+                            }
+                        }
+
+                        for arg in args {
+                            self.emit(arg)?;
+                        }
+
+                        let opcode = if arg_len == 1 {
+                            if self.known_pure_int_functions.contains(name) {
+                                Opcode::CallMemoizedSelf1
+                            } else {
+                                Opcode::CallSelf1
+                            }
+                        } else {
+                            Opcode::CallSelf(arg_len as u32)
+                        };
+                        self.instructions.push(Instruction::new(opcode, span));
+                        return Ok(());
+                    }
+
                     if let Some(index) = self.instructions.resolve_global_index(name) {
                         let arg_len = args.len();
+
+                        if arg_len == 1
+                            && !self.loop_stack.is_empty()
+                            && self.known_pure_int_functions.contains(name)
+                            && optimize::try_get_constant(&args[0]).is_some()
+                        {
+                            self.emit(args.into_iter().next().expect("arg_len checked above"))?;
+                            self.instructions.push(Instruction::new(
+                                Opcode::CallPureGlobal1(index as u32),
+                                span,
+                            ));
+                            return Ok(());
+                        }
 
                         for arg in args {
                             self.emit(arg)?;

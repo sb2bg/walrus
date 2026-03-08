@@ -10,6 +10,7 @@ pub enum Opcode {
     LoadGlobal(u32),
     List(u32),
     Dict(u32),
+    DictConstKeys(u32),
     Reassign(u32),
     ReassignGlobal(u32),
     AddAssignLocal(u32),
@@ -17,6 +18,9 @@ pub enum Opcode {
     AddAssignLocalInt(u32),
     AddAssignGlobalInt(u32),
     JumpIfFalse(u32),
+    JumpIfLocalNotVoid(u32, u32),
+    ReturnInt0IfLocalVoid(u32),
+    ReturnVoidIfLocalLessEqualZero(u32),
     Jump(u32),
     PopLocal(u32),
     IterNext(u32),
@@ -25,11 +29,23 @@ pub enum Opcode {
     IndexConst(u32),
     IndexLocal(u32),
     IndexLocalConst(u32, u32),
+    IndexLocalLocal(u32, u32),
+    IndexLocalLocalAdd1(u32, u32),
+    GreaterIndexLocalLocalAdd1(u32, u32),
+    SwapAdjacentLocal(u32, u32),
     StoreIndexLocal(u32),
+    StoreIndexLocalLocal(u32, u32),
+    StoreIndexLocalLocalAdd1(u32, u32),
+    AppendStringLocalConst(u32, u32),
     Call(u32),
-    CallGlobal1(u32),          // Statically known global call with one argument
-    CallGlobal(u32, u32),      // (global index, arg count) for statically known global callees
-    TailCall(u32), // Tail call optimization: reuses current frame instead of pushing new one
+    CallSelf(u32),                      // Recursive call to the current VM function
+    CallSelf1,                          // Recursive call with one argument
+    CallSelfIndexLocalConst1(u32, u32), // Recursive call with arg from local[const]
+    CallMemoizedSelf1,                  // Recursive pure int call memoized by argument value
+    CallPureGlobal1(u32),               // Pure global int-returning call with one constant argument
+    CallGlobal1(u32),                   // Statically known global call with one argument
+    CallGlobal(u32, u32), // (global index, arg count) for statically known global callees
+    TailCall(u32),        // Tail call optimization: reuses current frame instead of pushing new one
     PushExceptionHandler(u32), // Catch target IP
     PopExceptionHandler,
 

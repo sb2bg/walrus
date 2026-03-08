@@ -28,6 +28,7 @@ impl<'a> VM<'a> {
             return_override: None,
             module_binding: None,
             awaiting_task: None,
+            memoize_result_key: None,
         };
 
         let (io_wakeup_tx, io_wakeup_rx) = mpsc::channel();
@@ -35,6 +36,7 @@ impl<'a> VM<'a> {
         Self {
             stack: Vec::new(),
             locals: Vec::new(),
+            local_string_builders: Vec::new(),
             call_stack: vec![main_frame],
             exception_handlers: Vec::new(),
             ip: 0,
@@ -42,6 +44,7 @@ impl<'a> VM<'a> {
             globals: vec![Value::Void; global_count],
             global_names,
             global_call_cache: vec![None; global_count],
+            pure_call_cache: FxHashMap::default(),
             async_task_queue: VecDeque::new(),
             suspended_main: None,
             suspended_tasks: FxHashMap::default(),
@@ -127,6 +130,7 @@ impl<'a> VM<'a> {
         ExecutionContext {
             stack: std::mem::take(&mut self.stack),
             locals: std::mem::take(&mut self.locals),
+            local_string_builders: std::mem::take(&mut self.local_string_builders),
             call_stack: std::mem::take(&mut self.call_stack),
             exception_handlers: std::mem::take(&mut self.exception_handlers),
             ip: self.ip,
@@ -136,6 +140,7 @@ impl<'a> VM<'a> {
     pub(super) fn restore_context(&mut self, context: ExecutionContext) {
         self.stack = context.stack;
         self.locals = context.locals;
+        self.local_string_builders = context.local_string_builders;
         self.call_stack = context.call_stack;
         self.exception_handlers = context.exception_handlers;
         self.ip = context.ip;
@@ -356,11 +361,11 @@ impl<'a> VM<'a> {
                     .call_stack
                     .pop()
                     .expect("Call stack should never be empty while unwinding");
-                self.locals.truncate(frame.frame_pointer);
+                self.truncate_locals(frame.frame_pointer);
                 self.stack.truncate(frame.stack_pointer);
             }
 
-            self.locals.truncate(handler.locals_len);
+            self.truncate_locals(handler.locals_len);
             self.stack.truncate(handler.stack_len);
             self.ip = handler.catch_ip;
             self.push(value);

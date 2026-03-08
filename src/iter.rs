@@ -1,9 +1,7 @@
 use std::fmt::Debug;
 use std::ops::Range;
 
-use rustc_hash::FxHashMap;
-
-use crate::arenas::{DictKey, HeapValue, ListKey, StringKey, TupleKey, ValueHolder};
+use crate::arenas::{DictKey, DictValue, HeapValue, ListKey, StringKey, TupleKey, ValueHolder};
 use crate::range::RangeValue;
 use crate::value::Value;
 
@@ -78,10 +76,10 @@ pub struct DictIter {
 }
 
 impl DictIter {
-    pub fn new(dict_key: DictKey, dict: &FxHashMap<Value, Value>) -> Self {
+    pub fn new(dict_key: DictKey, dict: &DictValue) -> Self {
         Self {
             dict: dict_key,
-            keys: dict.keys().copied().collect(),
+            keys: dict.iter().map(|(key, _)| *key).collect(),
             index: 0,
         }
     }

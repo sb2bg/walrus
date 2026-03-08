@@ -18,6 +18,250 @@ use crate::iter::{CollectionIter, DictIter, RangeIter, StrIter};
 use crate::structs::{StructDefinition, StructInstance};
 use crate::value::{AsyncTask, Value, ValueIter};
 
+const SMALL_DICT_CAPACITY: usize = 4;
+
+#[derive(Debug, Clone)]
+pub enum DictValue {
+    Small {
+        len: u8,
+        entries: [(Value, Value); SMALL_DICT_CAPACITY],
+    },
+    Large(FxHashMap<Value, Value>),
+}
+
+impl Default for DictValue {
+    fn default() -> Self {
+        Self::Small {
+            len: 0,
+            entries: [(Value::Void, Value::Void); SMALL_DICT_CAPACITY],
+        }
+    }
+}
+
+impl PartialEq for DictValue {
+    fn eq(&self, other: &Self) -> bool {
+        if self.len() != other.len() {
+            return false;
+        }
+
+        self.iter().all(|(key, value)| {
+            other
+                .get(key)
+                .is_some_and(|other_value| other_value == value)
+        })
+    }
+}
+
+impl Eq for DictValue {}
+
+pub struct DictValueIter<'a> {
+    inner: DictValueIterInner<'a>,
+}
+
+enum DictValueIterInner<'a> {
+    Small {
+        entries: &'a [(Value, Value); SMALL_DICT_CAPACITY],
+        len: usize,
+        index: usize,
+    },
+    Large(std::collections::hash_map::Iter<'a, Value, Value>),
+}
+
+impl<'a> Iterator for DictValueIter<'a> {
+    type Item = (&'a Value, &'a Value);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match &mut self.inner {
+            DictValueIterInner::Small {
+                entries,
+                len,
+                index,
+            } => {
+                if *index >= *len {
+                    return None;
+                }
+
+                let entry = &entries[*index];
+                *index += 1;
+                Some((&entry.0, &entry.1))
+            }
+            DictValueIterInner::Large(iter) => iter.next(),
+        }
+    }
+}
+
+impl<'a> IntoIterator for &'a DictValue {
+    type Item = (&'a Value, &'a Value);
+    type IntoIter = DictValueIter<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+impl From<FxHashMap<Value, Value>> for DictValue {
+    fn from(map: FxHashMap<Value, Value>) -> Self {
+        if map.len() > SMALL_DICT_CAPACITY {
+            return Self::Large(map);
+        }
+
+        let len = map.len();
+        let mut entries = [(Value::Void, Value::Void); SMALL_DICT_CAPACITY];
+        for (idx, (key, value)) in map.into_iter().enumerate() {
+            entries[idx] = (key, value);
+        }
+
+        Self::Small {
+            len: len as u8,
+            entries,
+        }
+    }
+}
+
+impl DictValue {
+    pub const fn small_capacity() -> usize {
+        SMALL_DICT_CAPACITY
+    }
+
+    pub fn with_capacity(cap: usize) -> Self {
+        if cap <= SMALL_DICT_CAPACITY {
+            Self::default()
+        } else {
+            Self::Large(FxHashMap::with_capacity_and_hasher(cap, Default::default()))
+        }
+    }
+
+    pub fn from_inline_entries(len: usize, entries: [(Value, Value); SMALL_DICT_CAPACITY]) -> Self {
+        debug_assert!(len <= SMALL_DICT_CAPACITY);
+        Self::Small {
+            len: len as u8,
+            entries,
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        match self {
+            Self::Small { len, .. } => *len as usize,
+            Self::Large(map) => map.len(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn get(&self, key: &Value) -> Option<&Value> {
+        match self {
+            Self::Small { len, entries } => {
+                let len = *len as usize;
+                for idx in 0..len {
+                    let (entry_key, entry_value) = unsafe { entries.get_unchecked(idx) };
+                    if entry_key == key {
+                        return Some(entry_value);
+                    }
+                }
+                None
+            }
+            Self::Large(map) => map.get(key),
+        }
+    }
+
+    #[inline(always)]
+    pub fn get_string_key(&self, key: StringKey) -> Option<Value> {
+        match self {
+            Self::Small { len, entries } => {
+                let len = *len as usize;
+                for idx in 0..len {
+                    let (entry_key, entry_value) = unsafe { entries.get_unchecked(idx) };
+                    if let Value::String(entry_key) = *entry_key {
+                        if entry_key == key {
+                            return Some(*entry_value);
+                        }
+                    }
+                }
+                None
+            }
+            Self::Large(map) => map.get(&Value::String(key)).copied(),
+        }
+    }
+
+    pub fn contains_key(&self, key: &Value) -> bool {
+        self.get(key).is_some()
+    }
+
+    pub fn iter(&self) -> DictValueIter<'_> {
+        match self {
+            Self::Small { len, entries } => DictValueIter {
+                inner: DictValueIterInner::Small {
+                    entries,
+                    len: *len as usize,
+                    index: 0,
+                },
+            },
+            Self::Large(map) => DictValueIter {
+                inner: DictValueIterInner::Large(map.iter()),
+            },
+        }
+    }
+
+    pub fn clear(&mut self) {
+        match self {
+            Self::Small { len, .. } => *len = 0,
+            Self::Large(map) => map.clear(),
+        }
+    }
+
+    pub fn insert(&mut self, key: Value, value: Value) -> Option<Value> {
+        match self {
+            Self::Small { len, entries } => {
+                let len_usize = *len as usize;
+                for idx in 0..len_usize {
+                    let (entry_key, entry_value) = unsafe { entries.get_unchecked_mut(idx) };
+                    if *entry_key == key {
+                        let previous = *entry_value;
+                        *entry_value = value;
+                        return Some(previous);
+                    }
+                }
+
+                if len_usize < SMALL_DICT_CAPACITY {
+                    entries[len_usize] = (key, value);
+                    *len += 1;
+                    return None;
+                }
+
+                let mut map =
+                    FxHashMap::with_capacity_and_hasher(len_usize + 1, Default::default());
+                for &(entry_key, entry_value) in entries[..len_usize].iter() {
+                    map.insert(entry_key, entry_value);
+                }
+                let previous = map.insert(key, value);
+                *self = Self::Large(map);
+                previous
+            }
+            Self::Large(map) => map.insert(key, value),
+        }
+    }
+
+    pub fn remove(&mut self, key: &Value) -> Option<Value> {
+        match self {
+            Self::Small { len, entries } => {
+                let len_usize = *len as usize;
+                let remove_idx = entries[..len_usize]
+                    .iter()
+                    .position(|(entry_key, _)| entry_key == key)?;
+                let removed = entries[remove_idx].1;
+                let last_idx = len_usize - 1;
+                entries[remove_idx] = entries[last_idx];
+                entries[last_idx] = (Value::Void, Value::Void);
+                *len -= 1;
+                Some(removed)
+            }
+            Self::Large(map) => map.remove(key),
+        }
+    }
+}
+
 // Thread-local arena for heap-allocated values.
 // Using thread_local! with RefCell provides safe interior mutability without
 // the undefined behavior of static mut.
@@ -68,7 +312,7 @@ pub unsafe fn get_arena_ptr() -> *mut ValueHolder {
 // todo: maybe use a different arena library, DenseSlotMap is mid-performance
 #[derive(Default, Debug, Clone)]
 pub struct ValueHolder {
-    dicts: DenseSlotMap<DictKey, FxHashMap<Value, Value>>,
+    dicts: DenseSlotMap<DictKey, DictValue>,
     lists: DenseSlotMap<ListKey, Vec<Value>>,
     tuples: DenseSlotMap<TupleKey, Vec<Value>>,
     strings: DenseSlotMap<StringKey, Rc<str>>,
@@ -187,6 +431,7 @@ impl ValueHolder {
                 };
                 estimate_task_size(arg_count)
             }
+            HeapValue::PackedDict(dict) => estimate_dict_size(dict.len()),
             HeapValue::StructDef(_) => 128, // Rough estimate
             HeapValue::StructInst(inst) => estimate_struct_instance_size(inst.fields().len()),
         };
@@ -195,8 +440,9 @@ impl ValueHolder {
         match value {
             HeapValue::List(list) => Value::List(self.lists.insert(list)),
             HeapValue::Tuple(tuple) => Value::Tuple(self.tuples.insert(tuple.to_vec())),
-            HeapValue::Dict(dict) => Value::Dict(self.dicts.insert(dict)),
-            HeapValue::Module(dict) => Value::Module(self.dicts.insert(dict)),
+            HeapValue::Dict(dict) => Value::Dict(self.dicts.insert(dict.into())),
+            HeapValue::PackedDict(dict) => Value::Dict(self.dicts.insert(dict)),
+            HeapValue::Module(dict) => Value::Module(self.dicts.insert(dict.into())),
             HeapValue::Function(func) => Value::Function(self.functions.insert(func)),
             HeapValue::String(string) => self.push_string(string),
             HeapValue::Iter(iter) => Value::Iter(self.iterators.insert(iter)),
@@ -562,19 +808,19 @@ impl ValueHolder {
         Value::String(self.intern_owned_string(string))
     }
 
-    pub fn get_mut_dict(&mut self, key: DictKey) -> WalrusResult<&mut FxHashMap<Value, Value>> {
+    pub fn get_mut_dict(&mut self, key: DictKey) -> WalrusResult<&mut DictValue> {
         Self::check(self.dicts.get_mut(key))
     }
 
-    pub fn get_dict(&self, key: DictKey) -> WalrusResult<&FxHashMap<Value, Value>> {
+    pub fn get_dict(&self, key: DictKey) -> WalrusResult<&DictValue> {
         Self::check(self.dicts.get(key))
     }
 
-    pub fn get_mut_module(&mut self, key: DictKey) -> WalrusResult<&mut FxHashMap<Value, Value>> {
+    pub fn get_mut_module(&mut self, key: DictKey) -> WalrusResult<&mut DictValue> {
         Self::check(self.dicts.get_mut(key))
     }
 
-    pub fn get_module(&self, key: DictKey) -> WalrusResult<&FxHashMap<Value, Value>> {
+    pub fn get_module(&self, key: DictKey) -> WalrusResult<&DictValue> {
         Self::check(self.dicts.get(key))
     }
 
@@ -839,6 +1085,7 @@ pub enum HeapValue<'a> {
     List(Vec<Value>),
     Tuple(&'a [Value]),
     Dict(FxHashMap<Value, Value>),
+    PackedDict(DictValue),
     Module(FxHashMap<Value, Value>),
     Function(WalrusFunction),
     String(&'a str),
@@ -887,7 +1134,7 @@ impl Resolve for ListKey {
 }
 
 impl Resolve for DictKey {
-    type Output = FxHashMap<Value, Value>;
+    type Output = DictValue;
 
     fn resolve(self) -> WalrusResult<Self::Output> {
         with_arena(|arena| arena.get_dict(self).cloned())

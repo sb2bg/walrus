@@ -2,7 +2,7 @@ use float_ord::FloatOrd;
 use rustc_hash::FxHashMap;
 
 use crate::WalrusResult;
-use crate::arenas::HeapValue;
+use crate::arenas::{DictValue, HeapValue};
 use crate::error::WalrusError;
 use crate::span::Span;
 use crate::value::Value;
@@ -65,14 +65,25 @@ pub(crate) fn task_key_from_value(
     }
 }
 
-pub(crate) fn insert_key_value(
-    vm: &mut VM<'_>,
-    dict: &mut FxHashMap<Value, Value>,
-    key: &str,
-    value: Value,
-) {
+pub(crate) trait DictSink {
+    fn insert_value(&mut self, key: Value, value: Value);
+}
+
+impl DictSink for DictValue {
+    fn insert_value(&mut self, key: Value, value: Value) {
+        self.insert(key, value);
+    }
+}
+
+impl DictSink for FxHashMap<Value, Value> {
+    fn insert_value(&mut self, key: Value, value: Value) {
+        self.insert(key, value);
+    }
+}
+
+pub(crate) fn insert_key_value(vm: &mut VM<'_>, dict: &mut impl DictSink, key: &str, value: Value) {
     let key_value = vm.get_heap_mut().push(HeapValue::String(key));
-    dict.insert(key_value, value);
+    dict.insert_value(key_value, value);
 }
 
 pub(crate) fn heap_string(vm: &mut VM<'_>, text: &str) -> Value {

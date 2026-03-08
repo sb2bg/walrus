@@ -887,6 +887,7 @@ impl<'a> VM<'a> {
                     ExecutionContext {
                         stack: Vec::new(),
                         locals: args,
+                        local_string_builders: Vec::new(),
                         call_stack: vec![CallFrame {
                             return_ip: 0,
                             frame_pointer: 0,
@@ -896,6 +897,7 @@ impl<'a> VM<'a> {
                             return_override: None,
                             module_binding: func.module_binding.clone(),
                             awaiting_task: Some(task_key),
+                            memoize_result_key: None,
                         }],
                         exception_handlers: Vec::new(),
                         ip: 0,
@@ -995,6 +997,7 @@ impl<'a> VM<'a> {
                     return_override: None,
                     module_binding: func.module_binding.clone(),
                     awaiting_task: None,
+                    memoize_result_key: None,
                 };
 
                 self.call_stack.push(new_frame);

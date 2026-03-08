@@ -691,11 +691,11 @@ impl ReplState {
             let module = arena.get_module(self.module_key)?;
             let mut names = Vec::with_capacity(module.len());
 
-            for key in module.keys() {
-                let Value::String(name_key) = key else {
+            for (key, _) in module.iter() {
+                let Value::String(name_key) = *key else {
                     continue;
                 };
-                names.push(arena.get_string(*name_key)?.to_string());
+                names.push(arena.get_string(name_key)?.to_string());
             }
 
             Ok(names)
