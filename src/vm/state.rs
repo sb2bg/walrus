@@ -4,6 +4,7 @@ use log::debug;
 impl<'a> VM<'a> {
     pub fn new(source_ref: SourceRef<'a>, is: InstructionSet) -> Self {
         let global_names = is.globals.get_all_names();
+        let global_count = global_names.len();
         let mut hotspot_detector = HotSpotDetector::new();
 
         for loop_meta in &is.loops {
@@ -38,8 +39,9 @@ impl<'a> VM<'a> {
             exception_handlers: Vec::new(),
             ip: 0,
             gc_poll_counter: 0,
-            globals: vec![Value::Void; global_names.len()],
+            globals: vec![Value::Void; global_count],
             global_names,
+            global_call_cache: vec![None; global_count],
             async_task_queue: VecDeque::new(),
             suspended_main: None,
             suspended_tasks: FxHashMap::default(),

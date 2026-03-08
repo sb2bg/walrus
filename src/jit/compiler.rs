@@ -407,7 +407,10 @@ impl JitCompiler {
 
             match opcode {
                 // Skip loop control opcodes
-                Opcode::ForRangeNext(_, _) | Opcode::ForRangeInit(_) | Opcode::Jump(_) => {}
+                Opcode::ForRangeNext(_, _)
+                | Opcode::ForRangeNextDiscard(_, _)
+                | Opcode::ForRangeInit(_)
+                | Opcode::Jump(_) => {}
                 // Pop after ForRangeNext means empty loop body (loop var is discarded)
                 Opcode::Pop => {
                     // If this is the only instruction after ForRangeNext, it's an empty body
@@ -455,10 +458,61 @@ impl JitCompiler {
                         analysis.accumulator_local = Some(3);
                     }
                 }
-                Opcode::Add | Opcode::AddInt => {
+                Opcode::LoadLocal4 => {
+                    analysis.loads_local = true;
+                    if analysis.accumulator_local.is_none() {
+                        analysis.accumulator_local = Some(4);
+                    }
+                }
+                Opcode::LoadLocal5 => {
+                    analysis.loads_local = true;
+                    if analysis.accumulator_local.is_none() {
+                        analysis.accumulator_local = Some(5);
+                    }
+                }
+                Opcode::LoadLocal6 => {
+                    analysis.loads_local = true;
+                    if analysis.accumulator_local.is_none() {
+                        analysis.accumulator_local = Some(6);
+                    }
+                }
+                Opcode::LoadLocal7 => {
+                    analysis.loads_local = true;
+                    if analysis.accumulator_local.is_none() {
+                        analysis.accumulator_local = Some(7);
+                    }
+                }
+                Opcode::LoadLocal8 => {
+                    analysis.loads_local = true;
+                    if analysis.accumulator_local.is_none() {
+                        analysis.accumulator_local = Some(8);
+                    }
+                }
+                Opcode::LoadLocal9 => {
+                    analysis.loads_local = true;
+                    if analysis.accumulator_local.is_none() {
+                        analysis.accumulator_local = Some(9);
+                    }
+                }
+                Opcode::LoadLocal10 => {
+                    analysis.loads_local = true;
+                    if analysis.accumulator_local.is_none() {
+                        analysis.accumulator_local = Some(10);
+                    }
+                }
+                Opcode::LoadLocal11 => {
+                    analysis.loads_local = true;
+                    if analysis.accumulator_local.is_none() {
+                        analysis.accumulator_local = Some(11);
+                    }
+                }
+                Opcode::Add | Opcode::AddInt | Opcode::AddInt1 => {
                     analysis.has_add = true;
                 }
-                Opcode::Subtract | Opcode::SubtractInt => {
+                Opcode::Subtract
+                | Opcode::SubtractInt
+                | Opcode::SubtractInt1
+                | Opcode::SubtractInt2 => {
                     analysis.has_sub = true;
                 }
                 Opcode::Multiply => {
@@ -498,7 +552,7 @@ impl JitCompiler {
                 // Note: String constants are loaded via LoadConst, but we allow those
                 // for now since they might be used in non-print contexts
                 // Function calls make the loop not JIT-able (for now)
-                Opcode::Call(_) | Opcode::CallGlobal(_, _) => {
+                Opcode::Call(_) | Opcode::CallGlobal1(_) | Opcode::CallGlobal(_, _) => {
                     return Err(JitError::NotJitCompatible(
                         "Loop contains function calls".into(),
                     ));

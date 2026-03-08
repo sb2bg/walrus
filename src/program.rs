@@ -563,8 +563,80 @@ fn inject_core_prelude(ast: Node) -> PreludeInjection {
         })
     }
 
+    fn references_core(node: &Node) -> bool {
+        match node.kind() {
+            NodeKind::Program(nodes)
+            | NodeKind::Statements(nodes)
+            | NodeKind::UnscopedStatements(nodes)
+            | NodeKind::List(nodes)
+            | NodeKind::Block(nodes)
+            | NodeKind::StructDefinition(_, nodes) => nodes.iter().any(references_core),
+            NodeKind::FString(parts) => parts.iter().any(|part| match part {
+                crate::ast::FStringPart::Literal(_) => false,
+                crate::ast::FStringPart::Expr(expr) => references_core(expr),
+            }),
+            NodeKind::Dict(entries) => entries
+                .iter()
+                .any(|(key, value)| references_core(key) || references_core(value)),
+            NodeKind::BinOp(left, _, right)
+            | NodeKind::Index(left, right)
+            | NodeKind::Range(Some(left), right)
+            | NodeKind::Try(left, _, right) => references_core(left) || references_core(right),
+            NodeKind::UnaryOp(_, expr)
+            | NodeKind::Assign(_, expr)
+            | NodeKind::ExpressionStatement(expr)
+            | NodeKind::Return(expr)
+            | NodeKind::Print(expr)
+            | NodeKind::Println(expr)
+            | NodeKind::Throw(expr)
+            | NodeKind::Free(expr)
+            | NodeKind::Defer(expr)
+            | NodeKind::Await(expr)
+            | NodeKind::MemberAccess(expr, _) => references_core(expr),
+            NodeKind::Reassign(name, expr, _) => name.value() == "core" || references_core(expr),
+            NodeKind::IndexAssign(target, index, value) => {
+                references_core(target) || references_core(index) || references_core(value)
+            }
+            NodeKind::FunctionCall(func, args) => {
+                references_core(func) || args.iter().any(references_core)
+            }
+            NodeKind::AnonFunctionDefinition(_, body)
+            | NodeKind::AsyncAnonFunctionDefinition(_, body)
+            | NodeKind::FunctionDefinition(_, _, body)
+            | NodeKind::AsyncFunctionDefinition(_, _, body)
+            | NodeKind::StructFunctionDefinition(_, _, body) => references_core(body),
+            NodeKind::While(condition, body) => references_core(condition) || references_core(body),
+            NodeKind::If(condition, then_branch, else_branch) => {
+                references_core(condition)
+                    || references_core(then_branch)
+                    || else_branch.as_deref().is_some_and(references_core)
+            }
+            NodeKind::Ternary(condition, when_true, when_false) => {
+                references_core(condition)
+                    || references_core(when_true)
+                    || references_core(when_false)
+            }
+            NodeKind::For(_, iter, body) => references_core(iter) || references_core(body),
+            NodeKind::Range(None, end) => references_core(end),
+            NodeKind::Ident(name) => name == "core",
+            NodeKind::PackageImport(_, Some(name)) | NodeKind::ModuleImport(_, Some(name)) => {
+                name == "core"
+            }
+            NodeKind::Int(_)
+            | NodeKind::Float(_)
+            | NodeKind::String(_)
+            | NodeKind::Bool(_)
+            | NodeKind::PackageImport(_, None)
+            | NodeKind::ModuleImport(_, None)
+            | NodeKind::ExternFunctionDefinition(_, _)
+            | NodeKind::Break
+            | NodeKind::Continue
+            | NodeKind::Void => false,
+        }
+    }
+
     fn with_prelude(mut nodes: Vec<Node>, span: Span) -> PreludeInjection {
-        if has_core_import(&nodes) {
+        if has_core_import(&nodes) || !nodes.iter().any(references_core) {
             return PreludeInjection {
                 ast: Node::new(NodeKind::Program(nodes), span),
                 inserted_core: false,

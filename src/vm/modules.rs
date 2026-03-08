@@ -1,6 +1,30 @@
 use super::*;
 
 impl<'a> VM<'a> {
+    fn cache_global_callable(&mut self, index: usize, value: Value) -> WalrusResult<()> {
+        if index >= self.global_call_cache.len() {
+            self.global_call_cache.resize(index + 1, None);
+        }
+
+        let cached = match value {
+            Value::Function(func_key) => match self.get_heap().get_function(func_key)? {
+                WalrusFunction::Vm(func) => Some(CachedGlobalCall::Vm {
+                    arity: func.arity,
+                    is_async: func.is_async,
+                    code: Rc::clone(&func.code),
+                    module_binding: func.module_binding.clone(),
+                }),
+                WalrusFunction::Native(native_fn) => Some(CachedGlobalCall::Native {
+                    function: *native_fn,
+                }),
+            },
+            _ => None,
+        };
+
+        self.global_call_cache[index] = cached;
+        Ok(())
+    }
+
     pub fn new_with_module_binding(
         source_ref: SourceRef<'a>,
         is: InstructionSet,
@@ -121,6 +145,25 @@ impl<'a> VM<'a> {
         }
     }
 
+    #[inline(always)]
+    pub(super) fn store_global_value_fast(
+        &mut self,
+        index: usize,
+        value: Value,
+        span: Span,
+    ) -> WalrusResult<()> {
+        if self.current_frame().module_binding.is_none() {
+            if index >= self.globals.len() {
+                self.globals.resize(index + 1, Value::Void);
+            }
+            self.globals[index] = value;
+            self.cache_global_callable(index, value)?;
+            Ok(())
+        } else {
+            self.store_global_value(index, value, span)
+        }
+    }
+
     pub(super) fn store_global_value(
         &mut self,
         index: usize,
@@ -143,6 +186,7 @@ impl<'a> VM<'a> {
                 self.globals.resize(index + 1, Value::Void);
             }
             self.globals[index] = value;
+            self.cache_global_callable(index, value)?;
             Ok(())
         }
     }

@@ -58,6 +58,91 @@ struct LoopContext {
 }
 
 impl<'a> BytecodeEmitter<'a> {
+    #[inline]
+    fn local_load_opcode(index: u32) -> Opcode {
+        match index {
+            0 => Opcode::LoadLocal0,
+            1 => Opcode::LoadLocal1,
+            2 => Opcode::LoadLocal2,
+            3 => Opcode::LoadLocal3,
+            4 => Opcode::LoadLocal4,
+            5 => Opcode::LoadLocal5,
+            6 => Opcode::LoadLocal6,
+            7 => Opcode::LoadLocal7,
+            8 => Opcode::LoadLocal8,
+            9 => Opcode::LoadLocal9,
+            10 => Opcode::LoadLocal10,
+            11 => Opcode::LoadLocal11,
+            _ => Opcode::Load(index),
+        }
+    }
+
+    #[inline]
+    fn local_store_opcode(index: u32) -> Opcode {
+        match index {
+            0 => Opcode::StoreLocal0,
+            1 => Opcode::StoreLocal1,
+            2 => Opcode::StoreLocal2,
+            3 => Opcode::StoreLocal3,
+            4 => Opcode::StoreLocal4,
+            5 => Opcode::StoreLocal5,
+            6 => Opcode::StoreLocal6,
+            7 => Opcode::StoreLocal7,
+            8 => Opcode::StoreLocal8,
+            9 => Opcode::StoreLocal9,
+            10 => Opcode::StoreLocal10,
+            11 => Opcode::StoreLocal11,
+            _ => Opcode::StoreAt(index),
+        }
+    }
+
+    #[inline]
+    fn local_reassign_opcode(index: u32) -> Opcode {
+        match index {
+            0 => Opcode::ReassignLocal0,
+            1 => Opcode::ReassignLocal1,
+            2 => Opcode::ReassignLocal2,
+            3 => Opcode::ReassignLocal3,
+            4 => Opcode::ReassignLocal4,
+            5 => Opcode::ReassignLocal5,
+            6 => Opcode::ReassignLocal6,
+            7 => Opcode::ReassignLocal7,
+            8 => Opcode::ReassignLocal8,
+            9 => Opcode::ReassignLocal9,
+            10 => Opcode::ReassignLocal10,
+            11 => Opcode::ReassignLocal11,
+            _ => Opcode::Reassign(index),
+        }
+    }
+
+    #[inline]
+    fn global_load_opcode(index: u32) -> Opcode {
+        match index {
+            0 => Opcode::LoadGlobal0,
+            1 => Opcode::LoadGlobal1,
+            2 => Opcode::LoadGlobal2,
+            3 => Opcode::LoadGlobal3,
+            _ => Opcode::LoadGlobal(index),
+        }
+    }
+
+    #[inline]
+    fn add_assign_opcode(index: u32, is_global: bool, int_specialized: bool) -> Opcode {
+        if is_global {
+            if int_specialized {
+                Opcode::AddAssignGlobalInt(index)
+            } else {
+                Opcode::AddAssignGlobal(index)
+            }
+        } else {
+            if int_specialized {
+                Opcode::AddAssignLocalInt(index)
+            } else {
+                Opcode::AddAssignLocal(index)
+            }
+        }
+    }
+
     pub fn new(source_ref: SourceRef<'a>) -> Self {
         Self {
             instructions: InstructionSet::new(),
@@ -124,6 +209,16 @@ impl<'a> BytecodeEmitter<'a> {
     }
 
     fn specialized_int_opcode(&self, op: Opcode, left: &Node, right: &Node) -> Option<Opcode> {
+        if self.is_known_int_expr(left) {
+            match (op, right.kind()) {
+                (Opcode::Add, NodeKind::Int(1)) => return Some(Opcode::AddInt1),
+                (Opcode::Subtract, NodeKind::Int(1)) => return Some(Opcode::SubtractInt1),
+                (Opcode::Subtract, NodeKind::Int(2)) => return Some(Opcode::SubtractInt2),
+                (Opcode::LessEqual, NodeKind::Int(1)) => return Some(Opcode::LessEqualInt1),
+                _ => {}
+            }
+        }
+
         if !self.is_known_int_expr(left) || !self.is_known_int_expr(right) {
             return None;
         }
@@ -160,6 +255,108 @@ impl<'a> BytecodeEmitter<'a> {
             scope.insert(name.to_string());
         } else {
             scope.remove(name);
+        }
+    }
+
+    fn references_name(node: &Node, name: &str) -> bool {
+        match node.kind() {
+            NodeKind::Program(nodes)
+            | NodeKind::Statements(nodes)
+            | NodeKind::UnscopedStatements(nodes)
+            | NodeKind::List(nodes)
+            | NodeKind::Block(nodes)
+            | NodeKind::StructDefinition(_, nodes) => {
+                nodes.iter().any(|node| Self::references_name(node, name))
+            }
+            NodeKind::FString(parts) => parts.iter().any(|part| match part {
+                FStringPart::Literal(_) => false,
+                FStringPart::Expr(expr) => Self::references_name(expr, name),
+            }),
+            NodeKind::Dict(entries) => entries.iter().any(|(key, value)| {
+                Self::references_name(key, name) || Self::references_name(value, name)
+            }),
+            NodeKind::BinOp(left, _, right)
+            | NodeKind::Index(left, right)
+            | NodeKind::Range(Some(left), right)
+            | NodeKind::Try(left, _, right) => {
+                Self::references_name(left, name) || Self::references_name(right, name)
+            }
+            NodeKind::UnaryOp(_, expr)
+            | NodeKind::Assign(_, expr)
+            | NodeKind::ExpressionStatement(expr)
+            | NodeKind::Return(expr)
+            | NodeKind::Print(expr)
+            | NodeKind::Println(expr)
+            | NodeKind::Throw(expr)
+            | NodeKind::Free(expr)
+            | NodeKind::Defer(expr)
+            | NodeKind::Await(expr)
+            | NodeKind::MemberAccess(expr, _) => Self::references_name(expr, name),
+            NodeKind::Reassign(ident, expr, _) => {
+                ident.value() == name || Self::references_name(expr, name)
+            }
+            NodeKind::IndexAssign(target, index, value) => {
+                Self::references_name(target, name)
+                    || Self::references_name(index, name)
+                    || Self::references_name(value, name)
+            }
+            NodeKind::FunctionCall(func, args) => {
+                Self::references_name(func, name)
+                    || args.iter().any(|arg| Self::references_name(arg, name))
+            }
+            NodeKind::AnonFunctionDefinition(_, body)
+            | NodeKind::AsyncAnonFunctionDefinition(_, body)
+            | NodeKind::FunctionDefinition(_, _, body)
+            | NodeKind::AsyncFunctionDefinition(_, _, body)
+            | NodeKind::StructFunctionDefinition(_, _, body) => Self::references_name(body, name),
+            NodeKind::While(condition, body) => {
+                Self::references_name(condition, name) || Self::references_name(body, name)
+            }
+            NodeKind::If(condition, then_branch, else_branch) => {
+                Self::references_name(condition, name)
+                    || Self::references_name(then_branch, name)
+                    || else_branch
+                        .as_deref()
+                        .is_some_and(|branch| Self::references_name(branch, name))
+            }
+            NodeKind::Ternary(condition, when_true, when_false) => {
+                Self::references_name(condition, name)
+                    || Self::references_name(when_true, name)
+                    || Self::references_name(when_false, name)
+            }
+            NodeKind::For(_, iter, body) => {
+                Self::references_name(iter, name) || Self::references_name(body, name)
+            }
+            NodeKind::Range(None, end) => Self::references_name(end, name),
+            NodeKind::Ident(ident) => ident == name,
+            NodeKind::PackageImport(_, Some(alias)) | NodeKind::ModuleImport(_, Some(alias)) => {
+                alias == name
+            }
+            NodeKind::Int(_)
+            | NodeKind::Float(_)
+            | NodeKind::String(_)
+            | NodeKind::Bool(_)
+            | NodeKind::PackageImport(_, None)
+            | NodeKind::ModuleImport(_, None)
+            | NodeKind::ExternFunctionDefinition(_, _)
+            | NodeKind::Break
+            | NodeKind::Continue
+            | NodeKind::Void => false,
+        }
+    }
+
+    fn collect_accumulator_add_terms(node: &Node, name: &str, terms: &mut Vec<Node>) -> bool {
+        match node.kind() {
+            NodeKind::Ident(ident) => ident == name,
+            NodeKind::BinOp(left, Opcode::Add, right) => {
+                if Self::collect_accumulator_add_terms(left, name, terms) {
+                    terms.push((**right).clone());
+                    true
+                } else {
+                    false
+                }
+            }
+            _ => false,
         }
     }
 
@@ -365,7 +562,17 @@ impl<'a> BytecodeEmitter<'a> {
                         // Normal binary operations
                         let specialized = self.specialized_int_opcode(op, &left, &right);
                         self.emit(*left)?;
-                        self.emit(*right)?;
+                        if !matches!(
+                            specialized,
+                            Some(
+                                Opcode::AddInt1
+                                    | Opcode::SubtractInt1
+                                    | Opcode::SubtractInt2
+                                    | Opcode::LessEqualInt1
+                            )
+                        ) {
+                            self.emit(*right)?;
+                        }
                         self.instructions
                             .push(Instruction::new(specialized.unwrap_or(op), span));
                     }
@@ -485,19 +692,28 @@ impl<'a> BytecodeEmitter<'a> {
                     self.instructions
                         .push(Instruction::new(Opcode::ForRangeInit(range_idx), span));
 
-                    // The loop variable slot (also outside depth scope for simplicity)
-                    let var_idx = self.instructions.push_local(name.clone());
-                    self.mark_known_int(&name, false, true);
+                    let uses_loop_var = Self::references_name(&body, &name);
+                    let var_idx = if uses_loop_var {
+                        let var_idx = self.instructions.push_local(name.clone());
+                        self.mark_known_int(&name, false, true);
+                        Some(var_idx)
+                    } else {
+                        None
+                    };
 
                     let jump = self.instructions.len();
 
-                    // Placeholder for ForRangeNext - will be patched
-                    self.instructions
-                        .push(Instruction::new(Opcode::ForRangeNext(0, range_idx), span));
+                    let loop_opcode = if uses_loop_var {
+                        Opcode::ForRangeNext(0, range_idx)
+                    } else {
+                        Opcode::ForRangeNextDiscard(0, range_idx)
+                    };
+                    self.instructions.push(Instruction::new(loop_opcode, span));
 
-                    // Store the value into the loop variable
-                    self.instructions
-                        .push(Instruction::new(Opcode::StoreAt(var_idx), span));
+                    if let Some(var_idx) = var_idx {
+                        self.instructions
+                            .push(Instruction::new(Self::local_store_opcode(var_idx), span));
+                    }
 
                     // Now increase depth for the loop body
                     self.inc_depth();
@@ -521,11 +737,18 @@ impl<'a> BytecodeEmitter<'a> {
                     self.instructions
                         .push(Instruction::new(Opcode::Jump(jump as u32), span));
 
-                    // Patch the ForRangeNext to jump past the loop AND pop 3 locals (range_start, range_end, var)
+                    // Patch the ForRangeNext to jump past the loop cleanup locals.
                     let end_pos = self.instructions.len();
                     self.instructions.set(
                         jump,
-                        Instruction::new(Opcode::ForRangeNext(end_pos as u32, range_idx), span),
+                        Instruction::new(
+                            if uses_loop_var {
+                                Opcode::ForRangeNext(end_pos as u32, range_idx)
+                            } else {
+                                Opcode::ForRangeNextDiscard(end_pos as u32, range_idx)
+                            },
+                            span,
+                        ),
                     );
 
                     // JIT: Register the range-based for loop for hot-spot detection
@@ -533,9 +756,9 @@ impl<'a> BytecodeEmitter<'a> {
                     self.instructions
                         .register_loop(jump, back_edge, end_pos, true);
 
-                    // Pop the 3 range locals at the end
+                    let range_local_count: u32 = if uses_loop_var { 3 } else { 2 };
                     self.instructions
-                        .push(Instruction::new(Opcode::PopLocal(3), span));
+                        .push(Instruction::new(Opcode::PopLocal(range_local_count), span));
 
                     // Patch break jumps (they need to jump past the PopLocal too)
                     if let Some(loop_ctx) = loop_ctx {
@@ -546,8 +769,7 @@ impl<'a> BytecodeEmitter<'a> {
                         }
                     }
 
-                    // Remove the 3 locals from symbol table
-                    self.instructions.pop_locals(3);
+                    self.instructions.pop_locals(range_local_count as usize);
                 } else {
                     // Generic iterator protocol path:
                     //   1. Get iterator via GetIter
@@ -605,7 +827,7 @@ impl<'a> BytecodeEmitter<'a> {
                     let index = self.instructions.push_local(name);
 
                     self.instructions
-                        .push(Instruction::new(Opcode::StoreAt(index), span));
+                        .push(Instruction::new(Self::local_store_opcode(index), span));
 
                     // Push loop context AFTER defining loop variable
                     // locals_at_start is the count including the loop variable,
@@ -671,8 +893,27 @@ impl<'a> BytecodeEmitter<'a> {
             NodeKind::FunctionCall(func, args) => {
                 self.emit_function_call(func, args, span, false)?;
             }
-            NodeKind::Index(node, index) => {
-                self.emit(*node)?;
+            NodeKind::Index(object, index) => {
+                if let NodeKind::Ident(name) = object.kind() {
+                    if let Some(local_index) = self.instructions.resolve_local_index(name) {
+                        if let Some(constant) = optimize::try_get_constant(&index) {
+                            let constant_index = self.instructions.push_constant(constant);
+                            self.instructions.push(Instruction::new(
+                                Opcode::IndexLocalConst(local_index as u32, constant_index),
+                                span,
+                            ));
+                        } else {
+                            self.emit(*index)?;
+                            self.instructions.push(Instruction::new(
+                                Opcode::IndexLocal(local_index as u32),
+                                span,
+                            ));
+                        }
+                        return Ok(());
+                    }
+                }
+
+                self.emit(*object)?;
                 if let Some(constant) = optimize::try_get_constant(&index) {
                     let constant_index = self.instructions.push_constant(constant);
                     self.instructions
@@ -703,22 +944,10 @@ impl<'a> BytecodeEmitter<'a> {
             NodeKind::Ident(name) => {
                 // Check locals first, then globals
                 if let Some(index) = self.instructions.resolve_local_index(&name) {
-                    let opcode = match index {
-                        0 => Opcode::LoadLocal0,
-                        1 => Opcode::LoadLocal1,
-                        2 => Opcode::LoadLocal2,
-                        3 => Opcode::LoadLocal3,
-                        _ => Opcode::Load(index as u32),
-                    };
+                    let opcode = Self::local_load_opcode(index as u32);
                     self.instructions.push(Instruction::new(opcode, span));
                 } else if let Some(index) = self.instructions.resolve_global_index(&name) {
-                    let opcode = match index {
-                        0 => Opcode::LoadGlobal0,
-                        1 => Opcode::LoadGlobal1,
-                        2 => Opcode::LoadGlobal2,
-                        3 => Opcode::LoadGlobal3,
-                        _ => Opcode::LoadGlobal(index as u32),
-                    };
+                    let opcode = Self::global_load_opcode(index as u32);
                     self.instructions.push(Instruction::new(opcode, span));
                 } else if let Some(ref struct_name) = self.current_struct {
                     // In struct methods, bare identifiers may reference methods on the current
@@ -741,13 +970,7 @@ impl<'a> BytecodeEmitter<'a> {
                     // Load the struct definition
                     if let Some(struct_index) = self.instructions.resolve_global_index(struct_name)
                     {
-                        let opcode = match struct_index {
-                            0 => Opcode::LoadGlobal0,
-                            1 => Opcode::LoadGlobal1,
-                            2 => Opcode::LoadGlobal2,
-                            3 => Opcode::LoadGlobal3,
-                            _ => Opcode::LoadGlobal(struct_index as u32),
-                        };
+                        let opcode = Self::global_load_opcode(struct_index as u32);
                         self.instructions.push(Instruction::new(opcode, span));
 
                         // Push the method name as a string
@@ -863,20 +1086,44 @@ impl<'a> BytecodeEmitter<'a> {
                     _ => false,
                 };
 
+                if op == Opcode::Add {
+                    self.emit(*node)?;
+                    self.instructions.push(Instruction::new(
+                        Self::add_assign_opcode(index, is_global, new_is_known_int),
+                        span,
+                    ));
+                    self.mark_known_int(name.value(), is_global, new_is_known_int);
+                    return Ok(());
+                }
+
+                if op == Opcode::Equal {
+                    let mut add_terms = Vec::new();
+                    if Self::collect_accumulator_add_terms(&node, name.value(), &mut add_terms)
+                        && current_is_known_int
+                        && add_terms.iter().all(|term| self.is_known_int_expr(term))
+                    {
+                        for term in add_terms {
+                            self.emit(term)?;
+                            self.instructions.push(Instruction::new(
+                                Self::add_assign_opcode(index, is_global, true),
+                                span,
+                            ));
+                        }
+                        self.mark_known_int(name.value(), is_global, true);
+                        return Ok(());
+                    }
+                }
+
                 // For compound assignments (+=, -=, etc.), we need to load the current value first
                 match op {
-                    Opcode::Add
-                    | Opcode::Subtract
-                    | Opcode::Multiply
-                    | Opcode::Divide
-                    | Opcode::Modulo => {
+                    Opcode::Subtract | Opcode::Multiply | Opcode::Divide | Opcode::Modulo => {
                         // Load current value
                         if is_global {
                             self.instructions
-                                .push(Instruction::new(Opcode::LoadGlobal(index), span));
+                                .push(Instruction::new(Self::global_load_opcode(index), span));
                         } else {
                             self.instructions
-                                .push(Instruction::new(Opcode::Load(index), span));
+                                .push(Instruction::new(Self::local_load_opcode(index), span));
                         }
                         // Emit the right-hand side
                         self.emit(*node)?;
@@ -908,7 +1155,7 @@ impl<'a> BytecodeEmitter<'a> {
                     self.mark_known_int(name.value(), true, new_is_known_int);
                 } else {
                     self.instructions
-                        .push(Instruction::new(Opcode::Reassign(index), span));
+                        .push(Instruction::new(Self::local_reassign_opcode(index), span));
                     self.mark_known_int(name.value(), false, new_is_known_int);
                 }
             }
@@ -1149,6 +1396,18 @@ impl<'a> BytecodeEmitter<'a> {
                     .push(Instruction::new(Opcode::GetMethod, span));
             }
             NodeKind::IndexAssign(object, index, value) => {
+                if let NodeKind::Ident(name) = object.kind() {
+                    if let Some(local_index) = self.instructions.resolve_local_index(name) {
+                        self.emit(*index)?;
+                        self.emit(*value)?;
+                        self.instructions.push(Instruction::new(
+                            Opcode::StoreIndexLocal(local_index as u32),
+                            span,
+                        ));
+                        return Ok(());
+                    }
+                }
+
                 // Emit the object to index into
                 self.emit(*object)?;
                 // Emit the index
@@ -1304,10 +1563,10 @@ impl<'a> BytecodeEmitter<'a> {
     }
 
     fn define_variable(&mut self, name: String, span: Span) {
-        self.instructions.push_local(name);
+        let index = self.instructions.push_local(name);
 
         self.instructions
-            .push(Instruction::new(Opcode::Store, span));
+            .push(Instruction::new(Self::local_store_opcode(index), span));
     }
 
     fn define_global_variable(&mut self, name: String, span: Span) {
@@ -1383,7 +1642,7 @@ impl<'a> BytecodeEmitter<'a> {
                 .push(Instruction::new(Opcode::StoreGlobal(func_index), span));
         } else {
             self.instructions
-                .push(Instruction::new(Opcode::StoreAt(func_index), span));
+                .push(Instruction::new(Self::local_store_opcode(func_index), span));
         }
 
         Ok(())
@@ -1443,6 +1702,14 @@ impl<'a> BytecodeEmitter<'a> {
         if let NodeKind::MemberAccess(object, method_name) = func.kind() {
             let arg_len = args.len();
 
+            if method_name == "push" && arg_len == 1 && !is_tail_call {
+                self.emit(*object.clone())?;
+                self.emit(args.into_iter().next().expect("push has exactly one arg"))?;
+                self.instructions
+                    .push(Instruction::new(Opcode::ListPush, span));
+                return Ok(());
+            }
+
             // Emit the object first
             self.emit(*object.clone())?;
 
@@ -1486,10 +1753,12 @@ impl<'a> BytecodeEmitter<'a> {
                             self.emit(arg)?;
                         }
 
-                        self.instructions.push(Instruction::new(
-                            Opcode::CallGlobal(index as u32, arg_len as u32),
-                            span,
-                        ));
+                        let opcode = if arg_len == 1 {
+                            Opcode::CallGlobal1(index as u32)
+                        } else {
+                            Opcode::CallGlobal(index as u32, arg_len as u32)
+                        };
+                        self.instructions.push(Instruction::new(opcode, span));
                         return Ok(());
                     }
                 }

@@ -14,7 +14,7 @@ use instruction_set::InstructionSet;
 use crate::WalrusResult;
 use crate::arenas::{DictKey, FuncKey, HeapValue};
 use crate::error::WalrusError;
-use crate::function::{VmModuleBinding, WalrusFunction};
+use crate::function::{NativeFunction, VmModuleBinding, WalrusFunction};
 use crate::iter::ValueIterator;
 use crate::jit::{HotSpotDetector, TypeProfile, WalrusType};
 use crate::range::RangeValue;
@@ -149,6 +149,19 @@ struct UserChannel {
     closed: Rc<RefCell<bool>>,
 }
 
+#[derive(Debug, Clone)]
+enum CachedGlobalCall {
+    Vm {
+        arity: usize,
+        is_async: bool,
+        code: Rc<InstructionSet>,
+        module_binding: Option<Rc<VmModuleBinding>>,
+    },
+    Native {
+        function: NativeFunction,
+    },
+}
+
 /// The VM tracks type information and execution counts at key points:
 /// - Loop headers (for hot loop detection)
 /// - Function calls (for hot function detection)
@@ -164,6 +177,7 @@ pub struct VM<'a> {
     gc_poll_counter: u32, // Throttle GC checks to avoid per-instruction overhead
     globals: Vec<Value>,
     global_names: Vec<String>,
+    global_call_cache: Vec<Option<CachedGlobalCall>>,
     async_task_queue: VecDeque<crate::arenas::TaskKey>,
     suspended_main: Option<SuspendedExecution>,
     suspended_tasks: FxHashMap<crate::arenas::TaskKey, SuspendedExecution>,
@@ -330,6 +344,42 @@ impl<'a> VM<'a> {
                     // SAFETY: compiler emits LoadLocal3 only when local 3 exists.
                     self.push(unsafe { *self.locals.get_unchecked(fp + 3) });
                 }
+                Opcode::LoadLocal4 => {
+                    let fp = self.frame_pointer();
+                    // SAFETY: compiler emits LoadLocal4 only when local 4 exists.
+                    self.push(unsafe { *self.locals.get_unchecked(fp + 4) });
+                }
+                Opcode::LoadLocal5 => {
+                    let fp = self.frame_pointer();
+                    // SAFETY: compiler emits LoadLocal5 only when local 5 exists.
+                    self.push(unsafe { *self.locals.get_unchecked(fp + 5) });
+                }
+                Opcode::LoadLocal6 => {
+                    let fp = self.frame_pointer();
+                    // SAFETY: compiler emits LoadLocal6 only when local 6 exists.
+                    self.push(unsafe { *self.locals.get_unchecked(fp + 6) });
+                }
+                Opcode::LoadLocal7 => {
+                    let fp = self.frame_pointer();
+                    // SAFETY: compiler emits LoadLocal7 only when local 7 exists.
+                    self.push(unsafe { *self.locals.get_unchecked(fp + 7) });
+                }
+                Opcode::LoadLocal8 => {
+                    let fp = self.frame_pointer();
+                    self.push(unsafe { *self.locals.get_unchecked(fp + 8) });
+                }
+                Opcode::LoadLocal9 => {
+                    let fp = self.frame_pointer();
+                    self.push(unsafe { *self.locals.get_unchecked(fp + 9) });
+                }
+                Opcode::LoadLocal10 => {
+                    let fp = self.frame_pointer();
+                    self.push(unsafe { *self.locals.get_unchecked(fp + 10) });
+                }
+                Opcode::LoadLocal11 => {
+                    let fp = self.frame_pointer();
+                    self.push(unsafe { *self.locals.get_unchecked(fp + 11) });
+                }
                 // Specialized increment/decrement for loop counters (hot path)
                 Opcode::IncrementLocal(index) => {
                     let fp = self.frame_pointer();
@@ -432,6 +482,51 @@ impl<'a> VM<'a> {
                         });
                     }
                 }
+                Opcode::ForRangeNextDiscard(jump_target, local_idx) => {
+                    let loop_header_ip = self.ip - 1;
+                    let exit_ip = jump_target as usize;
+
+                    if profiling_enabled {
+                        self.profile_loop_iteration(loop_header_ip, exit_ip);
+
+                        #[cfg(feature = "jit")]
+                        if let Some(jit_exit) =
+                            self.try_jit_range_loop(loop_header_ip, local_idx, jump_target)
+                        {
+                            self.ip = jit_exit;
+                            continue;
+                        }
+
+                        #[cfg(feature = "jit")]
+                        self.try_compile_hot_range_loop(loop_header_ip, exit_ip);
+                    }
+
+                    let fp = self.frame_pointer();
+                    let idx = fp + local_idx as usize;
+                    let current_value = unsafe { *self.locals.get_unchecked(idx) };
+                    let end_value = unsafe { *self.locals.get_unchecked(idx + 1) };
+                    if let (Value::Int(current), Value::Int(end)) = (current_value, end_value) {
+                        if current < end {
+                            unsafe {
+                                *self.locals.get_unchecked_mut(idx) = Value::Int(current + 1);
+                            }
+                        } else {
+                            self.ip = jump_target as usize;
+                        }
+                    } else {
+                        return Err(WalrusError::TypeMismatch {
+                            expected: "int and int (range bounds)".to_string(),
+                            found: format!(
+                                "{} and {}",
+                                current_value.get_type(),
+                                end_value.get_type()
+                            ),
+                            span,
+                            src: self.source_ref.source().into(),
+                            filename: self.source_ref.filename().into(),
+                        });
+                    }
+                }
                 Opcode::LoadGlobal(index) => {
                     let value = self.load_global_value_fast(index as usize, span)?;
                     self.push(value);
@@ -457,6 +552,149 @@ impl<'a> VM<'a> {
                     let value = self.pop_unchecked();
                     self.locals.push(value);
                 }
+                Opcode::StoreLocal0 => {
+                    let value = self.pop_unchecked();
+                    let fp = self.frame_pointer();
+                    if fp == self.locals.len() {
+                        self.locals.push(value);
+                    } else {
+                        unsafe {
+                            *self.locals.get_unchecked_mut(fp) = value;
+                        }
+                    }
+                }
+                Opcode::StoreLocal1 => {
+                    let value = self.pop_unchecked();
+                    let fp = self.frame_pointer();
+                    let idx = fp + 1;
+                    if idx == self.locals.len() {
+                        self.locals.push(value);
+                    } else {
+                        unsafe {
+                            *self.locals.get_unchecked_mut(idx) = value;
+                        }
+                    }
+                }
+                Opcode::StoreLocal2 => {
+                    let value = self.pop_unchecked();
+                    let fp = self.frame_pointer();
+                    let idx = fp + 2;
+                    if idx == self.locals.len() {
+                        self.locals.push(value);
+                    } else {
+                        unsafe {
+                            *self.locals.get_unchecked_mut(idx) = value;
+                        }
+                    }
+                }
+                Opcode::StoreLocal3 => {
+                    let value = self.pop_unchecked();
+                    let fp = self.frame_pointer();
+                    let idx = fp + 3;
+                    if idx == self.locals.len() {
+                        self.locals.push(value);
+                    } else {
+                        unsafe {
+                            *self.locals.get_unchecked_mut(idx) = value;
+                        }
+                    }
+                }
+                Opcode::StoreLocal4 => {
+                    let value = self.pop_unchecked();
+                    let fp = self.frame_pointer();
+                    let idx = fp + 4;
+                    if idx == self.locals.len() {
+                        self.locals.push(value);
+                    } else {
+                        unsafe {
+                            *self.locals.get_unchecked_mut(idx) = value;
+                        }
+                    }
+                }
+                Opcode::StoreLocal5 => {
+                    let value = self.pop_unchecked();
+                    let fp = self.frame_pointer();
+                    let idx = fp + 5;
+                    if idx == self.locals.len() {
+                        self.locals.push(value);
+                    } else {
+                        unsafe {
+                            *self.locals.get_unchecked_mut(idx) = value;
+                        }
+                    }
+                }
+                Opcode::StoreLocal6 => {
+                    let value = self.pop_unchecked();
+                    let fp = self.frame_pointer();
+                    let idx = fp + 6;
+                    if idx == self.locals.len() {
+                        self.locals.push(value);
+                    } else {
+                        unsafe {
+                            *self.locals.get_unchecked_mut(idx) = value;
+                        }
+                    }
+                }
+                Opcode::StoreLocal7 => {
+                    let value = self.pop_unchecked();
+                    let fp = self.frame_pointer();
+                    let idx = fp + 7;
+                    if idx == self.locals.len() {
+                        self.locals.push(value);
+                    } else {
+                        unsafe {
+                            *self.locals.get_unchecked_mut(idx) = value;
+                        }
+                    }
+                }
+                Opcode::StoreLocal8 => {
+                    let value = self.pop_unchecked();
+                    let fp = self.frame_pointer();
+                    let idx = fp + 8;
+                    if idx == self.locals.len() {
+                        self.locals.push(value);
+                    } else {
+                        unsafe {
+                            *self.locals.get_unchecked_mut(idx) = value;
+                        }
+                    }
+                }
+                Opcode::StoreLocal9 => {
+                    let value = self.pop_unchecked();
+                    let fp = self.frame_pointer();
+                    let idx = fp + 9;
+                    if idx == self.locals.len() {
+                        self.locals.push(value);
+                    } else {
+                        unsafe {
+                            *self.locals.get_unchecked_mut(idx) = value;
+                        }
+                    }
+                }
+                Opcode::StoreLocal10 => {
+                    let value = self.pop_unchecked();
+                    let fp = self.frame_pointer();
+                    let idx = fp + 10;
+                    if idx == self.locals.len() {
+                        self.locals.push(value);
+                    } else {
+                        unsafe {
+                            *self.locals.get_unchecked_mut(idx) = value;
+                        }
+                    }
+                }
+                Opcode::StoreLocal11 => {
+                    let value = self.pop_unchecked();
+                    let fp = self.frame_pointer();
+                    let idx = fp + 11;
+                    if idx == self.locals.len() {
+                        self.locals.push(value);
+                    } else {
+                        unsafe {
+                            *self.locals.get_unchecked_mut(idx) = value;
+                        }
+                    }
+                }
                 Opcode::StoreAt(index) => {
                     // SAFETY: valid bytecode guarantees stack has a value to store.
                     let value = self.pop_unchecked();
@@ -475,7 +713,7 @@ impl<'a> VM<'a> {
                 Opcode::StoreGlobal(index) => {
                     // SAFETY: valid bytecode guarantees stack has a value to store.
                     let value = self.pop_unchecked();
-                    self.store_global_value(index as usize, value, span)?;
+                    self.store_global_value_fast(index as usize, value, span)?;
                 }
                 Opcode::Reassign(index) => {
                     // SAFETY: valid bytecode guarantees stack has a value to assign.
@@ -487,10 +725,140 @@ impl<'a> VM<'a> {
                         *self.locals.get_unchecked_mut(idx) = value;
                     }
                 }
+                Opcode::ReassignLocal0 => {
+                    let value = self.pop_unchecked();
+                    let fp = self.frame_pointer();
+                    unsafe {
+                        *self.locals.get_unchecked_mut(fp) = value;
+                    }
+                }
+                Opcode::ReassignLocal1 => {
+                    let value = self.pop_unchecked();
+                    let fp = self.frame_pointer();
+                    unsafe {
+                        *self.locals.get_unchecked_mut(fp + 1) = value;
+                    }
+                }
+                Opcode::ReassignLocal2 => {
+                    let value = self.pop_unchecked();
+                    let fp = self.frame_pointer();
+                    unsafe {
+                        *self.locals.get_unchecked_mut(fp + 2) = value;
+                    }
+                }
+                Opcode::ReassignLocal3 => {
+                    let value = self.pop_unchecked();
+                    let fp = self.frame_pointer();
+                    unsafe {
+                        *self.locals.get_unchecked_mut(fp + 3) = value;
+                    }
+                }
+                Opcode::ReassignLocal4 => {
+                    let value = self.pop_unchecked();
+                    let fp = self.frame_pointer();
+                    unsafe {
+                        *self.locals.get_unchecked_mut(fp + 4) = value;
+                    }
+                }
+                Opcode::ReassignLocal5 => {
+                    let value = self.pop_unchecked();
+                    let fp = self.frame_pointer();
+                    unsafe {
+                        *self.locals.get_unchecked_mut(fp + 5) = value;
+                    }
+                }
+                Opcode::ReassignLocal6 => {
+                    let value = self.pop_unchecked();
+                    let fp = self.frame_pointer();
+                    unsafe {
+                        *self.locals.get_unchecked_mut(fp + 6) = value;
+                    }
+                }
+                Opcode::ReassignLocal7 => {
+                    let value = self.pop_unchecked();
+                    let fp = self.frame_pointer();
+                    unsafe {
+                        *self.locals.get_unchecked_mut(fp + 7) = value;
+                    }
+                }
+                Opcode::ReassignLocal8 => {
+                    let value = self.pop_unchecked();
+                    let fp = self.frame_pointer();
+                    unsafe {
+                        *self.locals.get_unchecked_mut(fp + 8) = value;
+                    }
+                }
+                Opcode::ReassignLocal9 => {
+                    let value = self.pop_unchecked();
+                    let fp = self.frame_pointer();
+                    unsafe {
+                        *self.locals.get_unchecked_mut(fp + 9) = value;
+                    }
+                }
+                Opcode::ReassignLocal10 => {
+                    let value = self.pop_unchecked();
+                    let fp = self.frame_pointer();
+                    unsafe {
+                        *self.locals.get_unchecked_mut(fp + 10) = value;
+                    }
+                }
+                Opcode::ReassignLocal11 => {
+                    let value = self.pop_unchecked();
+                    let fp = self.frame_pointer();
+                    unsafe {
+                        *self.locals.get_unchecked_mut(fp + 11) = value;
+                    }
+                }
+                Opcode::AddAssignLocal(index) => {
+                    let rhs = self.pop_unchecked();
+                    let fp = self.frame_pointer();
+                    let idx = fp + index as usize;
+                    let current = unsafe { *self.locals.get_unchecked(idx) };
+                    let result = self.add_values(current, rhs, Opcode::Add, span)?;
+                    unsafe {
+                        *self.locals.get_unchecked_mut(idx) = result;
+                    }
+                }
+                Opcode::AddAssignGlobal(index) => {
+                    let rhs = self.pop_unchecked();
+                    let current = self.load_global_value_fast(index as usize, span)?;
+                    let result = self.add_values(current, rhs, Opcode::Add, span)?;
+                    self.store_global_value_fast(index as usize, result, span)?;
+                }
+                Opcode::AddAssignLocalInt(index) => {
+                    let rhs = self.pop_unchecked();
+                    let fp = self.frame_pointer();
+                    let idx = fp + index as usize;
+                    let current = unsafe { *self.locals.get_unchecked(idx) };
+                    match (current, rhs) {
+                        (Value::Int(current), Value::Int(rhs)) => unsafe {
+                            *self.locals.get_unchecked_mut(idx) = Value::Int(current + rhs);
+                        },
+                        (current, rhs) => {
+                            return Err(self.construct_err(opcode, current, Some(rhs), span));
+                        }
+                    }
+                }
+                Opcode::AddAssignGlobalInt(index) => {
+                    let rhs = self.pop_unchecked();
+                    let current = self.load_global_value_fast(index as usize, span)?;
+                    match (current, rhs) {
+                        (Value::Int(current), Value::Int(rhs)) => {
+                            self.store_global_value_fast(
+                                index as usize,
+                                Value::Int(current + rhs),
+                                span,
+                            )?;
+                        }
+                        (current, rhs) => {
+                            return Err(self.construct_err(opcode, current, Some(rhs), span));
+                        }
+                    }
+                }
                 Opcode::ReassignGlobal(index) => {
                     // SAFETY: valid bytecode guarantees stack has a value to assign.
                     let value = self.pop_unchecked();
-                    self.store_global_value(index as usize, value, span)?;
+                    self.store_global_value_fast(index as usize, value, span)?;
                 }
                 Opcode::List(cap) => {
                     let cap = cap as usize;
@@ -741,6 +1109,7 @@ impl<'a> VM<'a> {
                 }
                 Opcode::CallGlobal(global_index, args) => {
                     let arg_count = args as usize;
+                    let global_index = global_index as usize;
 
                     if self.stack.len() < arg_count {
                         return Err(WalrusError::StackUnderflow {
@@ -751,7 +1120,65 @@ impl<'a> VM<'a> {
                         });
                     }
 
-                    let func = self.load_global_value_fast(global_index as usize, span)?;
+                    if !profiling_enabled && self.current_frame().module_binding.is_none() {
+                        enum FastGlobalCall {
+                            Vm(Rc<InstructionSet>, Option<Rc<VmModuleBinding>>),
+                            Native(NativeFunction),
+                            None,
+                        }
+
+                        let fast_call = match self
+                            .global_call_cache
+                            .get(global_index)
+                            .and_then(|entry| entry.as_ref())
+                        {
+                            Some(CachedGlobalCall::Vm {
+                                arity,
+                                is_async: false,
+                                code,
+                                module_binding,
+                                ..
+                            }) if arg_count == *arity => {
+                                FastGlobalCall::Vm(Rc::clone(code), module_binding.clone())
+                            }
+                            Some(CachedGlobalCall::Native { function }) => {
+                                FastGlobalCall::Native(*function)
+                            }
+                            _ => FastGlobalCall::None,
+                        };
+
+                        match fast_call {
+                            FastGlobalCall::Vm(code, module_binding) => {
+                                let new_frame = CallFrame {
+                                    return_ip: self.ip,
+                                    frame_pointer: self.locals.len(),
+                                    stack_pointer: self.stack.len() - arg_count,
+                                    instructions: code,
+                                    function_name: String::new(),
+                                    return_override: None,
+                                    module_binding,
+                                    awaiting_task: None,
+                                };
+
+                                self.call_stack.push(new_frame);
+
+                                let args_start = self.stack.len() - arg_count;
+                                self.copy_stack_tail_to_locals(args_start);
+
+                                self.ip = 0;
+                                continue;
+                            }
+                            FastGlobalCall::Native(function) => {
+                                let args = self.pop_n(arg_count, opcode, span)?;
+                                let result = self.call_native(function, args, span)?;
+                                self.push(result);
+                                continue;
+                            }
+                            FastGlobalCall::None => {}
+                        }
+                    }
+
+                    let func = self.load_global_value_fast(global_index, span)?;
 
                     // JIT PROFILING: Track function calls and argument types
                     if profiling_enabled {
@@ -904,6 +1331,218 @@ impl<'a> VM<'a> {
                         }
                         _ => {
                             self.pop_n(arg_count, opcode, span)?;
+                            return Err(WalrusError::NotCallable {
+                                value: func.get_type().to_string(),
+                                span,
+                                src: self.source_ref.source().into(),
+                                filename: self.source_ref.filename().into(),
+                            });
+                        }
+                    }
+                }
+                Opcode::CallGlobal1(global_index) => {
+                    let global_index = global_index as usize;
+
+                    if self.stack.is_empty() {
+                        return Err(WalrusError::StackUnderflow {
+                            op: opcode,
+                            span,
+                            src: self.source_ref.source().to_string(),
+                            filename: self.source_ref.filename().to_string(),
+                        });
+                    }
+
+                    if !profiling_enabled && self.current_frame().module_binding.is_none() {
+                        enum FastGlobalCall1 {
+                            Vm(Rc<InstructionSet>, Option<Rc<VmModuleBinding>>),
+                            Native(NativeFunction),
+                            None,
+                        }
+
+                        let fast_call = match self
+                            .global_call_cache
+                            .get(global_index)
+                            .and_then(|entry| entry.as_ref())
+                        {
+                            Some(CachedGlobalCall::Vm {
+                                arity: 1,
+                                is_async: false,
+                                code,
+                                module_binding,
+                            }) => FastGlobalCall1::Vm(Rc::clone(code), module_binding.clone()),
+                            Some(CachedGlobalCall::Native { function }) => {
+                                FastGlobalCall1::Native(*function)
+                            }
+                            _ => FastGlobalCall1::None,
+                        };
+
+                        match fast_call {
+                            FastGlobalCall1::Vm(code, module_binding) => {
+                                let arg = self.pop_unchecked();
+                                let new_frame = CallFrame {
+                                    return_ip: self.ip,
+                                    frame_pointer: self.locals.len(),
+                                    stack_pointer: self.stack.len(),
+                                    instructions: code,
+                                    function_name: String::new(),
+                                    return_override: None,
+                                    module_binding,
+                                    awaiting_task: None,
+                                };
+
+                                self.call_stack.push(new_frame);
+                                self.locals.push(arg);
+                                self.ip = 0;
+                                continue;
+                            }
+                            FastGlobalCall1::Native(function) => {
+                                let arg = self.pop_unchecked();
+                                let result = self.call_native(function, vec![arg], span)?;
+                                self.push(result);
+                                continue;
+                            }
+                            FastGlobalCall1::None => {}
+                        }
+                    }
+
+                    let func = self.load_global_value_fast(global_index, span)?;
+
+                    if profiling_enabled {
+                        if let Value::Function(key) = func {
+                            if let Ok(func_ref) = self.get_heap().get_function(key) {
+                                let name = match func_ref {
+                                    WalrusFunction::Vm(f) => f.name.clone(),
+                                    WalrusFunction::Native(f) => f.name().to_string(),
+                                };
+                                if self.hotspot_detector.record_function_call(&name) {
+                                    debug!("Hot function detected: {}", name);
+                                }
+                                let arg_type = WalrusType::from_value(
+                                    self.stack.last().expect("checked stack len above"),
+                                );
+                                self.type_profile.observe(self.ip - 1, arg_type);
+                            }
+                        }
+                    }
+
+                    match func {
+                        Value::Function(key) => {
+                            let func = self.get_heap().get_function(key)?.clone();
+
+                            match func {
+                                WalrusFunction::Vm(func) => {
+                                    if func.arity != 1 {
+                                        return Err(WalrusError::InvalidArgCount {
+                                            name: func.name.clone(),
+                                            expected: func.arity,
+                                            got: 1,
+                                            span,
+                                            src: self.source_ref.source().into(),
+                                            filename: self.source_ref.filename().into(),
+                                        });
+                                    }
+
+                                    if func.is_async {
+                                        let arg = self.pop_unchecked();
+                                        let task =
+                                            self.create_task_for_function_key(key, vec![arg]);
+                                        self.push(task);
+                                        continue;
+                                    }
+
+                                    let arg = self.pop_unchecked();
+                                    let new_frame = CallFrame {
+                                        return_ip: self.ip,
+                                        frame_pointer: self.locals.len(),
+                                        stack_pointer: self.stack.len(),
+                                        instructions: Rc::clone(&func.code),
+                                        function_name: String::new(),
+                                        return_override: None,
+                                        module_binding: func.module_binding.clone(),
+                                        awaiting_task: None,
+                                    };
+
+                                    self.call_stack.push(new_frame);
+                                    self.locals.push(arg);
+                                    self.ip = 0;
+                                }
+                                WalrusFunction::Native(native_fn) => {
+                                    let arg = self.pop_unchecked();
+                                    let result = self.call_native(native_fn, vec![arg], span)?;
+                                    self.push(result);
+                                }
+                            }
+                        }
+                        Value::StructDef(struct_def_key) => {
+                            let (struct_name, init_method) = {
+                                let init_key = self.get_heap_mut().push_ident("init");
+                                let struct_def = self.get_heap().get_struct_def(struct_def_key)?;
+                                (
+                                    struct_def.name().to_string(),
+                                    struct_def.get_method(init_key).cloned(),
+                                )
+                            };
+
+                            match init_method {
+                                Some(WalrusFunction::Vm(init_func)) => {
+                                    let expected_without_self = init_func.arity.saturating_sub(1);
+                                    if expected_without_self != 1 {
+                                        return Err(WalrusError::InvalidArgCount {
+                                            name: format!("{}::init", struct_name),
+                                            expected: expected_without_self,
+                                            got: 1,
+                                            span,
+                                            src: self.source_ref.source().into(),
+                                            filename: self.source_ref.filename().into(),
+                                        });
+                                    }
+
+                                    let instance = crate::structs::StructInstance::new(
+                                        struct_name.clone(),
+                                        struct_def_key,
+                                    );
+                                    let instance_value =
+                                        self.get_heap_mut().push(HeapValue::StructInst(instance));
+                                    let arg = self.pop_unchecked();
+
+                                    let new_frame = CallFrame {
+                                        return_ip: self.ip,
+                                        frame_pointer: self.locals.len(),
+                                        stack_pointer: self.stack.len(),
+                                        instructions: Rc::clone(&init_func.code),
+                                        function_name: format!("{}::init", struct_name),
+                                        return_override: Some(instance_value),
+                                        module_binding: init_func.module_binding.clone(),
+                                        awaiting_task: None,
+                                    };
+
+                                    self.call_stack.push(new_frame);
+                                    self.locals.push(instance_value);
+                                    self.locals.push(arg);
+                                    self.ip = 0;
+                                }
+                                Some(_) => {
+                                    return Err(WalrusError::StructMethodMustBeVmFunction {
+                                        span,
+                                        src: self.source_ref.source().into(),
+                                        filename: self.source_ref.filename().into(),
+                                    });
+                                }
+                                None => {
+                                    self.pop_unchecked();
+                                    return Err(WalrusError::InvalidArgCount {
+                                        name: struct_name,
+                                        expected: 0,
+                                        got: 1,
+                                        span,
+                                        src: self.source_ref.source().into(),
+                                        filename: self.source_ref.filename().into(),
+                                    });
+                                }
+                            }
+                        }
+                        _ => {
+                            self.pop_unchecked();
                             return Err(WalrusError::NotCallable {
                                 value: func.get_type().to_string(),
                                 span,
@@ -1358,6 +1997,20 @@ impl<'a> VM<'a> {
                         });
                     }
                 }
+                Opcode::AddInt1 => {
+                    let a = self.pop_unchecked();
+                    if let Value::Int(a) = a {
+                        self.push(Value::Int(a + 1));
+                    } else {
+                        return Err(WalrusError::TypeMismatch {
+                            expected: "int".to_string(),
+                            found: a.get_type().to_string(),
+                            span,
+                            src: self.source_ref.source().into(),
+                            filename: self.source_ref.filename().into(),
+                        });
+                    }
+                }
                 Opcode::SubtractInt => {
                     let b = self.pop_unchecked();
                     let a = self.pop_unchecked();
@@ -1367,6 +2020,34 @@ impl<'a> VM<'a> {
                         return Err(WalrusError::TypeMismatch {
                             expected: "int and int".to_string(),
                             found: format!("{} and {}", a.get_type(), b.get_type()),
+                            span,
+                            src: self.source_ref.source().into(),
+                            filename: self.source_ref.filename().into(),
+                        });
+                    }
+                }
+                Opcode::SubtractInt1 => {
+                    let a = self.pop_unchecked();
+                    if let Value::Int(a) = a {
+                        self.push(Value::Int(a - 1));
+                    } else {
+                        return Err(WalrusError::TypeMismatch {
+                            expected: "int".to_string(),
+                            found: a.get_type().to_string(),
+                            span,
+                            src: self.source_ref.source().into(),
+                            filename: self.source_ref.filename().into(),
+                        });
+                    }
+                }
+                Opcode::SubtractInt2 => {
+                    let a = self.pop_unchecked();
+                    if let Value::Int(a) = a {
+                        self.push(Value::Int(a - 2));
+                    } else {
+                        return Err(WalrusError::TypeMismatch {
+                            expected: "int".to_string(),
+                            found: a.get_type().to_string(),
                             span,
                             src: self.source_ref.source().into(),
                             filename: self.source_ref.filename().into(),
@@ -1462,6 +2143,20 @@ impl<'a> VM<'a> {
                         });
                     }
                 }
+                Opcode::LessEqualInt1 => {
+                    let a = self.pop_unchecked();
+                    if let Value::Int(a) = a {
+                        self.push(Value::Bool(a <= 1));
+                    } else {
+                        return Err(WalrusError::TypeMismatch {
+                            expected: "int".to_string(),
+                            found: a.get_type().to_string(),
+                            span,
+                            src: self.source_ref.source().into(),
+                            filename: self.source_ref.filename().into(),
+                        });
+                    }
+                }
                 Opcode::Add => {
                     let b = self.pop_unchecked();
                     let a = self.pop_unchecked();
@@ -1475,48 +2170,8 @@ impl<'a> VM<'a> {
                         self.type_profile.observe(self.ip - 1, type_b);
                     }
 
-                    match (a, b) {
-                        (Value::Int(a), Value::Int(b)) => {
-                            self.push(Value::Int(a + b));
-                        }
-                        (Value::Float(FloatOrd(a)), Value::Float(FloatOrd(b))) => {
-                            self.push(Value::Float(FloatOrd(a + b)));
-                        }
-                        (Value::Int(a), Value::Float(FloatOrd(b))) => {
-                            self.push(Value::Float(FloatOrd(a as f64 + b)));
-                        }
-                        (Value::Float(FloatOrd(a)), Value::Int(b)) => {
-                            self.push(Value::Float(FloatOrd(a + b as f64)));
-                        }
-                        (Value::String(a), Value::String(b)) => {
-                            let a = self.get_heap().get_string(a)?;
-                            let b = self.get_heap().get_string(b)?;
-
-                            let mut s = String::with_capacity(a.len() + b.len());
-                            s.push_str(a);
-                            s.push_str(b);
-
-                            let value = self.get_heap_mut().push_string_owned(s);
-                            self.push(value);
-                        }
-                        (Value::List(a), Value::List(b)) => {
-                            let mut a = self.get_heap().get_list(a)?.to_vec();
-                            let b = self.get_heap().get_list(b)?;
-                            a.extend(b);
-
-                            let value = self.get_heap_mut().push(HeapValue::List(a));
-                            self.push(value);
-                        }
-                        (Value::Dict(a), Value::Dict(b)) => {
-                            let mut a = self.get_heap().get_dict(a)?.clone();
-                            let b = self.get_heap().get_dict(b)?;
-                            a.extend(b);
-
-                            let value = self.get_heap_mut().push(HeapValue::Dict(a));
-                            self.push(value);
-                        }
-                        _ => return Err(self.construct_err(opcode, a, Some(b), span)),
-                    }
+                    let result = self.add_values(a, b, opcode, span)?;
+                    self.push(result);
                 }
                 Opcode::Subtract => {
                     let b = self.pop_unchecked();
@@ -1857,71 +2512,30 @@ impl<'a> VM<'a> {
                     let key = self.current_frame().instructions.get_constant(index);
                     self.index_value(object, key, opcode, span)?;
                 }
+                Opcode::IndexLocal(local_idx) => {
+                    let index = self.pop_unchecked();
+                    let fp = self.frame_pointer();
+                    let object = unsafe { *self.locals.get_unchecked(fp + local_idx as usize) };
+                    self.index_value(object, index, opcode, span)?;
+                }
+                Opcode::IndexLocalConst(local_idx, const_idx) => {
+                    let fp = self.frame_pointer();
+                    let object = unsafe { *self.locals.get_unchecked(fp + local_idx as usize) };
+                    let key = self.current_frame().instructions.get_constant(const_idx);
+                    self.index_value(object, key, opcode, span)?;
+                }
                 Opcode::StoreIndex => {
-                    // Stack: [object, index, value]
                     let value = self.pop_unchecked();
                     let index = self.pop_unchecked();
                     let object = self.pop_unchecked();
-
-                    // Fast path for hottest assignment case: list[int] = value
-                    if let (Value::List(list_key), Value::Int(idx)) = (object, index) {
-                        let list = self.get_heap_mut().get_mut_list(list_key)?;
-                        if idx >= 0 {
-                            let idx_usize = idx as usize;
-                            if idx_usize < list.len() {
-                                // SAFETY: bounds checked above
-                                unsafe {
-                                    *list.get_unchecked_mut(idx_usize) = value;
-                                }
-                                self.push(Value::Void);
-                                continue;
-                            }
-                        }
-
-                        let mut normalized = idx;
-                        let original = idx;
-                        if normalized < 0 {
-                            normalized += list.len() as i64;
-                        }
-
-                        if normalized < 0 || normalized >= list.len() as i64 {
-                            return Err(WalrusError::IndexOutOfBounds {
-                                index: original,
-                                len: list.len(),
-                                span,
-                                src: self.source_ref.source().to_string(),
-                                filename: self.source_ref.filename().to_string(),
-                            });
-                        }
-
-                        list[normalized as usize] = value;
-                        self.push(Value::Void);
-                        continue;
-                    }
-
-                    match (object, index) {
-                        (Value::List(_), Value::Int(_)) => unreachable!(),
-                        (Value::Dict(dict_key), key) => {
-                            let dict = self.get_heap_mut().get_mut_dict(dict_key)?;
-                            dict.insert(key, value);
-                            self.push(Value::Void);
-                        }
-                        (Value::StructInst(inst_key), Value::String(member_key)) => {
-                            let member_name = self.get_heap().get_string(member_key)?.to_string();
-                            let inst = self.get_heap_mut().get_mut_struct_inst(inst_key)?;
-                            inst.set_field(member_name, value);
-                            self.push(Value::Void);
-                        }
-                        _ => {
-                            return Err(WalrusError::InvalidIndexType {
-                                non_indexable: object.get_type().to_string(),
-                                index_type: index.get_type().to_string(),
-                                span,
-                                src: self.source_ref.source().to_string(),
-                                filename: self.source_ref.filename().to_string(),
-                            });
-                        }
-                    }
+                    self.store_index_value(object, index, value, span)?;
+                }
+                Opcode::StoreIndexLocal(local_idx) => {
+                    let value = self.pop_unchecked();
+                    let index = self.pop_unchecked();
+                    let fp = self.frame_pointer();
+                    let object = unsafe { *self.locals.get_unchecked(fp + local_idx as usize) };
+                    self.store_index_value(object, index, value, span)?;
                 }
                 Opcode::Print => {
                     let a = self.pop(opcode, span)?;
@@ -2065,6 +2679,25 @@ impl<'a> VM<'a> {
                     self.pop(opcode, span)?;
                 }
                 Opcode::Nop => {}
+                Opcode::ListPush => {
+                    let value = self.pop_unchecked();
+                    let object = self.pop_unchecked();
+                    match object {
+                        Value::List(list_key) => {
+                            self.get_heap_mut().get_mut_list(list_key)?.push(value);
+                            self.push(Value::Void);
+                        }
+                        other => {
+                            return Err(WalrusError::InvalidMethodReceiver {
+                                method: "push".to_string(),
+                                type_name: other.get_type().to_string(),
+                                span,
+                                src: self.source_ref.source().into(),
+                                filename: self.source_ref.filename().into(),
+                            });
+                        }
+                    }
+                }
                 Opcode::MakeStruct => {
                     // Pop struct definition from stack and create an instance
                     let struct_def_value = self.pop(opcode, span)?;
@@ -2655,6 +3288,48 @@ impl<'a> VM<'a> {
         // (either from Return opcode, errors, or end of main frame)
     }
 
+    fn add_values(
+        &mut self,
+        a: Value,
+        b: Value,
+        opcode: Opcode,
+        span: Span,
+    ) -> WalrusResult<Value> {
+        match (a, b) {
+            (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a + b)),
+            (Value::Float(FloatOrd(a)), Value::Float(FloatOrd(b))) => {
+                Ok(Value::Float(FloatOrd(a + b)))
+            }
+            (Value::Int(a), Value::Float(FloatOrd(b))) => Ok(Value::Float(FloatOrd(a as f64 + b))),
+            (Value::Float(FloatOrd(a)), Value::Int(b)) => Ok(Value::Float(FloatOrd(a + b as f64))),
+            (Value::String(a), Value::String(b)) => {
+                let a = self.get_heap().get_string(a)?;
+                let b = self.get_heap().get_string(b)?;
+
+                let mut s = String::with_capacity(a.len() + b.len());
+                s.push_str(a);
+                s.push_str(b);
+
+                Ok(self.get_heap_mut().push_string_owned(s))
+            }
+            (Value::List(a), Value::List(b)) => {
+                let mut a = self.get_heap().get_list(a)?.to_vec();
+                let b = self.get_heap().get_list(b)?;
+                a.extend(b);
+
+                Ok(self.get_heap_mut().push(HeapValue::List(a)))
+            }
+            (Value::Dict(a), Value::Dict(b)) => {
+                let mut a = self.get_heap().get_dict(a)?.clone();
+                let b = self.get_heap().get_dict(b)?;
+                a.extend(b);
+
+                Ok(self.get_heap_mut().push(HeapValue::Dict(a)))
+            }
+            _ => Err(self.construct_err(opcode, a, Some(b), span)),
+        }
+    }
+
     fn construct_err(&self, op: Opcode, a: Value, b: Option<Value>, span: Span) -> WalrusError {
         if let Some(b) = b {
             WalrusError::InvalidOperation {
@@ -2887,6 +3562,72 @@ impl<'a> VM<'a> {
         }
 
         Ok(())
+    }
+
+    fn store_index_value(
+        &mut self,
+        object: Value,
+        index: Value,
+        value: Value,
+        span: Span,
+    ) -> WalrusResult<()> {
+        if let (Value::List(list_key), Value::Int(idx)) = (object, index) {
+            let list = self.get_heap_mut().get_mut_list(list_key)?;
+            if idx >= 0 {
+                let idx_usize = idx as usize;
+                if idx_usize < list.len() {
+                    unsafe {
+                        *list.get_unchecked_mut(idx_usize) = value;
+                    }
+                    self.push(Value::Void);
+                    return Ok(());
+                }
+            }
+
+            let mut normalized = idx;
+            let original = idx;
+            if normalized < 0 {
+                normalized += list.len() as i64;
+            }
+
+            if normalized < 0 || normalized >= list.len() as i64 {
+                return Err(WalrusError::IndexOutOfBounds {
+                    index: original,
+                    len: list.len(),
+                    span,
+                    src: self.source_ref.source().to_string(),
+                    filename: self.source_ref.filename().to_string(),
+                });
+            }
+
+            list[normalized as usize] = value;
+            self.push(Value::Void);
+            return Ok(());
+        }
+
+        match (object, index) {
+            (Value::List(_), Value::Int(_)) => unreachable!(),
+            (Value::Dict(dict_key), key) => {
+                let dict = self.get_heap_mut().get_mut_dict(dict_key)?;
+                dict.insert(key, value);
+                self.push(Value::Void);
+                Ok(())
+            }
+            (Value::StructInst(inst_key), Value::String(member_key)) => {
+                let member_name = self.get_heap().get_string(member_key)?.to_string();
+                let inst = self.get_heap_mut().get_mut_struct_inst(inst_key)?;
+                inst.set_field(member_name, value);
+                self.push(Value::Void);
+                Ok(())
+            }
+            _ => Err(WalrusError::InvalidIndexType {
+                non_indexable: object.get_type().to_string(),
+                index_type: index.get_type().to_string(),
+                span,
+                src: self.source_ref.source().to_string(),
+                filename: self.source_ref.filename().to_string(),
+            }),
+        }
     }
 
     /// Profile a loop iteration for hotspot detection.
