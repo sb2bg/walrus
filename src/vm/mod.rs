@@ -1,14 +1,18 @@
+use std::cell::RefCell;
+use std::collections::VecDeque;
 use std::ptr::NonNull;
 use std::rc::Rc;
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
 
 use float_ord::FloatOrd;
 use log::{debug, log_enabled};
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use instruction_set::InstructionSet;
 
 use crate::WalrusResult;
-use crate::arenas::HeapValue;
+use crate::arenas::{DictKey, FuncKey, HeapValue};
 use crate::error::WalrusError;
 use crate::function::{VmModuleBinding, WalrusFunction};
 use crate::iter::ValueIterator;
@@ -16,13 +20,13 @@ use crate::jit::{HotSpotDetector, TypeProfile, WalrusType};
 use crate::range::RangeValue;
 use crate::source_ref::SourceRef;
 use crate::span::Span;
-use crate::value::Value;
+use crate::value::{AsyncTask, IoChannel, IoResult, Value};
 use crate::vm::opcode::Opcode;
 
 pub mod compiler;
 pub mod debugger;
-pub mod handlers;
 pub mod instruction_set;
+mod io_pool;
 pub mod methods;
 pub mod opcode;
 pub mod optimize;
@@ -36,7 +40,7 @@ mod symbol_table;
 /// - Where the operand stack was at call time (for cleanup on return)
 /// - The function's bytecode (via Rc to avoid cloning)
 /// - The function name for debugging/stack traces
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct CallFrame {
     /// Instruction pointer to return to after this frame completes
     return_ip: usize,
@@ -53,6 +57,8 @@ struct CallFrame {
     return_override: Option<Value>,
     /// Optional module binding context for exported module VM functions.
     module_binding: Option<Rc<VmModuleBinding>>,
+    /// The task that this frame is currently resolving via `await`, if any.
+    awaiting_task: Option<crate::arenas::TaskKey>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -69,6 +75,35 @@ struct ExceptionHandler {
     stack_len: usize,
     /// Locals length to restore before entering catch.
     locals_len: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TaskResolution {
+    Pending,
+    Ready(Value),
+    Failed(Value),
+    Cancelled,
+}
+
+#[derive(Debug, Default, Clone)]
+struct ExecutionContext {
+    stack: Vec<Value>,
+    locals: Vec<Value>,
+    call_stack: Vec<CallFrame>,
+    exception_handlers: Vec<ExceptionHandler>,
+    ip: usize,
+}
+
+#[derive(Debug, Clone)]
+struct SuspendedExecution {
+    context: ExecutionContext,
+    waiting_on: crate::arenas::TaskKey,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RunSignal {
+    Returned(Value),
+    Suspended(crate::arenas::TaskKey),
 }
 
 /// The Walrus Virtual Machine executes compiled bytecode.
@@ -103,6 +138,13 @@ struct ExceptionHandler {
 /// only keys that index into the arena.
 ///
 /// ## JIT Compilation (Phase 2)
+/// A user-facing async channel for task-to-task communication.
+/// Single-threaded: uses Rc<RefCell<...>> since the VM is not Send.
+struct UserChannel {
+    buffer: Rc<RefCell<VecDeque<Value>>>,
+    closed: Rc<RefCell<bool>>,
+}
+
 /// The VM tracks type information and execution counts at key points:
 /// - Loop headers (for hot loop detection)
 /// - Function calls (for hot function detection)
@@ -118,7 +160,16 @@ pub struct VM<'a> {
     gc_poll_counter: u32, // Throttle GC checks to avoid per-instruction overhead
     globals: Vec<Value>,
     global_names: Vec<String>,
+    async_task_queue: VecDeque<crate::arenas::TaskKey>,
+    suspended_main: Option<SuspendedExecution>,
+    suspended_tasks: FxHashMap<crate::arenas::TaskKey, SuspendedExecution>,
+    task_waiters: FxHashMap<crate::arenas::TaskKey, Vec<crate::arenas::TaskKey>>,
     source_ref: SourceRef<'a>,
+    // I/O wakeup channel: worker threads send () to wake the event loop
+    io_wakeup_tx: mpsc::Sender<()>,
+    io_wakeup_rx: mpsc::Receiver<()>,
+    // User-facing async channels for task-to-task communication
+    user_channels: Vec<UserChannel>,
     // Debugger state
     debugger: Option<debugger::Debugger>,
     debug_mode: bool,
@@ -162,7 +213,10 @@ impl<'a> VM<'a> {
             function_name: "<main>".to_string(),
             return_override: None,
             module_binding: None,
+            awaiting_task: None,
         };
+
+        let (io_wakeup_tx, io_wakeup_rx) = mpsc::channel();
 
         Self {
             stack: Vec::new(),
@@ -174,7 +228,14 @@ impl<'a> VM<'a> {
             // Pre-size globals to declared symbol count so sparse/forward writes are safe.
             globals: vec![Value::Void; global_names.len()],
             global_names,
+            async_task_queue: VecDeque::new(),
+            suspended_main: None,
+            suspended_tasks: FxHashMap::default(),
+            task_waiters: FxHashMap::default(),
             source_ref,
+            io_wakeup_tx,
+            io_wakeup_rx,
+            user_channels: Vec::new(),
             debugger: None,
             debug_mode: false,
             // Profiling is opt-in (enabled by Program when requested)
@@ -187,6 +248,20 @@ impl<'a> VM<'a> {
             #[cfg(feature = "jit")]
             jit_enabled: false,
         }
+    }
+
+    pub fn new_with_module_binding(
+        source_ref: SourceRef<'a>,
+        is: InstructionSet,
+        module_key: DictKey,
+    ) -> WalrusResult<Self> {
+        let mut vm = Self::new(source_ref, is);
+        let binding = vm.build_module_binding(module_key)?;
+        vm.call_stack
+            .last_mut()
+            .expect("main frame should exist")
+            .module_binding = Some(binding);
+        Ok(vm)
     }
 
     /// Enable the debugger
@@ -254,6 +329,24 @@ impl<'a> VM<'a> {
         if name.is_empty() { "<fn>" } else { name }
     }
 
+    fn take_context(&mut self) -> ExecutionContext {
+        ExecutionContext {
+            stack: std::mem::take(&mut self.stack),
+            locals: std::mem::take(&mut self.locals),
+            call_stack: std::mem::take(&mut self.call_stack),
+            exception_handlers: std::mem::take(&mut self.exception_handlers),
+            ip: self.ip,
+        }
+    }
+
+    fn restore_context(&mut self, context: ExecutionContext) {
+        self.stack = context.stack;
+        self.locals = context.locals;
+        self.call_stack = context.call_stack;
+        self.exception_handlers = context.exception_handlers;
+        self.ip = context.ip;
+    }
+
     /// Helper to access heap - uses thread-local ARENA
     ///
     /// # Safety
@@ -285,6 +378,30 @@ impl<'a> VM<'a> {
         self.call_stack
             .last()
             .and_then(|frame| frame.module_binding.clone())
+    }
+
+    fn build_module_binding(&mut self, module_key: DictKey) -> WalrusResult<Rc<VmModuleBinding>> {
+        let global_names = self.global_names.clone();
+        let mut global_values = Vec::with_capacity(global_names.len());
+
+        for name in &global_names {
+            let key = Value::String(self.get_heap_mut().push_ident(name));
+            let value = self
+                .get_heap()
+                .get_module(module_key)?
+                .get(&key)
+                .copied()
+                .unwrap_or(Value::Void);
+            global_values.push(value);
+        }
+
+        Ok(Rc::new(VmModuleBinding {
+            module_key,
+            global_names: Rc::new(global_names),
+            global_values: Rc::new(global_values),
+            source: Rc::new(self.source_ref.source().to_string()),
+            filename: Rc::new(self.source_ref.filename().to_string()),
+        }))
     }
 
     fn undefined_global_error(
@@ -348,6 +465,7 @@ impl<'a> VM<'a> {
             };
 
             let key = Value::String(self.get_heap_mut().push_ident(name));
+            let value = self.bind_exported_value_to_module(value, &binding)?;
             self.get_heap_mut()
                 .get_mut_module(binding.module_key)?
                 .insert(key, value);
@@ -464,26 +582,63 @@ impl<'a> VM<'a> {
 
     /// Collect all root values that the GC needs to trace from
     pub(crate) fn collect_roots(&self) -> Vec<Value> {
-        let mut roots = Vec::with_capacity(self.stack.len() + self.locals.len() + 64);
-
-        // Stack values are roots
-        roots.extend(self.stack.iter().copied());
-
-        // Local variables are roots
-        roots.extend(self.locals.iter().copied());
-
-        // Global variables are roots
-        roots.extend(self.globals.iter().copied());
-
-        // Constants in all call frames are roots (they might reference heap objects)
-        for frame in &self.call_stack {
-            roots.extend(frame.instructions.constants.iter().copied());
-            if let Some(binding) = &frame.module_binding {
-                roots.push(Value::Module(binding.module_key));
+        fn extend_context_roots(
+            roots: &mut Vec<Value>,
+            stack: &[Value],
+            locals: &[Value],
+            call_stack: &[CallFrame],
+        ) {
+            roots.extend(stack.iter().copied());
+            roots.extend(locals.iter().copied());
+            for frame in call_stack {
+                roots.extend(frame.instructions.constants.iter().copied());
+                if let Some(binding) = &frame.module_binding {
+                    roots.push(Value::Module(binding.module_key));
+                }
+                if let Some(task_key) = frame.awaiting_task {
+                    roots.push(Value::Task(task_key));
+                }
             }
         }
 
-        // Imported modules are cached process-wide and must remain rooted.
+        let mut roots = Vec::with_capacity(
+            self.stack.len()
+                + self.locals.len()
+                + self.globals.len()
+                + self.async_task_queue.len()
+                + self.suspended_tasks.len() * 16
+                + 128,
+        );
+
+        extend_context_roots(&mut roots, &self.stack, &self.locals, &self.call_stack);
+
+        roots.extend(self.globals.iter().copied());
+
+        for &task_key in &self.async_task_queue {
+            roots.push(Value::Task(task_key));
+        }
+
+        if let Some(suspended) = &self.suspended_main {
+            extend_context_roots(
+                &mut roots,
+                &suspended.context.stack,
+                &suspended.context.locals,
+                &suspended.context.call_stack,
+            );
+            roots.push(Value::Task(suspended.waiting_on));
+        }
+
+        for (&task_key, suspended) in &self.suspended_tasks {
+            roots.push(Value::Task(task_key));
+            roots.push(Value::Task(suspended.waiting_on));
+            extend_context_roots(
+                &mut roots,
+                &suspended.context.stack,
+                &suspended.context.locals,
+                &suspended.context.call_stack,
+            );
+        }
+
         roots.extend(crate::program::cached_module_roots());
 
         roots
@@ -572,6 +727,955 @@ impl<'a> VM<'a> {
         crate::native_registry::dispatch_native(self, native_fn, args, span)
     }
 
+    fn create_task_for_function_key(&mut self, function_key: FuncKey, args: Vec<Value>) -> Value {
+        let task = self
+            .get_heap_mut()
+            .push(HeapValue::Task(AsyncTask::Pending {
+                function: function_key,
+                args,
+            }));
+        if let Value::Task(task_key) = task {
+            self.enqueue_task(task_key);
+        }
+        task
+    }
+
+    fn create_task_for_cloned_function(
+        &mut self,
+        function: WalrusFunction,
+        args: Vec<Value>,
+    ) -> Value {
+        let func_value = self.get_heap_mut().push(HeapValue::Function(function));
+        let Value::Function(function_key) = func_value else {
+            unreachable!("HeapValue::Function must allocate a function key")
+        };
+        self.create_task_for_function_key(function_key, args)
+    }
+
+    fn create_non_runnable_task(&mut self, task: AsyncTask) -> Value {
+        self.get_heap_mut().push(HeapValue::Task(task))
+    }
+
+    pub(crate) fn spawn_task_from_callable(
+        &mut self,
+        callable: Value,
+        args: Vec<Value>,
+        span: Span,
+    ) -> WalrusResult<Value> {
+        match callable {
+            Value::Task(task_key) => {
+                if !args.is_empty() {
+                    return Err(WalrusError::InvalidArgCount {
+                        name: "spawn".to_string(),
+                        expected: 0,
+                        got: args.len(),
+                        span,
+                        src: self.source_ref.source().into(),
+                        filename: self.source_ref.filename().into(),
+                    });
+                }
+                Ok(Value::Task(task_key))
+            }
+            Value::Function(function_key) => {
+                let function = self.get_heap().get_function(function_key)?;
+                let expected = match function {
+                    WalrusFunction::Vm(func) => func.arity,
+                    WalrusFunction::Native(func) => func.arity(),
+                };
+                if args.len() != expected {
+                    return Err(WalrusError::InvalidArgCount {
+                        name: function.to_string(),
+                        expected,
+                        got: args.len(),
+                        span,
+                        src: self.source_ref.source().into(),
+                        filename: self.source_ref.filename().into(),
+                    });
+                }
+                Ok(self.create_task_for_function_key(function_key, args))
+            }
+            other => Err(WalrusError::TypeMismatch {
+                expected: "function or task".to_string(),
+                found: other.get_type().to_string(),
+                span,
+                src: self.source_ref.source().into(),
+                filename: self.source_ref.filename().into(),
+            }),
+        }
+    }
+
+    pub(crate) fn create_sleep_task(&mut self, delay_ms: u64) -> Value {
+        let wake_at = Instant::now() + Duration::from_millis(delay_ms);
+        self.create_non_runnable_task(AsyncTask::Sleep { wake_at })
+    }
+
+    pub(crate) fn create_timeout_task(
+        &mut self,
+        task_key: crate::arenas::TaskKey,
+        timeout_ms: u64,
+    ) -> Value {
+        let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+        self.create_non_runnable_task(AsyncTask::Timeout {
+            task: task_key,
+            deadline,
+        })
+    }
+
+    /// Spawn a background I/O operation on the bounded blocking I/O pool.
+    /// Returns a Task value backed by a Channel that resolves when the worker completes.
+    pub(crate) fn spawn_io<F>(&mut self, work: F) -> Value
+    where
+        F: FnOnce() -> Result<IoResult, String> + Send + 'static,
+    {
+        let rx = io_pool::submit_io(work, self.io_wakeup_tx.clone());
+        self.create_non_runnable_task(AsyncTask::Channel(IoChannel::new(rx)))
+    }
+
+    /// Convert an IoResult from a worker thread into a Value on the VM thread.
+    fn io_result_to_value(&mut self, result: IoResult) -> WalrusResult<Value> {
+        match result {
+            IoResult::Stream(stream) => {
+                let handle = crate::stdlib::store_tcp_stream(stream);
+                Ok(Value::Int(handle))
+            }
+            IoResult::Listener(listener) => {
+                let handle = crate::stdlib::store_tcp_listener(listener);
+                Ok(Value::Int(handle))
+            }
+            IoResult::Bytes(bytes) => {
+                let text = String::from_utf8(bytes).map_err(|e| WalrusError::GenericError {
+                    message: format!("I/O result contains non-UTF8 data: {e}"),
+                })?;
+                Ok(self.get_heap_mut().push(HeapValue::String(&text)))
+            }
+            IoResult::ByteCount(n) => Ok(Value::Int(n as i64)),
+            IoResult::HttpOutcome(outcome) => self.http_outcome_to_value(outcome),
+            IoResult::Void => Ok(Value::Void),
+        }
+    }
+
+    /// Convert an IoHttpOutcome into a Value (dict or Void).
+    fn http_outcome_to_value(
+        &mut self,
+        outcome: crate::value::IoHttpOutcome,
+    ) -> WalrusResult<Value> {
+        use crate::value::IoHttpOutcome;
+
+        match outcome {
+            IoHttpOutcome::Eof => Ok(Value::Void),
+            IoHttpOutcome::BadRequest(message) => {
+                let mut dict = FxHashMap::default();
+                let ok_key = self.get_heap_mut().push(HeapValue::String("ok"));
+                dict.insert(ok_key, Value::Bool(false));
+                let err_key = self.get_heap_mut().push(HeapValue::String("error"));
+                let err_val = self.get_heap_mut().push(HeapValue::String(&message));
+                dict.insert(err_key, err_val);
+                Ok(self.get_heap_mut().push(HeapValue::Dict(dict)))
+            }
+            IoHttpOutcome::Request(req) => {
+                let mut headers = FxHashMap::default();
+                let mut header_pairs = Vec::with_capacity(req.headers.len());
+                for (name, value) in &req.headers {
+                    let key = self.get_heap_mut().push(HeapValue::String(name));
+                    let val = self.get_heap_mut().push(HeapValue::String(value));
+                    headers.insert(key, val);
+                    let pair = self.get_heap_mut().push(HeapValue::List(vec![key, val]));
+                    header_pairs.push(pair);
+                }
+                let headers_value = self.get_heap_mut().push(HeapValue::Dict(headers));
+                let header_pairs_value = self.get_heap_mut().push(HeapValue::List(header_pairs));
+
+                let query_pairs = crate::stdlib::http_parse_query(&req.query);
+                let mut query = FxHashMap::default();
+                let mut query_pairs_values = Vec::with_capacity(query_pairs.len());
+                for (name, value) in query_pairs {
+                    let key = self.get_heap_mut().push(HeapValue::String(&name));
+                    let val = self.get_heap_mut().push(HeapValue::String(&value));
+                    query.insert(key, val);
+                    let pair = self.get_heap_mut().push(HeapValue::List(vec![key, val]));
+                    query_pairs_values.push(pair);
+                }
+                let query_value = self.get_heap_mut().push(HeapValue::Dict(query));
+                let query_pairs_value = self
+                    .get_heap_mut()
+                    .push(HeapValue::List(query_pairs_values));
+
+                let mut dict = FxHashMap::default();
+                let ok_key = self.get_heap_mut().push(HeapValue::String("ok"));
+                dict.insert(ok_key, Value::Bool(true));
+                let method_key = self.get_heap_mut().push(HeapValue::String("method"));
+                let method_val = self.get_heap_mut().push(HeapValue::String(&req.method));
+                dict.insert(method_key, method_val);
+                let target_key = self.get_heap_mut().push(HeapValue::String("target"));
+                let target_val = self.get_heap_mut().push(HeapValue::String(&req.target));
+                dict.insert(target_key, target_val);
+                let path_key = self.get_heap_mut().push(HeapValue::String("path"));
+                let path_val = self.get_heap_mut().push(HeapValue::String(&req.path));
+                dict.insert(path_key, path_val);
+                let query_key = self.get_heap_mut().push(HeapValue::String("query"));
+                let query_text_val = self.get_heap_mut().push(HeapValue::String(&req.query));
+                dict.insert(query_key, query_text_val);
+                let qp_key = self.get_heap_mut().push(HeapValue::String("query_params"));
+                dict.insert(qp_key, query_value);
+                let qpp_key = self.get_heap_mut().push(HeapValue::String("query_pairs"));
+                dict.insert(qpp_key, query_pairs_value);
+                let ver_key = self.get_heap_mut().push(HeapValue::String("version"));
+                let ver_val = self.get_heap_mut().push(HeapValue::String(&req.version));
+                dict.insert(ver_key, ver_val);
+                let hdr_key = self.get_heap_mut().push(HeapValue::String("headers"));
+                dict.insert(hdr_key, headers_value);
+                let hdr_pairs_key = self.get_heap_mut().push(HeapValue::String("header_pairs"));
+                dict.insert(hdr_pairs_key, header_pairs_value);
+                let body_key = self.get_heap_mut().push(HeapValue::String("body"));
+                let body_val = self.get_heap_mut().push(HeapValue::String(&req.body));
+                dict.insert(body_key, body_val);
+                let cl_key = self
+                    .get_heap_mut()
+                    .push(HeapValue::String("content_length"));
+                dict.insert(cl_key, Value::Int(req.content_length));
+
+                Ok(self.get_heap_mut().push(HeapValue::Dict(dict)))
+            }
+        }
+    }
+
+    /// Check if a task tree has any pending I/O (Channel) tasks.
+    fn task_has_pending_io(
+        &self,
+        task_key: crate::arenas::TaskKey,
+        visited: &mut FxHashSet<crate::arenas::TaskKey>,
+    ) -> WalrusResult<bool> {
+        if !visited.insert(task_key) {
+            return Ok(false);
+        }
+        let task = self.get_heap().get_task(task_key)?;
+        match task {
+            AsyncTask::Channel(_) => Ok(true),
+            AsyncTask::UserRecv { .. } => Ok(false),
+            AsyncTask::Timeout { task, .. } => self.task_has_pending_io(*task, visited),
+            AsyncTask::Gather { tasks }
+            | AsyncTask::Race { tasks }
+            | AsyncTask::AllSettled { tasks } => {
+                for &child in tasks {
+                    if self.task_has_pending_io(child, visited)? {
+                        return Ok(true);
+                    }
+                }
+                Ok(false)
+            }
+            _ => Ok(false),
+        }
+    }
+
+    pub(crate) fn create_gather_task(&mut self, tasks: Vec<crate::arenas::TaskKey>) -> Value {
+        self.create_non_runnable_task(AsyncTask::Gather { tasks })
+    }
+
+    pub(crate) fn create_race_task(&mut self, tasks: Vec<crate::arenas::TaskKey>) -> Value {
+        self.create_non_runnable_task(AsyncTask::Race { tasks })
+    }
+
+    pub(crate) fn create_all_settled_task(&mut self, tasks: Vec<crate::arenas::TaskKey>) -> Value {
+        self.create_non_runnable_task(AsyncTask::AllSettled { tasks })
+    }
+
+    pub(crate) fn create_user_channel(&mut self) -> (Value, Value) {
+        let id = self.user_channels.len();
+        self.user_channels.push(UserChannel {
+            buffer: Rc::new(RefCell::new(VecDeque::new())),
+            closed: Rc::new(RefCell::new(false)),
+        });
+        // Sender and receiver are dicts with a magic __channel_id field
+        let type_key = self.get_heap_mut().push(HeapValue::String("__type"));
+        let id_key = self.get_heap_mut().push(HeapValue::String("__channel_id"));
+        let id_val = Value::Int(id as i64);
+
+        let sender_type = self.get_heap_mut().push(HeapValue::String("sender"));
+        let mut sender_dict = FxHashMap::default();
+        sender_dict.insert(type_key, sender_type);
+        sender_dict.insert(id_key, id_val);
+        let sender = self.get_heap_mut().push(HeapValue::Dict(sender_dict));
+
+        let receiver_type = self.get_heap_mut().push(HeapValue::String("receiver"));
+        let mut receiver_dict = FxHashMap::default();
+        receiver_dict.insert(type_key, receiver_type);
+        receiver_dict.insert(id_key, id_val);
+        let receiver = self.get_heap_mut().push(HeapValue::Dict(receiver_dict));
+
+        (sender, receiver)
+    }
+
+    pub(crate) fn channel_send(
+        &mut self,
+        sender_key: crate::arenas::DictKey,
+        value: Value,
+    ) -> WalrusResult<bool> {
+        let dict = self.get_heap().get_dict(sender_key)?.clone();
+        let id_key_str = self.get_heap_mut().push(HeapValue::String("__channel_id"));
+        if let Some(Value::Int(id)) = dict.get(&id_key_str) {
+            let id = *id as usize;
+            if id < self.user_channels.len() {
+                if *self.user_channels[id].closed.borrow() {
+                    return Ok(false);
+                }
+                self.user_channels[id].buffer.borrow_mut().push_back(value);
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    pub(crate) fn channel_recv(
+        &mut self,
+        receiver_key: crate::arenas::DictKey,
+    ) -> WalrusResult<Value> {
+        let dict = self.get_heap().get_dict(receiver_key)?.clone();
+        let id_key_str = self.get_heap_mut().push(HeapValue::String("__channel_id"));
+        if let Some(Value::Int(id)) = dict.get(&id_key_str) {
+            let id = *id as usize;
+            if id < self.user_channels.len() {
+                // Check buffer first — if data is already available, return Ready task
+                let buffered = self.user_channels[id].buffer.borrow_mut().pop_front();
+                if let Some(value) = buffered {
+                    return Ok(self.create_non_runnable_task(AsyncTask::Ready(value)));
+                }
+                // No data yet — create a pending recv task
+                return Ok(self.create_non_runnable_task(AsyncTask::UserRecv { channel_id: id }));
+            }
+        }
+        Err(WalrusError::GenericError {
+            message: "asyncx.recv: invalid receiver".to_string(),
+        })
+    }
+
+    pub(crate) fn channel_close(
+        &mut self,
+        endpoint_key: crate::arenas::DictKey,
+    ) -> WalrusResult<bool> {
+        let dict = self.get_heap().get_dict(endpoint_key)?.clone();
+        let id_key_str = self.get_heap_mut().push(HeapValue::String("__channel_id"));
+        if let Some(Value::Int(id)) = dict.get(&id_key_str) {
+            let id = *id as usize;
+            if id < self.user_channels.len() {
+                *self.user_channels[id].closed.borrow_mut() = true;
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    fn cancelled_task_error_value(&mut self) -> Value {
+        self.get_heap_mut()
+            .push(HeapValue::String("task cancelled"))
+    }
+
+    fn cancel_task_recursive_internal(
+        &mut self,
+        task_key: crate::arenas::TaskKey,
+        visited: &mut FxHashSet<crate::arenas::TaskKey>,
+    ) -> WalrusResult<bool> {
+        if !visited.insert(task_key) {
+            return Ok(false);
+        }
+
+        let task = self.get_heap().get_task(task_key)?.clone();
+        match task {
+            AsyncTask::Pending { .. }
+            | AsyncTask::Sleep { .. }
+            | AsyncTask::Channel(_)
+            | AsyncTask::UserRecv { .. } => {
+                *self.get_heap_mut().get_mut_task(task_key)? = AsyncTask::Cancelled;
+                self.suspended_tasks.remove(&task_key);
+                Ok(true)
+            }
+            AsyncTask::Timeout { task, .. } => {
+                let _ = self.cancel_task_recursive_internal(task, visited)?;
+                *self.get_heap_mut().get_mut_task(task_key)? = AsyncTask::Cancelled;
+                self.suspended_tasks.remove(&task_key);
+                Ok(true)
+            }
+            AsyncTask::Gather { tasks }
+            | AsyncTask::Race { tasks }
+            | AsyncTask::AllSettled { tasks } => {
+                for child in tasks {
+                    let _ = self.cancel_task_recursive_internal(child, visited)?;
+                }
+                *self.get_heap_mut().get_mut_task(task_key)? = AsyncTask::Cancelled;
+                self.suspended_tasks.remove(&task_key);
+                Ok(true)
+            }
+            AsyncTask::Ready(_) | AsyncTask::Failed(_) | AsyncTask::Cancelled => Ok(false),
+        }
+    }
+
+    pub(crate) fn cancel_task(&mut self, task_key: crate::arenas::TaskKey) -> WalrusResult<bool> {
+        let mut visited = FxHashSet::default();
+        let cancelled = self.cancel_task_recursive_internal(task_key, &mut visited)?;
+        if cancelled {
+            self.suspended_tasks.remove(&task_key);
+            self.wake_task_waiters(task_key)?;
+        }
+        Ok(cancelled)
+    }
+
+    pub(crate) fn run_queued_tasks(&mut self, span: Span) -> WalrusResult<()> {
+        while let Some(task_key) = self.next_runnable_task()? {
+            self.run_pending_task_to_completion(task_key, span)?;
+            self.refresh_waiting_tasks()?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn task_status_string(
+        &self,
+        task_key: crate::arenas::TaskKey,
+    ) -> WalrusResult<&'static str> {
+        let task = self.get_heap().get_task(task_key)?;
+        Ok(match task {
+            AsyncTask::Pending { .. }
+            | AsyncTask::Sleep { .. }
+            | AsyncTask::Timeout { .. }
+            | AsyncTask::Gather { .. }
+            | AsyncTask::Race { .. }
+            | AsyncTask::AllSettled { .. }
+            | AsyncTask::Channel(_)
+            | AsyncTask::UserRecv { .. } => "pending",
+            AsyncTask::Ready(_) => "ready",
+            AsyncTask::Failed(_) => "failed",
+            AsyncTask::Cancelled => "cancelled",
+        })
+    }
+
+    pub(crate) fn task_is_cancelled(&self, task_key: crate::arenas::TaskKey) -> WalrusResult<bool> {
+        let task = self.get_heap().get_task(task_key)?;
+        Ok(matches!(task, AsyncTask::Cancelled))
+    }
+
+    fn complete_task_on_frame_return(
+        &mut self,
+        task_key: Option<crate::arenas::TaskKey>,
+        result: Value,
+    ) -> WalrusResult<()> {
+        if let Some(task_key) = task_key {
+            let task = self.get_heap_mut().get_mut_task(task_key)?;
+            if matches!(task, AsyncTask::Pending { .. }) {
+                *task = AsyncTask::Ready(result);
+            }
+        }
+        Ok(())
+    }
+
+    fn set_task_failed(
+        &mut self,
+        task_key: crate::arenas::TaskKey,
+        failure: Value,
+    ) -> WalrusResult<()> {
+        *self.get_heap_mut().get_mut_task(task_key)? = AsyncTask::Failed(failure);
+        self.wake_task_waiters(task_key)?;
+        Ok(())
+    }
+
+    fn task_failure_value_from_error(&mut self, err: WalrusError) -> Value {
+        let message = match err {
+            WalrusError::ThrownValue { message, .. } => message,
+            WalrusError::RuntimeErrorWithStackTrace { error, stack_trace } => {
+                format!("{error}\n{stack_trace}")
+            }
+            other => other.to_string(),
+        };
+        self.get_heap_mut().push(HeapValue::String(&message))
+    }
+
+    fn fail_task_with_error(
+        &mut self,
+        task_key: crate::arenas::TaskKey,
+        err: WalrusError,
+    ) -> WalrusResult<()> {
+        let failure = self.task_failure_value_from_error(err);
+        self.set_task_failed(task_key, failure)
+    }
+
+    fn enqueue_task(&mut self, task_key: crate::arenas::TaskKey) {
+        if !self.async_task_queue.contains(&task_key) {
+            self.async_task_queue.push_back(task_key);
+        }
+    }
+
+    fn wake_task_waiters(&mut self, task_key: crate::arenas::TaskKey) -> WalrusResult<()> {
+        let Some(waiters) = self.task_waiters.remove(&task_key) else {
+            return Ok(());
+        };
+
+        for waiter in waiters {
+            if self.suspended_tasks.contains_key(&waiter)
+                && !matches!(
+                    self.get_heap().get_task(waiter)?,
+                    AsyncTask::Ready(_) | AsyncTask::Failed(_) | AsyncTask::Cancelled
+                )
+            {
+                self.enqueue_task(waiter);
+            }
+        }
+
+        Ok(())
+    }
+
+    fn refresh_waiting_tasks(&mut self) -> WalrusResult<()> {
+        let mut watched = FxHashSet::default();
+        if let Some(suspended) = &self.suspended_main {
+            watched.insert(suspended.waiting_on);
+        }
+        watched.extend(self.task_waiters.keys().copied());
+
+        for task_key in watched {
+            if matches!(
+                self.poll_task_resolution(task_key)?,
+                TaskResolution::Ready(_) | TaskResolution::Failed(_) | TaskResolution::Cancelled
+            ) {
+                self.wake_task_waiters(task_key)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn is_task_runnable(&mut self, task_key: crate::arenas::TaskKey) -> WalrusResult<bool> {
+        let task = self.get_heap().get_task(task_key)?;
+        if !matches!(task, AsyncTask::Pending { .. }) {
+            return Ok(false);
+        }
+
+        if let Some(suspended) = self.suspended_tasks.get(&task_key) {
+            return Ok(matches!(
+                self.poll_task_resolution(suspended.waiting_on)?,
+                TaskResolution::Ready(_) | TaskResolution::Failed(_) | TaskResolution::Cancelled
+            ));
+        }
+
+        Ok(true)
+    }
+
+    fn poll_task_resolution(
+        &mut self,
+        task_key: crate::arenas::TaskKey,
+    ) -> WalrusResult<TaskResolution> {
+        let task = self.get_heap().get_task(task_key)?.clone();
+        match task {
+            AsyncTask::Pending { .. } => Ok(TaskResolution::Pending),
+            AsyncTask::Ready(value) => Ok(TaskResolution::Ready(value)),
+            AsyncTask::Failed(value) => Ok(TaskResolution::Failed(value)),
+            AsyncTask::Cancelled => Ok(TaskResolution::Cancelled),
+            AsyncTask::Sleep { wake_at } => {
+                if Instant::now() >= wake_at {
+                    *self.get_heap_mut().get_mut_task(task_key)? = AsyncTask::Ready(Value::Void);
+                    Ok(TaskResolution::Ready(Value::Void))
+                } else {
+                    Ok(TaskResolution::Pending)
+                }
+            }
+            AsyncTask::Timeout { task, deadline } => match self.poll_task_resolution(task)? {
+                TaskResolution::Ready(value) => {
+                    *self.get_heap_mut().get_mut_task(task_key)? = AsyncTask::Ready(value);
+                    Ok(TaskResolution::Ready(value))
+                }
+                TaskResolution::Failed(value) => {
+                    *self.get_heap_mut().get_mut_task(task_key)? = AsyncTask::Failed(value);
+                    Ok(TaskResolution::Failed(value))
+                }
+                TaskResolution::Cancelled => {
+                    *self.get_heap_mut().get_mut_task(task_key)? = AsyncTask::Cancelled;
+                    Ok(TaskResolution::Cancelled)
+                }
+                TaskResolution::Pending => {
+                    if Instant::now() >= deadline {
+                        let message = self
+                            .get_heap_mut()
+                            .push(HeapValue::String("task timed out"));
+                        *self.get_heap_mut().get_mut_task(task_key)? = AsyncTask::Failed(message);
+                        Ok(TaskResolution::Failed(message))
+                    } else {
+                        Ok(TaskResolution::Pending)
+                    }
+                }
+            },
+            AsyncTask::Channel(ref channel) => match channel.try_recv() {
+                Ok(Ok(io_result)) => {
+                    let value = self.io_result_to_value(io_result)?;
+                    *self.get_heap_mut().get_mut_task(task_key)? = AsyncTask::Ready(value);
+                    Ok(TaskResolution::Ready(value))
+                }
+                Ok(Err(error_msg)) => {
+                    let error = self.get_heap_mut().push(HeapValue::String(&error_msg));
+                    *self.get_heap_mut().get_mut_task(task_key)? = AsyncTask::Failed(error);
+                    Ok(TaskResolution::Failed(error))
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => Ok(TaskResolution::Pending),
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    let error = self
+                        .get_heap_mut()
+                        .push(HeapValue::String("I/O worker thread disconnected"));
+                    *self.get_heap_mut().get_mut_task(task_key)? = AsyncTask::Failed(error);
+                    Ok(TaskResolution::Failed(error))
+                }
+            },
+            AsyncTask::Gather { tasks } => {
+                let mut values = Vec::with_capacity(tasks.len());
+                for child in tasks {
+                    match self.poll_task_resolution(child)? {
+                        TaskResolution::Ready(value) => values.push(value),
+                        TaskResolution::Failed(value) => {
+                            *self.get_heap_mut().get_mut_task(task_key)? = AsyncTask::Failed(value);
+                            return Ok(TaskResolution::Failed(value));
+                        }
+                        TaskResolution::Cancelled => {
+                            *self.get_heap_mut().get_mut_task(task_key)? = AsyncTask::Cancelled;
+                            return Ok(TaskResolution::Cancelled);
+                        }
+                        TaskResolution::Pending => {
+                            return Ok(TaskResolution::Pending);
+                        }
+                    }
+                }
+
+                let list = self.get_heap_mut().push(HeapValue::List(values));
+                *self.get_heap_mut().get_mut_task(task_key)? = AsyncTask::Ready(list);
+                Ok(TaskResolution::Ready(list))
+            }
+            AsyncTask::Race { tasks } => {
+                let mut all_failed = true;
+                let mut last_failure = None;
+                for child in tasks {
+                    match self.poll_task_resolution(child)? {
+                        TaskResolution::Ready(value) => {
+                            *self.get_heap_mut().get_mut_task(task_key)? = AsyncTask::Ready(value);
+                            return Ok(TaskResolution::Ready(value));
+                        }
+                        TaskResolution::Failed(value) => {
+                            last_failure = Some(value);
+                        }
+                        TaskResolution::Cancelled => {}
+                        TaskResolution::Pending => {
+                            all_failed = false;
+                        }
+                    }
+                }
+                if all_failed {
+                    if let Some(failure) = last_failure {
+                        *self.get_heap_mut().get_mut_task(task_key)? = AsyncTask::Failed(failure);
+                        Ok(TaskResolution::Failed(failure))
+                    } else {
+                        *self.get_heap_mut().get_mut_task(task_key)? = AsyncTask::Cancelled;
+                        Ok(TaskResolution::Cancelled)
+                    }
+                } else {
+                    Ok(TaskResolution::Pending)
+                }
+            }
+            AsyncTask::AllSettled { tasks } => {
+                let mut results = Vec::with_capacity(tasks.len());
+                for child in tasks {
+                    match self.poll_task_resolution(child)? {
+                        TaskResolution::Ready(value) => {
+                            let status_str = self.get_heap_mut().push(HeapValue::String("ok"));
+                            let value_str = self.get_heap_mut().push(HeapValue::String("value"));
+                            let status_key = self.get_heap_mut().push(HeapValue::String("status"));
+                            let mut dict = FxHashMap::default();
+                            dict.insert(status_key, status_str);
+                            dict.insert(value_str, value);
+                            results.push(self.get_heap_mut().push(HeapValue::Dict(dict)));
+                        }
+                        TaskResolution::Failed(value) => {
+                            let status_str = self.get_heap_mut().push(HeapValue::String("error"));
+                            let error_str = self.get_heap_mut().push(HeapValue::String("error"));
+                            let status_key = self.get_heap_mut().push(HeapValue::String("status"));
+                            let mut dict = FxHashMap::default();
+                            dict.insert(status_key, status_str);
+                            dict.insert(error_str, value);
+                            results.push(self.get_heap_mut().push(HeapValue::Dict(dict)));
+                        }
+                        TaskResolution::Cancelled => {
+                            let status_str =
+                                self.get_heap_mut().push(HeapValue::String("cancelled"));
+                            let status_key = self.get_heap_mut().push(HeapValue::String("status"));
+                            let mut dict = FxHashMap::default();
+                            dict.insert(status_key, status_str);
+                            results.push(self.get_heap_mut().push(HeapValue::Dict(dict)));
+                        }
+                        TaskResolution::Pending => {
+                            return Ok(TaskResolution::Pending);
+                        }
+                    }
+                }
+                let list = self.get_heap_mut().push(HeapValue::List(results));
+                *self.get_heap_mut().get_mut_task(task_key)? = AsyncTask::Ready(list);
+                Ok(TaskResolution::Ready(list))
+            }
+            AsyncTask::UserRecv { channel_id } => {
+                if channel_id < self.user_channels.len() {
+                    let mut buf = self.user_channels[channel_id].buffer.borrow_mut();
+                    if let Some(value) = buf.pop_front() {
+                        drop(buf);
+                        *self.get_heap_mut().get_mut_task(task_key)? = AsyncTask::Ready(value);
+                        return Ok(TaskResolution::Ready(value));
+                    }
+                    drop(buf);
+                    // Check if channel is closed with empty buffer
+                    if *self.user_channels[channel_id].closed.borrow() {
+                        *self.get_heap_mut().get_mut_task(task_key)? =
+                            AsyncTask::Ready(Value::Void);
+                        return Ok(TaskResolution::Ready(Value::Void));
+                    }
+                }
+                Ok(TaskResolution::Pending)
+            }
+        }
+    }
+
+    fn next_deadline_for_task(
+        &self,
+        task_key: crate::arenas::TaskKey,
+        visited: &mut FxHashSet<crate::arenas::TaskKey>,
+    ) -> WalrusResult<Option<Instant>> {
+        if !visited.insert(task_key) {
+            return Ok(None);
+        }
+
+        let task = self.get_heap().get_task(task_key)?;
+        match task {
+            AsyncTask::Sleep { wake_at } => Ok(Some(*wake_at)),
+            AsyncTask::Timeout { task, deadline } => {
+                let nested = self.next_deadline_for_task(*task, visited)?;
+                Ok(match nested {
+                    Some(value) => Some((*deadline).min(value)),
+                    None => Some(*deadline),
+                })
+            }
+            AsyncTask::Gather { tasks }
+            | AsyncTask::Race { tasks }
+            | AsyncTask::AllSettled { tasks } => {
+                let mut soonest: Option<Instant> = None;
+                for &child in tasks {
+                    if let Some(deadline) = self.next_deadline_for_task(child, visited)? {
+                        soonest = Some(match soonest {
+                            Some(current) => current.min(deadline),
+                            None => deadline,
+                        });
+                    }
+                }
+                Ok(soonest)
+            }
+            AsyncTask::Pending { .. }
+            | AsyncTask::Channel(_)
+            | AsyncTask::UserRecv { .. }
+            | AsyncTask::Ready(_)
+            | AsyncTask::Failed(_)
+            | AsyncTask::Cancelled => Ok(None),
+        }
+    }
+
+    fn next_scheduler_deadline(&self) -> WalrusResult<Option<Instant>> {
+        let mut watched = FxHashSet::default();
+        let mut deadline: Option<Instant> = None;
+
+        if let Some(suspended) = &self.suspended_main {
+            watched.insert(suspended.waiting_on);
+        }
+        watched.extend(self.task_waiters.keys().copied());
+
+        for task_key in watched {
+            let mut visited = FxHashSet::default();
+            if let Some(next) = self.next_deadline_for_task(task_key, &mut visited)? {
+                deadline = Some(match deadline {
+                    Some(current) => current.min(next),
+                    None => next,
+                });
+            }
+        }
+
+        Ok(deadline)
+    }
+
+    fn scheduler_has_pending_io(&self) -> WalrusResult<bool> {
+        let mut watched = FxHashSet::default();
+        if let Some(suspended) = &self.suspended_main {
+            watched.insert(suspended.waiting_on);
+        }
+        watched.extend(self.task_waiters.keys().copied());
+
+        for task_key in watched {
+            let mut visited = FxHashSet::default();
+            if self.task_has_pending_io(task_key, &mut visited)? {
+                return Ok(true);
+            }
+        }
+
+        Ok(false)
+    }
+
+    fn wait_for_scheduler_progress(&mut self) -> WalrusResult<()> {
+        let deadline = self.next_scheduler_deadline()?;
+        let has_io = self.scheduler_has_pending_io()?;
+
+        if deadline.is_none() && !has_io {
+            return Err(WalrusError::GenericError {
+                message:
+                    "Event loop deadlock: all suspended work is waiting with no runnable tasks"
+                        .to_string(),
+            });
+        }
+
+        if let Some(deadline) = deadline {
+            let now = Instant::now();
+            if deadline > now {
+                let timeout = deadline.duration_since(now);
+                let _ = self.io_wakeup_rx.recv_timeout(timeout);
+            }
+        } else {
+            let _ = self.io_wakeup_rx.recv();
+        }
+
+        Ok(())
+    }
+
+    fn main_waiting_task_resolved(&mut self) -> WalrusResult<bool> {
+        let Some(suspended) = &self.suspended_main else {
+            return Ok(false);
+        };
+
+        Ok(matches!(
+            self.poll_task_resolution(suspended.waiting_on)?,
+            TaskResolution::Ready(_) | TaskResolution::Failed(_) | TaskResolution::Cancelled
+        ))
+    }
+
+    fn resume_main_if_ready(&mut self) -> WalrusResult<bool> {
+        if !self.main_waiting_task_resolved()? {
+            return Ok(false);
+        }
+
+        let suspended = self
+            .suspended_main
+            .take()
+            .expect("main suspension should exist when ready");
+        self.restore_context(suspended.context);
+        Ok(true)
+    }
+
+    fn next_runnable_task(&mut self) -> WalrusResult<Option<crate::arenas::TaskKey>> {
+        while let Some(task_key) = self.async_task_queue.pop_front() {
+            if self.is_task_runnable(task_key)? {
+                return Ok(Some(task_key));
+            }
+        }
+        Ok(None)
+    }
+
+    fn run_pending_task_to_completion(
+        &mut self,
+        task_key: crate::arenas::TaskKey,
+        span: Span,
+    ) -> WalrusResult<()> {
+        let task_snapshot = self.get_heap().get_task(task_key)?.clone();
+        let AsyncTask::Pending { function, args } = task_snapshot else {
+            return Ok(());
+        };
+
+        let caller_context = self.take_context();
+        let suspended_task = self.suspended_tasks.remove(&task_key);
+        let function = self.get_heap().get_function(function)?.clone();
+        match function {
+            WalrusFunction::Vm(func) => {
+                if args.len() != func.arity {
+                    self.restore_context(caller_context);
+                    return self.fail_task_with_error(
+                        task_key,
+                        WalrusError::InvalidArgCount {
+                            name: func.name.clone(),
+                            expected: func.arity,
+                            got: args.len(),
+                            span,
+                            src: self.source_ref.source().into(),
+                            filename: self.source_ref.filename().into(),
+                        },
+                    );
+                }
+
+                let context = if let Some(suspended) = suspended_task {
+                    suspended.context
+                } else {
+                    ExecutionContext {
+                        stack: Vec::new(),
+                        locals: args,
+                        call_stack: vec![CallFrame {
+                            return_ip: 0,
+                            frame_pointer: 0,
+                            stack_pointer: 0,
+                            instructions: Rc::clone(&func.code),
+                            function_name: func.name.clone(),
+                            return_override: None,
+                            module_binding: func.module_binding.clone(),
+                            awaiting_task: Some(task_key),
+                        }],
+                        exception_handlers: Vec::new(),
+                        ip: 0,
+                    }
+                };
+
+                self.restore_context(context);
+                let outcome = self.run_inner();
+                let task_context = self.take_context();
+                self.restore_context(caller_context);
+
+                match outcome {
+                    Ok(RunSignal::Returned(_)) => {
+                        if matches!(
+                            self.poll_task_resolution(task_key)?,
+                            TaskResolution::Pending
+                        ) {
+                            let failure = self.get_heap_mut().push(HeapValue::String(
+                                "Async task exited without returning a result",
+                            ));
+                            self.set_task_failed(task_key, failure)?;
+                        } else {
+                            self.wake_task_waiters(task_key)?;
+                        }
+                    }
+                    Ok(RunSignal::Suspended(waiting_on)) => {
+                        self.suspended_tasks.insert(
+                            task_key,
+                            SuspendedExecution {
+                                context: task_context,
+                                waiting_on,
+                            },
+                        );
+                        self.task_waiters
+                            .entry(waiting_on)
+                            .or_default()
+                            .push(task_key);
+                    }
+                    Err(err) => {
+                        let failure = self.task_failure_value_from_error(err);
+                        self.set_task_failed(task_key, failure)?;
+                    }
+                }
+            }
+            WalrusFunction::Native(native_fn) => {
+                let result = match self.call_native(native_fn, args, span) {
+                    Ok(value) => value,
+                    Err(err) => {
+                        self.restore_context(caller_context);
+                        return self.fail_task_with_error(task_key, err);
+                    }
+                };
+                self.complete_task_on_frame_return(Some(task_key), result)?;
+                self.restore_context(caller_context);
+                self.wake_task_waiters(task_key)?;
+            }
+        }
+
+        Ok(())
+    }
+
     fn call_exported_function(
         &mut self,
         function: WalrusFunction,
@@ -581,21 +1685,6 @@ impl<'a> VM<'a> {
         match function {
             WalrusFunction::Native(native) => {
                 let result = self.call_native(native, args, span)?;
-                Ok(Some(result))
-            }
-            WalrusFunction::Rust(rust_fn) => {
-                if args.len() != rust_fn.args {
-                    return Err(WalrusError::InvalidArgCount {
-                        name: rust_fn.name.clone(),
-                        expected: rust_fn.args,
-                        got: args.len(),
-                        span,
-                        src: self.source_ref.source().into(),
-                        filename: self.source_ref.filename().into(),
-                    });
-                }
-
-                let result = rust_fn.call(args, self.source_ref, span)?;
                 Ok(Some(result))
             }
             WalrusFunction::Vm(func) => {
@@ -610,6 +1699,12 @@ impl<'a> VM<'a> {
                     });
                 }
 
+                if func.is_async {
+                    let task = self
+                        .create_task_for_cloned_function(WalrusFunction::Vm(func.clone()), args);
+                    return Ok(Some(task));
+                }
+
                 let new_frame = CallFrame {
                     return_ip: self.ip,
                     frame_pointer: self.locals.len(),
@@ -618,6 +1713,7 @@ impl<'a> VM<'a> {
                     function_name: func.name.clone(),
                     return_override: None,
                     module_binding: func.module_binding.clone(),
+                    awaiting_task: None,
                 };
 
                 self.call_stack.push(new_frame);
@@ -625,11 +1721,6 @@ impl<'a> VM<'a> {
                 self.ip = 0;
                 Ok(None)
             }
-            WalrusFunction::TreeWalk(_) => Err(WalrusError::NodeFunctionNotSupportedInVm {
-                span,
-                src: self.source_ref.source().into(),
-                filename: self.source_ref.filename().into(),
-            }),
         }
     }
 
@@ -737,10 +1828,13 @@ impl<'a> VM<'a> {
 
     /// Raise a thrown value, transferring control to the nearest active catch handler.
     fn throw_value(&mut self, value: Value, span: Span) -> WalrusResult<()> {
-        while let Some(handler) = self.exception_handlers.pop() {
+        while let Some(handler) = self.exception_handlers.last().copied() {
             if handler.frame_index > self.current_frame_index() {
+                self.exception_handlers.pop();
                 continue;
             }
+
+            self.exception_handlers.pop();
 
             // Unwind call frames until we reach the frame that owns this handler.
             while self.current_frame_index() > handler.frame_index {
@@ -770,29 +1864,49 @@ impl<'a> VM<'a> {
 
     /// Run the VM and add stack trace information to any errors
     pub fn run(&mut self) -> WalrusResult<Value> {
-        match self.run_inner() {
-            Ok(value) => Ok(value),
-            Err(err) => {
-                // Add stack trace to the error message
-                let stack_trace = self.format_stack_trace();
-                if stack_trace.is_empty() {
-                    Err(err)
-                } else {
-                    // Wrap the error with stack trace info
-                    Err(WalrusError::RuntimeErrorWithStackTrace {
-                        error: err.to_string(),
-                        stack_trace,
-                    })
+        loop {
+            match self.run_inner() {
+                Ok(RunSignal::Returned(value)) => return Ok(value),
+                Ok(RunSignal::Suspended(waiting_on)) => {
+                    self.suspended_main = Some(SuspendedExecution {
+                        context: self.take_context(),
+                        waiting_on,
+                    });
+
+                    while self.suspended_main.is_some() {
+                        self.refresh_waiting_tasks()?;
+                        if self.resume_main_if_ready()? {
+                            break;
+                        }
+
+                        if let Some(task_key) = self.next_runnable_task()? {
+                            self.run_pending_task_to_completion(task_key, Span::default())?;
+                            continue;
+                        }
+
+                        self.wait_for_scheduler_progress()?;
+                    }
+                }
+                Err(err) => {
+                    let stack_trace = self.format_stack_trace();
+                    return if stack_trace.is_empty() {
+                        Err(err)
+                    } else {
+                        Err(WalrusError::RuntimeErrorWithStackTrace {
+                            error: err.to_string(),
+                            stack_trace,
+                        })
+                    };
                 }
             }
         }
     }
 
-    fn run_inner(&mut self) -> WalrusResult<Value> {
+    fn run_inner(&mut self) -> WalrusResult<RunSignal> {
         let debug_logging_enabled = log_enabled!(log::Level::Debug);
         let profiling_enabled = self.profiling_enabled;
 
-        loop {
+        'vm: loop {
             // Poll GC periodically instead of every instruction.
             self.gc_poll_counter = self.gc_poll_counter.wrapping_add(1);
             if self.gc_poll_counter & 0xFF == 0 {
@@ -954,7 +2068,7 @@ impl<'a> VM<'a> {
                         self.try_compile_hot_range_loop(loop_header_ip, exit_ip);
                     }
 
-                    // Standard interpreted execution
+                    // Standard execution
                     let fp = self.frame_pointer();
                     let idx = fp + local_idx as usize;
                     // SAFETY: compiler guarantees range-loop locals are allocated at idx and idx+1.
@@ -1189,6 +2303,7 @@ impl<'a> VM<'a> {
                                     function_name: format!("{}::iter", struct_name),
                                     return_override: None,
                                     module_binding: func.module_binding.clone(),
+                                    awaiting_task: None,
                                 };
 
                                 self.call_stack.push(new_frame);
@@ -1308,19 +2423,16 @@ impl<'a> VM<'a> {
                             if let Ok(func_ref) = self.get_heap().get_function(key) {
                                 let name = match func_ref {
                                     WalrusFunction::Vm(f) => f.name.clone(),
-                                    WalrusFunction::Rust(f) => f.name.clone(),
-                                    _ => String::new(),
+                                    WalrusFunction::Native(f) => f.name().to_string(),
                                 };
-                                if !name.is_empty() {
-                                    if self.hotspot_detector.record_function_call(&name) {
-                                        debug!("Hot function detected: {}", name);
-                                    }
-                                    // Track argument types
-                                    let args_start = self.stack.len() - arg_count;
-                                    for (i, arg) in self.stack[args_start..].iter().enumerate() {
-                                        let arg_type = WalrusType::from_value(arg);
-                                        self.type_profile.observe(self.ip - 1 + i, arg_type);
-                                    }
+                                if self.hotspot_detector.record_function_call(&name) {
+                                    debug!("Hot function detected: {}", name);
+                                }
+                                // Track argument types
+                                let args_start = self.stack.len() - arg_count;
+                                for (i, arg) in self.stack[args_start..].iter().enumerate() {
+                                    let arg_type = WalrusType::from_value(arg);
+                                    self.type_profile.observe(self.ip - 1 + i, arg_type);
                                 }
                             }
                         }
@@ -1343,6 +2455,13 @@ impl<'a> VM<'a> {
                                         });
                                     }
 
+                                    if func.is_async {
+                                        let args = self.pop_n(arg_count, opcode, span)?;
+                                        let task = self.create_task_for_function_key(key, args);
+                                        self.push(task);
+                                        continue;
+                                    }
+
                                     // Create a new call frame instead of a child VM
                                     let new_frame = CallFrame {
                                         return_ip: self.ip,                          // Where to return after this function
@@ -1352,6 +2471,7 @@ impl<'a> VM<'a> {
                                         function_name: String::new(),
                                         return_override: None,
                                         module_binding: func.module_binding.clone(),
+                                        awaiting_task: None,
                                     };
 
                                     // Push the new frame
@@ -1364,36 +2484,11 @@ impl<'a> VM<'a> {
                                     // Start execution at the beginning of the new function
                                     self.ip = 0;
                                 }
-                                WalrusFunction::Rust(func) => {
-                                    let func = func.clone();
-                                    let args = self.pop_n(arg_count, opcode, span)?;
-                                    if args.len() != func.args {
-                                        return Err(WalrusError::InvalidArgCount {
-                                            name: func.name.clone(),
-                                            expected: func.args,
-                                            got: args.len(),
-                                            span,
-                                            src: self.source_ref.source().into(),
-                                            filename: self.source_ref.filename().into(),
-                                        });
-                                    }
-                                    let result = func.call(args, self.source_ref, span)?;
-                                    self.push(result);
-                                }
                                 WalrusFunction::Native(native_fn) => {
                                     let native_fn = *native_fn;
                                     let args = self.pop_n(arg_count, opcode, span)?;
                                     let result = self.call_native(native_fn, args, span)?;
                                     self.push(result);
-                                }
-                                _ => {
-                                    // In theory, this should never happen because the compiler
-                                    // should not compile a call to a node function (but just in case)
-                                    return Err(WalrusError::NodeFunctionNotSupportedInVm {
-                                        span,
-                                        src: self.source_ref.source().into(),
-                                        filename: self.source_ref.filename().into(),
-                                    });
                                 }
                             }
                         }
@@ -1435,6 +2530,7 @@ impl<'a> VM<'a> {
                                         function_name: format!("{}::init", struct_name),
                                         return_override: Some(instance_value),
                                         module_binding: init_func.module_binding.clone(),
+                                        awaiting_task: None,
                                     };
 
                                     self.call_stack.push(new_frame);
@@ -1508,38 +2604,6 @@ impl<'a> VM<'a> {
                             let func = self.get_heap().get_function(key)?;
 
                             match func {
-                                WalrusFunction::Rust(func) => {
-                                    let func = func.clone();
-                                    let args = self.pop_n(arg_count, opcode, span)?;
-                                    // Rust functions don't use call frames, so just call and return
-                                    if args.len() != func.args {
-                                        return Err(WalrusError::InvalidArgCount {
-                                            name: func.name.clone(),
-                                            expected: func.args,
-                                            got: args.len(),
-                                            span,
-                                            src: self.source_ref.source().into(),
-                                            filename: self.source_ref.filename().into(),
-                                        });
-                                    }
-                                    let result = func.call(args, self.source_ref, span)?;
-
-                                    // For a tail call, we need to return this result
-                                    // Pop the current frame and push the result
-                                    let frame = self
-                                        .call_stack
-                                        .pop()
-                                        .expect("Call stack should never be empty on tail call");
-                                    self.clear_exception_handlers_from_frame(self.call_stack.len());
-
-                                    if self.call_stack.is_empty() {
-                                        return Ok(result);
-                                    }
-
-                                    self.locals.truncate(frame.frame_pointer);
-                                    self.ip = frame.return_ip;
-                                    self.push(result);
-                                }
                                 WalrusFunction::Native(native_fn) => {
                                     let native_fn = *native_fn;
                                     let args = self.pop_n(arg_count, opcode, span)?;
@@ -1551,9 +2615,13 @@ impl<'a> VM<'a> {
                                         .pop()
                                         .expect("Call stack should never be empty on tail call");
                                     self.clear_exception_handlers_from_frame(self.call_stack.len());
+                                    self.complete_task_on_frame_return(
+                                        frame.awaiting_task,
+                                        result,
+                                    )?;
 
                                     if self.call_stack.is_empty() {
-                                        return Ok(result);
+                                        return Ok(RunSignal::Returned(result));
                                     }
 
                                     self.locals.truncate(frame.frame_pointer);
@@ -1570,6 +2638,30 @@ impl<'a> VM<'a> {
                                             src: self.source_ref.source().into(),
                                             filename: self.source_ref.filename().into(),
                                         });
+                                    }
+
+                                    if func.is_async {
+                                        let args = self.pop_n(arg_count, opcode, span)?;
+                                        let result = self.create_task_for_function_key(key, args);
+                                        let frame = self.call_stack.pop().expect(
+                                            "Call stack should never be empty on tail call",
+                                        );
+                                        self.clear_exception_handlers_from_frame(
+                                            self.call_stack.len(),
+                                        );
+                                        self.complete_task_on_frame_return(
+                                            frame.awaiting_task,
+                                            result,
+                                        )?;
+
+                                        if self.call_stack.is_empty() {
+                                            return Ok(RunSignal::Returned(result));
+                                        }
+
+                                        self.locals.truncate(frame.frame_pointer);
+                                        self.ip = frame.return_ip;
+                                        self.push(result);
+                                        continue;
                                     }
 
                                     // Clone what we need before mutating self
@@ -1600,13 +2692,6 @@ impl<'a> VM<'a> {
 
                                     // Reset IP to start of the new function
                                     self.ip = 0;
-                                }
-                                _ => {
-                                    return Err(WalrusError::NodeFunctionNotSupportedInVm {
-                                        span,
-                                        src: self.source_ref.source().into(),
-                                        filename: self.source_ref.filename().into(),
-                                    });
                                 }
                             }
                         }
@@ -1694,9 +2779,13 @@ impl<'a> VM<'a> {
                                         .pop()
                                         .expect("Call stack should never be empty on tail call");
                                     self.clear_exception_handlers_from_frame(self.call_stack.len());
+                                    self.complete_task_on_frame_return(
+                                        frame.awaiting_task,
+                                        result,
+                                    )?;
 
                                     if self.call_stack.is_empty() {
-                                        return Ok(result);
+                                        return Ok(RunSignal::Returned(result));
                                     }
 
                                     self.locals.truncate(frame.frame_pointer);
@@ -2513,6 +3602,40 @@ impl<'a> VM<'a> {
                         }
                     }
                 }
+                Opcode::Await => {
+                    let awaited = self.pop(opcode, span)?;
+                    let task_key = match awaited {
+                        Value::Task(task_key) => task_key,
+                        other => {
+                            return Err(WalrusError::TypeMismatch {
+                                expected: "task".to_string(),
+                                found: other.get_type().to_string(),
+                                span,
+                                src: self.source_ref.source().into(),
+                                filename: self.source_ref.filename().into(),
+                            });
+                        }
+                    };
+                    match self.poll_task_resolution(task_key)? {
+                        TaskResolution::Ready(value) => {
+                            self.push(value);
+                        }
+                        TaskResolution::Failed(error_value) => {
+                            self.throw_value(error_value, span)?;
+                            continue 'vm;
+                        }
+                        TaskResolution::Cancelled => {
+                            let cancelled = self.cancelled_task_error_value();
+                            self.throw_value(cancelled, span)?;
+                            continue 'vm;
+                        }
+                        TaskResolution::Pending => {
+                            self.ip -= 1;
+                            self.push(Value::Task(task_key));
+                            return Ok(RunSignal::Suspended(task_key));
+                        }
+                    }
+                }
                 Opcode::Return => {
                     let mut return_value = self.pop(opcode, span)?;
 
@@ -2526,10 +3649,11 @@ impl<'a> VM<'a> {
                     if let Some(override_value) = frame.return_override {
                         return_value = override_value;
                     }
+                    self.complete_task_on_frame_return(frame.awaiting_task, return_value)?;
 
                     // If this was the last frame (main), return the value
                     if self.call_stack.is_empty() {
-                        return Ok(return_value);
+                        return Ok(RunSignal::Returned(return_value));
                     }
 
                     // Truncate locals back to the frame pointer (cleanup this frame's locals)
@@ -2777,6 +3901,7 @@ impl<'a> VM<'a> {
                                     function_name: String::new(),
                                     return_override: None,
                                     module_binding: method_binding,
+                                    awaiting_task: None,
                                 };
 
                                 self.call_stack.push(new_frame);
@@ -2815,9 +3940,30 @@ impl<'a> VM<'a> {
                                         });
                                     }
                                     None => {
-                                        return Err(WalrusError::MethodNotFound {
+                                        // No method found — check if there's a field holding a callable function
+                                        let field_func = {
+                                            let inst = self.get_heap().get_struct_inst(inst_key)?;
+                                            inst.get_field(&method_name).copied()
+                                        };
+
+                                        if let Some(Value::Function(func_key)) = field_func {
+                                            // Field holds a function — call it (no self prepended)
+                                            let args = self.pop_n(arg_count, opcode, span)?;
+                                            let _ = self.pop(opcode, span)?; // pop object
+
+                                            let func =
+                                                self.get_heap().get_function(func_key)?.clone();
+                                            if let Some(result) =
+                                                self.call_exported_function(func, args, span)?
+                                            {
+                                                self.push(result);
+                                            }
+                                            continue;
+                                        }
+
+                                        return Err(WalrusError::MemberNotFound {
                                             type_name,
-                                            method: method_name,
+                                            member: method_name,
                                             span,
                                             src: self.source_ref.source().into(),
                                             filename: self.source_ref.filename().into(),
@@ -2845,6 +3991,7 @@ impl<'a> VM<'a> {
                                     function_name: String::new(),
                                     return_override: None,
                                     module_binding: method_binding,
+                                    awaiting_task: None,
                                 };
 
                                 self.call_stack.push(new_frame);
@@ -3027,6 +4174,7 @@ impl<'a> VM<'a> {
                                     function_name: String::new(),
                                     return_override: None,
                                     module_binding: func.module_binding.clone(),
+                                    awaiting_task: None,
                                 };
 
                                 self.call_stack.push(new_frame);
@@ -3081,6 +4229,7 @@ impl<'a> VM<'a> {
                                     function_name: String::new(),
                                     return_override: None,
                                     module_binding: func.module_binding.clone(),
+                                    awaiting_task: None,
                                 };
 
                                 self.call_stack.push(new_frame);

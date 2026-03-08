@@ -1,0 +1,7 @@
+let fail = async : { throw "async closure boom"; };
+
+try {
+    await fail();
+} catch err {
+    println(err);
+};

@@ -1,0 +1,4 @@
+import "std/async" as asyncx;
+
+let too_slow = asyncx.timeout(asyncx.sleep(20), 1);
+println(await too_slow);

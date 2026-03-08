@@ -1,0 +1,28 @@
+import "std/net" as net;
+import "std/http" as http;
+
+let listener = net.tcp_bind("127.0.0.1", 0);
+let port = net.tcp_local_port(listener);
+
+let client = await net.tcp_connect("127.0.0.1", port);
+let server = await net.tcp_accept(listener);
+
+let raw = "POST /echo?q=1 HTTP/1.1\r\nHost: localhost\r\nContent-Length: 4\r\n\r\ntest";
+await net.tcp_write(client, raw);
+
+let req = await http.read_request(server, 32);
+println(req["ok"]);
+println(req["method"]);
+println(req["path"]);
+println(req["query_params"]["q"]);
+println(req["headers"]["host"]);
+println(req["content_length"]);
+println(req["body"]);
+
+let resp = http.response_with_headers(200, "pong", {"x-demo": "yes"});
+await net.tcp_write(server, resp);
+println(await net.tcp_read_line(client));
+
+net.tcp_close(client);
+net.tcp_close(server);
+net.tcp_close_listener(listener);

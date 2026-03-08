@@ -1,0 +1,12 @@
+import "std/async" as asyncx;
+
+let sleeper = asyncx.sleep(100);
+let race_task = asyncx.race([sleeper]);
+println(asyncx.cancel(race_task));
+println(asyncx.cancelled(race_task));
+
+try {
+    await race_task;
+} catch err {
+    println(err);
+};

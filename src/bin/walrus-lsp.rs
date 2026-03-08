@@ -26,7 +26,7 @@ use walrus::span::Span;
 const KEYWORDS: &[&str] = &[
     "let", "fn", "struct", "return", "if", "else", "while", "for", "in", "break", "continue",
     "import", "as", "true", "false", "void", "try", "catch", "throw", "free", "defer", "extern",
-    "and", "or", "not", "start", "end", "print", "println",
+    "async", "await", "and", "or", "not", "start", "end", "print", "println",
 ];
 
 struct BuiltinInfo {
@@ -675,6 +675,8 @@ fn keyword_docs(keyword: &str) -> Option<&'static str> {
     match keyword {
         "let" => Some("Declares a variable in the current scope."),
         "fn" => Some("Declares a function."),
+        "async" => Some("Declares an asynchronous function that returns a task when called."),
+        "await" => Some("Waits for a task to complete and yields its result."),
         "struct" => Some("Declares a struct type."),
         "return" => Some("Returns a value from a function."),
         "if" => Some("Conditional branch."),

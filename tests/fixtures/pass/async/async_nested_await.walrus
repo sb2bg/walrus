@@ -1,0 +1,9 @@
+async fn double : x {
+    return x * 2;
+}
+
+async fn plus_one_after_double : y {
+    return await double(y) + 1;
+}
+
+println(await plus_one_after_double(3));

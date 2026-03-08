@@ -1,0 +1,160 @@
+import "std/async" as asyncx;
+import "std/http" as http;
+import "std/io" as io;
+import "std/json" as json;
+import "std/net" as net;
+
+let index_body = io.read_file("examples/http_router_sim/index.html");
+
+fn text : status, body {
+    return http.make_response(status, body);
+}
+
+fn html : status, body {
+    return http.make_response_with_headers(status, body, {"content-type": "text/html"});
+}
+
+fn json_resp : status, body {
+    return http.make_response_with_headers(status, body, {"content-type": "application/json"});
+}
+
+struct App {
+    fn init : self {
+        self.routes = [];
+    }
+
+    fn add : self, method, pattern, handler {
+        let route = {
+            "method": method,
+            "pattern": pattern,
+            "handler": handler
+        };
+        self.routes = self.routes + [route];
+    }
+
+    fn get : self, pattern, handler {
+        self.add("GET", pattern, handler);
+    }
+
+    fn post : self, pattern, handler {
+        self.add("POST", pattern, handler);
+    }
+
+    fn settle : self, value {
+        if core.type(value) == "task" {
+            return await value;
+        }
+        return value;
+    }
+
+    fn dispatch : self, request {
+        let i = 0;
+        let n = core.len(self.routes);
+
+        while i < n {
+            let route = self.routes[i];
+
+            if route["method"] == request["method"] {
+                let matched = http.match_route(route["pattern"], request["path"]);
+
+                if matched["found"] {
+                    request["params"] = matched["params"];
+                    request["wildcard"] = matched["wildcard"];
+
+                    let handler = route["handler"];
+                    return self.settle(handler(request));
+                }
+            }
+
+            i = i + 1;
+        }
+
+        return text(404, "not found\n");
+    }
+
+    fn handle_connection : self, stream {
+        while true {
+            let request = await http.read_request(stream, 65536);
+
+            if request == void {
+                net.tcp_close(stream);
+                return void;
+            }
+
+            let response = void;
+            let close = false;
+
+            if request["ok"] == false {
+                response = http.make_response_with_headers(400, "bad request\n", {"connection": "close"});
+                close = true;
+            } else {
+                try {
+                    response = self.dispatch(request);
+                } catch err {
+                    response = http.make_response_with_headers(
+                        500,
+                        "internal server error\n",
+                        {"connection": "close"}
+                    );
+                    close = true;
+                };
+            }
+
+            await net.tcp_write(stream, http.serialize_response(response));
+
+            if request["ok"] != false {
+                let conn = request["headers"].get("connection", "");
+                if conn == "close" {
+                    close = true;
+                }
+            }
+
+            if close {
+                net.tcp_close(stream);
+                return void;
+            }
+        }
+    }
+
+    fn listen : self, host, port {
+        let listener = net.tcp_bind(host, port);
+
+        while true {
+            let stream = await net.tcp_accept(listener);
+            asyncx.spawn(self.handle_connection, [self, stream]);
+        }
+    }
+}
+
+let app = App();
+
+app.get("/", : req {
+    return html(200, index_body);
+});
+
+app.get("/health", : req {
+    return json_resp(200, "{\"status\":\"ok\"}");
+});
+
+app.get("/users/:id", : req {
+    let id = req["params"]["id"];
+    return json_resp(200, json.encode({"id": id, "name": f"User {id}"}));
+});
+
+app.get("/users/:id/posts/:post_id", : req {
+    let user_id = req["params"]["id"];
+    let post_id = req["params"]["post_id"];
+    return json_resp(200, json.encode({"user_id": user_id, "post_id": post_id}));
+});
+
+app.post("/echo", : req {
+    let parsed = json.decode(req["body"]);
+    return json_resp(200, json.encode({"echo": parsed}));
+});
+
+app.get("/assets/*", : req {
+    let suffix = req["wildcard"];
+    return text(200, f"serving asset: {suffix}\n");
+});
+
+app.listen("127.0.0.1", 18081);

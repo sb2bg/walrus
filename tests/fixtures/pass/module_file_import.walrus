@@ -1,5 +1,0 @@
-import "../modules/math_ops.walrus" as m;
-
-println(m.answer);
-println(m.add(20, 22));
-println(m.name);

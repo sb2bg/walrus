@@ -1,0 +1,12 @@
+import "std/async" as asyncx;
+
+async fn left : {
+    return 1;
+}
+
+async fn right : {
+    return 2;
+}
+
+let both = asyncx.gather([left(), right()]);
+println(await both);

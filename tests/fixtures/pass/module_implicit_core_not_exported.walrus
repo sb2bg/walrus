@@ -1,5 +1,0 @@
-import "../modules/prelude_exports.walrus" as exports;
-
-println(core.len(exports));
-println(exports.answer);
-println(exports.id(9));

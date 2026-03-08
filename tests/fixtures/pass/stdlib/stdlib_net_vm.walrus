@@ -1,0 +1,18 @@
+import "std/net" as net;
+
+let listener = net.tcp_bind("127.0.0.1", 0);
+let port = net.tcp_local_port(listener);
+println(port > 0);
+
+let client = await net.tcp_connect("127.0.0.1", port);
+let server = await net.tcp_accept(listener);
+
+await net.tcp_write(client, "ping\n");
+println(await net.tcp_read_line(server));
+
+await net.tcp_write(server, "pong\n");
+println(await net.tcp_read_line(client));
+
+net.tcp_close(client);
+net.tcp_close(server);
+net.tcp_close_listener(listener);

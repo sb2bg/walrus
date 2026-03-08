@@ -1,0 +1,4 @@
+import "std/async" as asyncx;
+
+let mixed = asyncx.gather([1]);
+println(await mixed);

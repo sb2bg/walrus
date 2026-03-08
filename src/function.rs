@@ -1,69 +1,8 @@
-use rustc_hash::FxHashMap;
-
 use crate::arenas::DictKey;
-use crate::ast::Node;
-use crate::interpreter::InterpreterResult;
-use crate::source_ref::SourceRef;
-use crate::span::Span;
 use crate::value::Value;
 use crate::vm::instruction_set::InstructionSet;
 use std::fmt::Display;
 use std::rc::Rc;
-
-#[derive(Debug, Clone)]
-pub struct RustFunction {
-    pub name: String,
-    pub args: usize,
-    func: fn(Vec<Value>, SourceRef, span: Span) -> InterpreterResult,
-}
-
-impl RustFunction {
-    pub fn new(
-        name: String,
-        args: usize,
-        func: fn(Vec<Value>, SourceRef, Span) -> InterpreterResult,
-    ) -> Self {
-        Self { name, args, func }
-    }
-
-    pub fn call(&self, args: Vec<Value>, source_ref: SourceRef, span: Span) -> InterpreterResult {
-        (self.func)(args, source_ref, span)
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct NodeFunction {
-    pub name: String,
-    pub args: Vec<String>,
-    pub body: Node,
-    /// Captured variables from the enclosing scope (for closures)
-    pub captures: FxHashMap<String, Value>,
-}
-
-impl NodeFunction {
-    pub fn new(name: String, args: Vec<String>, node: Node) -> Self {
-        Self {
-            name,
-            args,
-            body: node,
-            captures: FxHashMap::default(),
-        }
-    }
-
-    pub fn new_with_captures(
-        name: String,
-        args: Vec<String>,
-        node: Node,
-        captures: FxHashMap<String, Value>,
-    ) -> Self {
-        Self {
-            name,
-            args,
-            body: node,
-            captures,
-        }
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct VmModuleBinding {
@@ -78,15 +17,25 @@ pub struct VmModuleBinding {
 pub struct VmFunction {
     pub name: String,
     pub arity: usize,
+    pub is_async: bool,
     pub code: Rc<InstructionSet>,
     pub module_binding: Option<Rc<VmModuleBinding>>,
 }
 
 impl VmFunction {
     pub fn new(name: String, arity: usize, code: InstructionSet) -> Self {
+        Self::new_with_async(name, arity, code, false)
+    }
+
+    pub fn new_async(name: String, arity: usize, code: InstructionSet) -> Self {
+        Self::new_with_async(name, arity, code, true)
+    }
+
+    fn new_with_async(name: String, arity: usize, code: InstructionSet, is_async: bool) -> Self {
         Self {
             name,
             arity,
+            is_async,
             code: Rc::new(code),
             module_binding: None,
         }
@@ -95,8 +44,6 @@ impl VmFunction {
 
 #[derive(Debug, Clone)]
 pub enum WalrusFunction {
-    Rust(RustFunction),
-    TreeWalk(NodeFunction),
     Vm(VmFunction),
     Native(NativeFunction),
 }
@@ -112,6 +59,22 @@ pub enum NativeFunction {
     CoreGc,
     CoreHeapStats,
     CoreGcThreshold,
+    CoreTimestamp,
+    // Async primitives
+    AsyncSpawn,
+    AsyncSleep,
+    AsyncTimeout,
+    AsyncGather,
+    AsyncRace,
+    AsyncAllSettled,
+    AsyncStatus,
+    AsyncCancel,
+    AsyncCancelled,
+    AsyncYield,
+    AsyncChannel,
+    AsyncSend,
+    AsyncRecv,
+    AsyncClose,
     // File I/O
     FileOpen,
     FileRead,
@@ -126,6 +89,35 @@ pub enum NativeFunction {
     Args,
     Cwd,
     Exit,
+    // Networking
+    NetTcpBind,
+    NetTcpAccept,
+    NetTcpConnect,
+    NetTcpLocalPort,
+    NetTcpPeerAddr,
+    NetTcpStreamLocalAddr,
+    NetTcpSetReadTimeout,
+    NetTcpSetWriteTimeout,
+    NetTcpSetNodelay,
+    NetTcpShutdown,
+    NetTcpRead,
+    NetTcpReadLine,
+    NetTcpWrite,
+    NetTcpClose,
+    NetTcpCloseListener,
+    // HTTP
+    HttpParseRequestLine,
+    HttpParseQuery,
+    HttpParseQueryPairs,
+    HttpNormalizePath,
+    HttpMatchRoute,
+    HttpStatusText,
+    HttpResponse,
+    HttpResponseWithHeaders,
+    HttpMakeResponse,
+    HttpMakeResponseWithHeaders,
+    HttpSerializeResponse,
+    HttpReadRequest,
     // Math
     MathPi,
     MathE,
@@ -169,6 +161,9 @@ pub enum NativeFunction {
     MathRandBool,
     MathRandInt,
     MathRandRange,
+    // JSON
+    JsonEncode,
+    JsonDecode,
 }
 
 impl NativeFunction {
@@ -199,9 +194,13 @@ impl Display for WalrusFunction {
             f,
             "{}",
             match self {
-                WalrusFunction::Rust(func) => format!("<builtin_function({})>", func.name),
-                WalrusFunction::TreeWalk(func) => format!("<function({})>", func.name),
-                WalrusFunction::Vm(func) => format!("<function({})>", func.name),
+                WalrusFunction::Vm(func) => {
+                    if func.is_async {
+                        format!("<async_function({})>", func.name)
+                    } else {
+                        format!("<function({})>", func.name)
+                    }
+                }
                 WalrusFunction::Native(func) => format!("<native_function({})>", func.name()),
             }
         )
@@ -211,8 +210,6 @@ impl Display for WalrusFunction {
 impl PartialEq for WalrusFunction {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (WalrusFunction::Rust(f1), WalrusFunction::Rust(f2)) => cmp(f1, f2),
-            (WalrusFunction::TreeWalk(f1), WalrusFunction::TreeWalk(f2)) => cmp(f1, f2),
             (WalrusFunction::Vm(f1), WalrusFunction::Vm(f2)) => cmp(f1, f2),
             (WalrusFunction::Native(f1), WalrusFunction::Native(f2)) => f1 == f2,
             _ => false,

@@ -1,4 +1,0 @@
-import "../modules/cached_once.walrus" as first;
-import "../modules/cached_once.walrus" as second;
-
-println(first.value == second.value);

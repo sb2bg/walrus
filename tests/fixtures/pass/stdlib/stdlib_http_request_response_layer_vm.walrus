@@ -1,0 +1,38 @@
+import "std/net" as net;
+import "std/http" as http;
+import "std/core" as core;
+
+let pairs = http.parse_query_pairs("q=hello+world&q=two&x=%2Fhome");
+println(core.len(pairs));
+println(pairs[0][0]);
+println(pairs[0][1]);
+println(pairs[1][1]);
+println(pairs[2][1]);
+
+let listener = net.tcp_bind("127.0.0.1", 0);
+let port = net.tcp_local_port(listener);
+
+let client = await net.tcp_connect("127.0.0.1", port);
+let server = await net.tcp_accept(listener);
+
+let raw = "GET /search?q=hello+world&q=two&x=%2Fhome HTTP/1.1\r\nHost: localhost\r\nX-Test: first\r\nX-Test: second\r\n\r\n";
+await net.tcp_write(client, raw);
+
+let req = await http.read_request(server, 0);
+println(req["ok"]);
+println(req["query_pairs"][0][1]);
+println(req["query_pairs"][1][1]);
+println(req["query_pairs"][2][1]);
+println(req["header_pairs"][0][0]);
+println(req["header_pairs"][1][0]);
+println(req["header_pairs"][2][1]);
+
+let resp = http.make_response(201, "ok");
+println(resp["status"]);
+println(resp["body"]);
+await net.tcp_write(server, http.serialize_response(resp));
+println(await net.tcp_read_line(client));
+
+net.tcp_close(client);
+net.tcp_close(server);
+net.tcp_close_listener(listener);

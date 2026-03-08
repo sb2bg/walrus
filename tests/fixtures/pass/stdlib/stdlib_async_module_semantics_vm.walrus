@@ -1,0 +1,9 @@
+import "std/async" as asyncx;
+import "std/core" as core;
+
+println(core.type(asyncx));
+println(core.type(asyncx.spawn));
+println(core.len(asyncx) >= 4);
+println(core.type(asyncx["timeout"]));
+println(core.type(asyncx.cancel));
+println(core.type(asyncx.cancelled));

@@ -1,0 +1,5 @@
+import "std/async" as asyncx;
+
+let task = asyncx.sleep(20);
+asyncx.cancel(task);
+println(await task);

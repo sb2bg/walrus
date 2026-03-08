@@ -1,0 +1,7 @@
+import "std/async" as asyncx;
+
+async fn a : { return "first"; }
+async fn b : { return "second"; }
+
+let winner = await asyncx.race([a(), b()]);
+println(winner);

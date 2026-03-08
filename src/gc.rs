@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use rustc_hash::FxHashSet;
 
 use crate::arenas::{
-    DictKey, FuncKey, IterKey, ListKey, StringKey, StructDefKey, StructInstKey, TupleKey,
+    DictKey, FuncKey, IterKey, ListKey, StringKey, StructDefKey, StructInstKey, TaskKey, TupleKey,
 };
 use crate::value::Value;
 
@@ -44,16 +44,11 @@ pub fn get_memory_threshold() -> usize {
     MEMORY_THRESHOLD.load(Ordering::Relaxed)
 }
 
-/// Set the memory threshold in bytes (returns the old value)
-pub fn set_memory_threshold(threshold: usize) -> usize {
-    MEMORY_THRESHOLD.swap(threshold, Ordering::Relaxed)
-}
-
 /// Size of a Value on the stack (used for estimating container overhead)
 pub const VALUE_SIZE: usize = size_of::<Value>();
 
 /// Estimate memory used by a list (in bytes)
-pub fn estimate_list_size(len: usize, capacity: usize) -> usize {
+pub fn estimate_list_size(_len: usize, capacity: usize) -> usize {
     // Vec overhead + capacity * element size
     size_of::<Vec<Value>>() + capacity * VALUE_SIZE
 }
@@ -76,6 +71,11 @@ pub fn estimate_function_size(bytecode_len: usize, constants_len: usize) -> usiz
     64 + bytecode_len * 16 + constants_len * VALUE_SIZE
 }
 
+/// Estimate memory for an async task.
+pub fn estimate_task_size(arg_count: usize) -> usize {
+    48 + arg_count * VALUE_SIZE
+}
+
 /// Estimate memory for a struct instance
 pub fn estimate_struct_instance_size(field_count: usize) -> usize {
     // Name string + hashmap of fields
@@ -95,6 +95,8 @@ pub struct GcState {
     marked_functions: FxHashSet<FuncKey>,
     /// Set of marked iterator keys
     marked_iters: FxHashSet<IterKey>,
+    /// Set of marked async task keys
+    marked_tasks: FxHashSet<TaskKey>,
     /// Set of marked struct definition keys
     marked_struct_defs: FxHashSet<StructDefKey>,
     /// Set of marked struct instance keys
@@ -125,12 +127,6 @@ impl GcState {
 
         self.allocation_count >= get_allocation_threshold()
             || self.bytes_allocated >= get_memory_threshold()
-    }
-
-    /// Record an allocation without byte tracking (backwards compat)
-    #[inline]
-    pub fn record_allocation_simple(&mut self) -> bool {
-        self.record_allocation(0)
     }
 
     /// Reset counters after GC, recording stats
@@ -168,6 +164,7 @@ impl GcState {
         self.marked_dicts.clear();
         self.marked_functions.clear();
         self.marked_iters.clear();
+        self.marked_tasks.clear();
         self.marked_struct_defs.clear();
         self.marked_struct_insts.clear();
         self.marked_strings.clear();
@@ -182,6 +179,7 @@ impl GcState {
             Value::Module(key) => self.marked_dicts.insert(key),
             Value::Function(key) => self.marked_functions.insert(key),
             Value::Iter(key) => self.marked_iters.insert(key),
+            Value::Task(key) => self.marked_tasks.insert(key),
             Value::StructDef(key) => self.marked_struct_defs.insert(key),
             Value::StructInst(key) => self.marked_struct_insts.insert(key),
             Value::String(key) => self.marked_strings.insert(key),
@@ -215,6 +213,11 @@ impl GcState {
     /// Check if an iterator is marked
     pub fn is_iter_marked(&self, key: IterKey) -> bool {
         self.marked_iters.contains(&key)
+    }
+
+    /// Check if an async task is marked
+    pub fn is_task_marked(&self, key: TaskKey) -> bool {
+        self.marked_tasks.contains(&key)
     }
 
     /// Check if a struct definition is marked

@@ -1,0 +1,6 @@
+import "../../modules/internal_core_struct.walrus" as m;
+
+println(core.len(m));
+println(m.answer);
+println(m.list_len([1, 2, 3]));
+println(m.parse_len("abcd"));

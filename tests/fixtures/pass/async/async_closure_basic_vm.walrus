@@ -1,0 +1,3 @@
+let bump = async : x { return x + 1; };
+let task = bump(41);
+println(await task);

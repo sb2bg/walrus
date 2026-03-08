@@ -1,0 +1,26 @@
+import "std/http" as http;
+import "std/core" as core;
+
+let parsed = http.parse_request_line("GET /users/42?active=true HTTP/1.1");
+println(parsed["ok"]);
+println(parsed["method"]);
+println(parsed["path"]);
+println(parsed["query"]);
+println(parsed["version"]);
+
+let query = http.parse_query(parsed["query"]);
+println(query["active"]);
+
+println(http.normalize_path("///users//42///"));
+
+let matched = http.match_route("/users/:id", "/users/42");
+println(matched["found"]);
+println(matched["params"]["id"]);
+
+let wildcard = http.match_route("/assets/*", "/assets/js/app.js");
+println(wildcard["found"]);
+println(wildcard["wildcard"]);
+
+let bad = http.parse_request_line("BROKEN");
+println(bad["ok"]);
+println(core.len(bad["error"]) > 0);

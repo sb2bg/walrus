@@ -168,8 +168,6 @@ pub struct HotSpotDetector {
 /// Information about a detected loop
 #[derive(Debug, Clone)]
 struct LoopInfo {
-    /// IP of the backward jump instruction
-    back_edge_ip: usize,
     /// IP of the exit (jump target when loop ends)
     exit_ip: usize,
 }
@@ -182,13 +180,7 @@ impl HotSpotDetector {
     /// Register a loop detected during bytecode analysis
     /// Called when we see a backward jump (Jump or JumpIfFalse to earlier IP)
     pub fn register_loop(&mut self, header_ip: usize, back_edge_ip: usize, exit_ip: usize) {
-        self.loop_headers.insert(
-            header_ip,
-            LoopInfo {
-                back_edge_ip,
-                exit_ip,
-            },
-        );
+        self.loop_headers.insert(header_ip, LoopInfo { exit_ip });
 
         let kind = HotSpotKind::Loop {
             header_ip,

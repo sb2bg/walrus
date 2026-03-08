@@ -1,0 +1,7 @@
+import "std/async" as asyncx;
+
+async fn good : { return "winner"; }
+async fn bad : { throw "loser"; }
+
+let result = await asyncx.race([bad(), good()]);
+println(result);
