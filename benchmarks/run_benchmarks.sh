@@ -42,26 +42,43 @@ for walrus_file in "$SCRIPT_DIR"/*.walrus; do
         # Run Python
         echo ""
         echo "--- Python ---"
-        py_output=$( { /usr/bin/time -p python3 "$python_file"; } 2>&1 )
+        if py_output=$( { /usr/bin/time -p python3 "$python_file"; } 2>&1 ); then
+            py_ok=1
+        else
+            py_ok=0
+        fi
         py_time=$(echo "$py_output" | grep "^real" | awk '{print $2}')
         echo "$py_output" | grep -v "^real\|^user\|^sys"
-        echo "Time: ${py_time}s"
+        if [ "$py_ok" -eq 1 ]; then
+            echo "Time: ${py_time}s"
+        else
+            echo -e "${RED}Python benchmark failed${NC}"
+        fi
         
         # Run Walrus
         echo ""
         echo "--- Walrus ---"
-        wal_output=$( { /usr/bin/time -p "$WALRUS" "$walrus_file"; } 2>&1 )
+        if wal_output=$( { /usr/bin/time -p "$WALRUS" "$walrus_file"; } 2>&1 ); then
+            wal_ok=1
+        else
+            wal_ok=0
+        fi
         wal_time=$(echo "$wal_output" | grep "^real" | awk '{print $2}')
         echo "$wal_output" | grep -v "^real\|^user\|^sys"
-        echo "Time: ${wal_time}s"
+        if [ "$wal_ok" -eq 1 ]; then
+            echo "Time: ${wal_time}s"
+        else
+            echo -e "${RED}Walrus benchmark failed${NC}"
+        fi
         
         # Compare
-        if [ -n "$py_time" ] && [ -n "$wal_time" ]; then
+        if [ "$py_ok" -eq 1 ] && [ "$wal_ok" -eq 1 ] && [ -n "$py_time" ] && [ -n "$wal_time" ]; then
             ratio=$(echo "scale=2; $wal_time / $py_time" | bc 2>/dev/null)
-            if [ -n "$ratio" ]; then
+            if [ -n "$ratio" ] && [ "$ratio" != "0" ]; then
                 echo ""
                 if (( $(echo "$ratio < 1" | bc -l) )); then
-                    echo -e "${GREEN}Walrus is ${ratio}x faster${NC}"
+                    speedup=$(echo "scale=2; $py_time / $wal_time" | bc 2>/dev/null)
+                    echo -e "${GREEN}Walrus is ${speedup}x faster${NC}"
                 else
                     echo -e "${RED}Python is ${ratio}x faster${NC}"
                 fi

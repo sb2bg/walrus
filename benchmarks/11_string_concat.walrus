@@ -6,7 +6,7 @@ fn string_benchmark : n {
     for i in 0..n {
         result = result + "a";
     }
-    return len(result);
+    return core.len(result);
 }
 
 let length = string_benchmark(10000);
