@@ -11,7 +11,6 @@ use crate::error::WalrusError;
 use crate::span::Span;
 use crate::value::{IoHttpOutcome, IoHttpRequest};
 
-use super::shared_tcp_stream;
 pub struct HttpRequestLine {
     pub method: String,
     pub target: String,
@@ -293,32 +292,6 @@ pub fn http_build_response(
         })?;
 
     Ok(serialize_http_response(&response))
-}
-
-pub fn http_read_request(
-    stream_handle: i64,
-    max_body_bytes: i64,
-    _span: Span,
-) -> WalrusResult<HttpReadOutcome> {
-    if max_body_bytes < 0 {
-        return Err(WalrusError::GenericError {
-            message: format!(
-                "http.read_request: max_body_bytes must be >= 0, got {max_body_bytes}"
-            ),
-        });
-    }
-    let max_body_bytes =
-        usize::try_from(max_body_bytes).map_err(|_| WalrusError::GenericError {
-            message: "http.read_request: max_body_bytes cannot be represented on this platform"
-                .to_string(),
-        })?;
-
-    let stream = shared_tcp_stream(stream_handle).ok_or_else(|| WalrusError::GenericError {
-        message: format!("http.read_request: invalid stream handle {stream_handle}"),
-    })?;
-
-    http_read_request_from_shared_stream(&stream, max_body_bytes)
-        .map_err(|message| WalrusError::GenericError { message })
 }
 
 pub fn http_read_request_from_shared_stream(

@@ -4,32 +4,6 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ExecMode {
-    Vm,
-    Interpreted,
-}
-
-impl ExecMode {
-    fn all() -> [Self; 2] {
-        [Self::Vm, Self::Interpreted]
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::Vm => "vm",
-            Self::Interpreted => "interpreted",
-        }
-    }
-
-    fn cli_args(self) -> &'static [&'static str] {
-        match self {
-            Self::Vm => &[],
-            Self::Interpreted => &["--interpreted"],
-        }
-    }
-}
-
 #[derive(Debug)]
 enum Expectation {
     Stdout(String),
@@ -41,41 +15,23 @@ struct Case {
     name: String,
     program: PathBuf,
     expectation: Expectation,
-    modes: Vec<ExecMode>,
     expected_exit_code: Option<i32>,
     env_vars: Vec<(String, String)>,
     stdin_bytes: Option<Vec<u8>>,
 }
 
 #[test]
-fn vm_language_suite() {
-    run_suite(ExecMode::Vm);
-}
-
-#[test]
-fn interpreted_language_suite() {
-    run_suite(ExecMode::Interpreted);
-}
-
-fn run_suite(mode: ExecMode) {
+fn language_suite() {
     let mut failures = Vec::new();
 
     for case in discover_cases() {
-        if !case.modes.contains(&mode) {
-            continue;
-        }
-
-        if let Err(message) = run_case(&case, mode) {
+        if let Err(message) = run_case(&case) {
             failures.push(message);
         }
     }
 
     if !failures.is_empty() {
-        let mut message = format!(
-            "{} fixture(s) failed while running in {} mode:\n",
-            failures.len(),
-            mode.label()
-        );
+        let mut message = format!("{} fixture(s) failed:\n", failures.len());
 
         for (index, failure) in failures.iter().enumerate() {
             let _ = writeln!(&mut message, "\n{}. {}", index + 1, failure);
@@ -170,7 +126,6 @@ fn load_case(fixtures_root: &Path, program: &Path, is_pass: bool) -> Case {
         Expectation::StderrContains(expected_stderr)
     };
 
-    let modes = read_modes(program);
     let expected_exit_code = read_exit_code(program);
     let env_vars = read_env_vars(program);
     let stdin_bytes = read_stdin(program);
@@ -187,54 +142,9 @@ fn load_case(fixtures_root: &Path, program: &Path, is_pass: bool) -> Case {
         name: relative.to_string_lossy().replace('\\', "/"),
         program: program.to_path_buf(),
         expectation,
-        modes,
         expected_exit_code,
         env_vars,
         stdin_bytes,
-    }
-}
-
-fn read_modes(program: &Path) -> Vec<ExecMode> {
-    let modes_path = program.with_extension("modes");
-    if !modes_path.exists() {
-        return ExecMode::all().to_vec();
-    }
-
-    let text = fs::read_to_string(&modes_path)
-        .unwrap_or_else(|err| panic!("failed to read mode file '{}': {err}", modes_path.display()));
-
-    let mut modes = Vec::new();
-
-    for raw_line in text.lines() {
-        let line = raw_line.split('#').next().unwrap_or("").trim();
-        if line.is_empty() {
-            continue;
-        }
-
-        match line {
-            "both" => return ExecMode::all().to_vec(),
-            "vm" => push_unique_mode(&mut modes, ExecMode::Vm),
-            "interpreted" => push_unique_mode(&mut modes, ExecMode::Interpreted),
-            _ => panic!(
-                "invalid mode '{line}' in '{}'; expected one of: vm, interpreted, both",
-                modes_path.display()
-            ),
-        }
-    }
-
-    if modes.is_empty() {
-        panic!(
-            "mode file '{}' is empty; expected one of: vm, interpreted, both",
-            modes_path.display()
-        );
-    }
-
-    modes
-}
-
-fn push_unique_mode(modes: &mut Vec<ExecMode>, mode: ExecMode) {
-    if !modes.contains(&mode) {
-        modes.push(mode);
     }
 }
 
@@ -302,9 +212,8 @@ fn read_stdin(program: &Path) -> Option<Vec<u8>> {
     Some(bytes)
 }
 
-fn run_case(case: &Case, mode: ExecMode) -> Result<(), String> {
-    let output = run_program(case, mode)
-        .map_err(|err| format!("{} [{}]: {err}", case.name, mode.label()))?;
+fn run_case(case: &Case) -> Result<(), String> {
+    let output = run_program(case).map_err(|err| format!("{}: {err}", case.name))?;
 
     let stdout = normalize(&String::from_utf8_lossy(&output.stdout));
     let stderr = normalize(&String::from_utf8_lossy(&output.stderr));
@@ -313,9 +222,8 @@ fn run_case(case: &Case, mode: ExecMode) -> Result<(), String> {
     if let Some(expected_exit) = case.expected_exit_code {
         if actual_exit != Some(expected_exit) {
             return Err(format!(
-                "{} [{}]: exit code mismatch\nexpected: {}\nactual: {}\n\nstderr:\n{}",
+                "{}: exit code mismatch\nexpected: {}\nactual: {}\n\nstderr:\n{}",
                 case.name,
-                mode.label(),
                 expected_exit,
                 format_exit_code(actual_exit),
                 stderr
@@ -323,9 +231,8 @@ fn run_case(case: &Case, mode: ExecMode) -> Result<(), String> {
         }
     } else if matches!(case.expectation, Expectation::Stdout(_)) && !output.status.success() {
         return Err(format!(
-            "{} [{}]: expected successful exit, got {}\n\nstderr:\n{}",
+            "{}: expected successful exit, got {}\n\nstderr:\n{}",
             case.name,
-            mode.label(),
             format_exit_code(actual_exit),
             stderr
         ));
@@ -337,20 +244,15 @@ fn run_case(case: &Case, mode: ExecMode) -> Result<(), String> {
 
             if !stderr.is_empty() {
                 return Err(format!(
-                    "{} [{}]: expected no stderr, but got:\n{}",
-                    case.name,
-                    mode.label(),
-                    stderr
+                    "{}: expected no stderr, but got:\n{}",
+                    case.name, stderr
                 ));
             }
 
             if stdout != expected {
                 return Err(format!(
-                    "{} [{}]: stdout mismatch\nexpected:\n{}\n\nactual:\n{}",
-                    case.name,
-                    mode.label(),
-                    expected,
-                    stdout
+                    "{}: stdout mismatch\nexpected:\n{}\n\nactual:\n{}",
+                    case.name, expected, stdout
                 ));
             }
         }
@@ -358,12 +260,8 @@ fn run_case(case: &Case, mode: ExecMode) -> Result<(), String> {
             let expected = expected_snippet.trim();
             if !stderr.contains(expected) {
                 return Err(format!(
-                    "{} [{}]: stderr did not contain expected snippet\nexpected snippet:\n{}\n\nactual stderr:\n{}\n\nstdout:\n{}",
-                    case.name,
-                    mode.label(),
-                    expected,
-                    stderr,
-                    stdout
+                    "{}: stderr did not contain expected snippet\nexpected snippet:\n{}\n\nactual stderr:\n{}\n\nstdout:\n{}",
+                    case.name, expected, stderr, stdout
                 ));
             }
         }
@@ -372,14 +270,10 @@ fn run_case(case: &Case, mode: ExecMode) -> Result<(), String> {
     Ok(())
 }
 
-fn run_program(case: &Case, mode: ExecMode) -> Result<Output, String> {
+fn run_program(case: &Case) -> Result<Output, String> {
     let mut command = Command::new(env!("CARGO_BIN_EXE_walrus"));
     command.current_dir(repo_root());
     command.arg(&case.program);
-
-    for arg in mode.cli_args() {
-        command.arg(arg);
-    }
 
     for (key, value) in &case.env_vars {
         command.env(key, value);

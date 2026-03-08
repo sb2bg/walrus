@@ -44,16 +44,11 @@ pub fn get_memory_threshold() -> usize {
     MEMORY_THRESHOLD.load(Ordering::Relaxed)
 }
 
-/// Set the memory threshold in bytes (returns the old value)
-pub fn set_memory_threshold(threshold: usize) -> usize {
-    MEMORY_THRESHOLD.swap(threshold, Ordering::Relaxed)
-}
-
 /// Size of a Value on the stack (used for estimating container overhead)
 pub const VALUE_SIZE: usize = size_of::<Value>();
 
 /// Estimate memory used by a list (in bytes)
-pub fn estimate_list_size(len: usize, capacity: usize) -> usize {
+pub fn estimate_list_size(_len: usize, capacity: usize) -> usize {
     // Vec overhead + capacity * element size
     size_of::<Vec<Value>>() + capacity * VALUE_SIZE
 }
@@ -132,12 +127,6 @@ impl GcState {
 
         self.allocation_count >= get_allocation_threshold()
             || self.bytes_allocated >= get_memory_threshold()
-    }
-
-    /// Record an allocation without byte tracking (backwards compat)
-    #[inline]
-    pub fn record_allocation_simple(&mut self) -> bool {
-        self.record_allocation(0)
     }
 
     /// Reset counters after GC, recording stats

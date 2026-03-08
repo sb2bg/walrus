@@ -2,7 +2,6 @@ use crate::ast::{Node, NodeKind};
 use crate::vm::opcode::Opcode;
 use crate::span::{Span, Spanned};
 use crate::error::{RecoveredParseError, parse_int, parse_float, escape_string, parse_fstring};
-use lalrpop_util::ErrorRecovery;
 
 grammar;
 

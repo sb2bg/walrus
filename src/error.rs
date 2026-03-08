@@ -817,15 +817,6 @@ pub enum WalrusError {
         filename: String,
     },
 
-    #[error("Cannot execute node-based function bodies in the VM runtime at {}",
-        get_line(src, filename, *span)
-    )]
-    NodeFunctionNotSupportedInVm {
-        span: Span,
-        src: String,
-        filename: String,
-    },
-
     #[error("Struct methods must compile to VM bytecode functions at {}",
         get_line(src, filename, *span)
     )]

@@ -1,81 +1,8 @@
-use rustc_hash::FxHashMap;
-
 use crate::arenas::DictKey;
-use crate::ast::Node;
-use crate::interpreter::InterpreterResult;
-use crate::source_ref::SourceRef;
-use crate::span::Span;
 use crate::value::Value;
 use crate::vm::instruction_set::InstructionSet;
 use std::fmt::Display;
 use std::rc::Rc;
-
-#[derive(Debug, Clone)]
-pub struct RustFunction {
-    pub name: String,
-    pub args: usize,
-    func: fn(Vec<Value>, SourceRef, span: Span) -> InterpreterResult,
-}
-
-impl RustFunction {
-    pub fn new(
-        name: String,
-        args: usize,
-        func: fn(Vec<Value>, SourceRef, Span) -> InterpreterResult,
-    ) -> Self {
-        Self { name, args, func }
-    }
-
-    pub fn call(&self, args: Vec<Value>, source_ref: SourceRef, span: Span) -> InterpreterResult {
-        (self.func)(args, source_ref, span)
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct NodeFunction {
-    pub name: String,
-    pub args: Vec<String>,
-    pub body: Node,
-    pub is_async: bool,
-    /// Captured variables from the enclosing scope (for closures)
-    pub captures: FxHashMap<String, Value>,
-}
-
-impl NodeFunction {
-    pub fn new(name: String, args: Vec<String>, node: Node) -> Self {
-        Self::new_with_async(name, args, node, false)
-    }
-
-    pub fn new_async(name: String, args: Vec<String>, node: Node) -> Self {
-        Self::new_with_async(name, args, node, true)
-    }
-
-    fn new_with_async(name: String, args: Vec<String>, node: Node, is_async: bool) -> Self {
-        Self {
-            name,
-            args,
-            body: node,
-            is_async,
-            captures: FxHashMap::default(),
-        }
-    }
-
-    pub fn new_with_captures(
-        name: String,
-        args: Vec<String>,
-        node: Node,
-        is_async: bool,
-        captures: FxHashMap<String, Value>,
-    ) -> Self {
-        Self {
-            name,
-            args,
-            body: node,
-            is_async,
-            captures,
-        }
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct VmModuleBinding {
@@ -117,8 +44,6 @@ impl VmFunction {
 
 #[derive(Debug, Clone)]
 pub enum WalrusFunction {
-    Rust(RustFunction),
-    TreeWalk(NodeFunction),
     Vm(VmFunction),
     Native(NativeFunction),
 }
@@ -269,14 +194,6 @@ impl Display for WalrusFunction {
             f,
             "{}",
             match self {
-                WalrusFunction::Rust(func) => format!("<builtin_function({})>", func.name),
-                WalrusFunction::TreeWalk(func) => {
-                    if func.is_async {
-                        format!("<async_function({})>", func.name)
-                    } else {
-                        format!("<function({})>", func.name)
-                    }
-                }
                 WalrusFunction::Vm(func) => {
                     if func.is_async {
                         format!("<async_function({})>", func.name)
@@ -293,8 +210,6 @@ impl Display for WalrusFunction {
 impl PartialEq for WalrusFunction {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (WalrusFunction::Rust(f1), WalrusFunction::Rust(f2)) => cmp(f1, f2),
-            (WalrusFunction::TreeWalk(f1), WalrusFunction::TreeWalk(f2)) => cmp(f1, f2),
             (WalrusFunction::Vm(f1), WalrusFunction::Vm(f2)) => cmp(f1, f2),
             (WalrusFunction::Native(f1), WalrusFunction::Native(f2)) => f1 == f2,
             _ => false,

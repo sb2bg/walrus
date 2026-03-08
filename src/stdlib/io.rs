@@ -35,11 +35,7 @@ pub fn file_open(path: &str, mode: &str, _span: Span) -> WalrusResult<Value> {
 
     match file {
         Ok(f) => {
-            let handle = FILE_TABLE.with(|table| {
-                table
-                    .borrow_mut()
-                    .insert(f, path.to_string(), mode.to_string())
-            });
+            let handle = FILE_TABLE.with(|table| table.borrow_mut().insert(f));
             Ok(Value::Int(handle))
         }
         Err(e) => Err(WalrusError::FileOpenFailed {
@@ -150,16 +146,6 @@ pub fn file_close(handle: i64, _span: Span) -> WalrusResult<()> {
 /// Check if a file exists
 pub fn file_exists(path: &str) -> bool {
     Path::new(path).exists()
-}
-
-/// Check if a path is a directory
-pub fn is_dir(path: &str) -> bool {
-    Path::new(path).is_dir()
-}
-
-/// Check if a path is a file
-pub fn is_file(path: &str) -> bool {
-    Path::new(path).is_file()
 }
 
 /// Read entire file as string (convenience function - opens, reads, closes)
