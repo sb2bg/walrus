@@ -474,8 +474,23 @@ impl<'a> VM<'a> {
     }
 
     fn deep_clone_value(&mut self, value: Value) -> WalrusResult<Value> {
-        let mut memo = FxHashMap::default();
-        self.deep_clone_value_with_memo(value, &mut memo)
+        match value {
+            Value::Int(_)
+            | Value::Float(_)
+            | Value::Bool(_)
+            | Value::Range(_)
+            | Value::String(_)
+            | Value::Function(_)
+            | Value::StructDef(_)
+            | Value::Module(_)
+            | Value::Iter(_)
+            | Value::Task(_)
+            | Value::Void => Ok(value),
+            _ => {
+                let mut memo = FxHashMap::default();
+                self.deep_clone_value_with_memo(value, &mut memo)
+            }
+        }
     }
 
     #[inline(always)]
@@ -1525,7 +1540,9 @@ impl<'a> VM<'a> {
                     self.push_local_value(arg);
                     self.ip = 0;
                 }
-                Opcode::CallMemoizedSelf1 => {
+                Opcode::CallMemoizedSelf1 | Opcode::CallMemoizedCloneSelf1 => {
+                    let clone_on_return = matches!(opcode, Opcode::CallMemoizedCloneSelf1);
+
                     if self.stack.is_empty() {
                         return Err(WalrusError::StackUnderflow {
                             op: opcode,
@@ -1539,7 +1556,12 @@ impl<'a> VM<'a> {
                     let cache_key = self.pure_function_arg_key(arg);
                     if let Some(&value) = self.pure_call_cache.get(&cache_key) {
                         self.pop_unchecked();
-                        self.push(value);
+                        let result = if clone_on_return {
+                            self.deep_clone_value(value)?
+                        } else {
+                            value
+                        };
+                        self.push(result);
                         continue;
                     }
 
@@ -1559,49 +1581,7 @@ impl<'a> VM<'a> {
                         module_binding,
                         awaiting_task: None,
                         memoize_result_key: Some(cache_key),
-                        memoize_clone_on_return: false,
-                    };
-
-                    self.call_stack.push(new_frame);
-                    self.push_local_value(arg);
-                    self.ip = 0;
-                }
-                Opcode::CallMemoizedCloneSelf1 => {
-                    if self.stack.is_empty() {
-                        return Err(WalrusError::StackUnderflow {
-                            op: opcode,
-                            span,
-                            src: self.source_ref.source().to_string(),
-                            filename: self.source_ref.filename().to_string(),
-                        });
-                    }
-
-                    let arg = *self.stack.last().expect("checked stack len above");
-                    let cache_key = self.pure_function_arg_key(arg);
-                    if let Some(&value) = self.pure_call_cache.get(&cache_key) {
-                        self.pop_unchecked();
-                        let cloned = self.deep_clone_value(value)?;
-                        self.push(cloned);
-                        continue;
-                    }
-
-                    let arg = self.pop_unchecked();
-                    let (instructions, module_binding) = {
-                        let frame = self.current_frame();
-                        (Rc::clone(&frame.instructions), frame.module_binding.clone())
-                    };
-
-                    let new_frame = CallFrame {
-                        return_ip: self.ip,
-                        frame_pointer: self.locals.len(),
-                        stack_pointer: self.stack.len(),
-                        instructions,
-                        function_name: String::new(),
-                        return_override: None,
-                        module_binding,
-                        awaiting_task: None,
-                        memoize_result_key: Some(cache_key),
-                        memoize_clone_on_return: true,
+                        memoize_clone_on_return: clone_on_return,
                     };
 
                     self.call_stack.push(new_frame);
@@ -4335,6 +4315,30 @@ impl<'a> VM<'a> {
         Ok(())
     }
 
+    fn cached_dict_lookup(&self, dict: &DictValue, index: Value, cache_ip: usize) -> Option<Value> {
+        match index {
+            Value::String(key) => {
+                if let Some(slot) = self.current_frame().instructions.cached_dict_slot(cache_ip) {
+                    if let Some(value) = dict.get_string_key_at_slot(slot, key) {
+                        return Some(value);
+                    }
+                }
+                let found = dict.find_string_key_with_slot(key);
+                if let Some((slot, value)) = found {
+                    if slot != u8::MAX {
+                        self.current_frame()
+                            .instructions
+                            .set_cached_dict_slot(cache_ip, Some(slot));
+                    }
+                    Some(value)
+                } else {
+                    None
+                }
+            }
+            other => dict.get(&other).copied(),
+        }
+    }
+
     fn lookup_const_index_value(
         &mut self,
         object: Value,
@@ -4342,44 +4346,11 @@ impl<'a> VM<'a> {
         opcode: Opcode,
         span: Span,
     ) -> WalrusResult<Value> {
+        let cache_ip = self.ip.saturating_sub(1);
         match object {
             Value::Dict(dict_key) => {
                 let dict = self.get_heap().get_dict(dict_key)?;
-                let cache_ip = self.ip.saturating_sub(1);
-                let value = match index {
-                    Value::String(key) => {
-                        if let Some(slot) =
-                            self.current_frame().instructions.cached_dict_slot(cache_ip)
-                        {
-                            if let Some(value) = dict.get_string_key_at_slot(slot, key) {
-                                Some(value)
-                            } else {
-                                let found = dict.find_string_key_with_slot(key);
-                                if let Some((slot, value)) = found {
-                                    if slot != u8::MAX {
-                                        self.current_frame()
-                                            .instructions
-                                            .set_cached_dict_slot(cache_ip, Some(slot));
-                                    }
-                                    Some(value)
-                                } else {
-                                    None
-                                }
-                            }
-                        } else if let Some((slot, value)) = dict.find_string_key_with_slot(key) {
-                            if slot != u8::MAX {
-                                self.current_frame()
-                                    .instructions
-                                    .set_cached_dict_slot(cache_ip, Some(slot));
-                            }
-                            Some(value)
-                        } else {
-                            None
-                        }
-                    }
-                    other => dict.get(&other).copied(),
-                };
-
+                let value = self.cached_dict_lookup(dict, index, cache_ip);
                 if let Some(value) = value {
                     Ok(value)
                 } else {
@@ -4394,41 +4365,7 @@ impl<'a> VM<'a> {
             }
             Value::Module(module_key) => {
                 let module = self.get_heap().get_module(module_key)?;
-                let cache_ip = self.ip.saturating_sub(1);
-                let value = match index {
-                    Value::String(key) => {
-                        if let Some(slot) =
-                            self.current_frame().instructions.cached_dict_slot(cache_ip)
-                        {
-                            if let Some(value) = module.get_string_key_at_slot(slot, key) {
-                                Some(value)
-                            } else {
-                                let found = module.find_string_key_with_slot(key);
-                                if let Some((slot, value)) = found {
-                                    if slot != u8::MAX {
-                                        self.current_frame()
-                                            .instructions
-                                            .set_cached_dict_slot(cache_ip, Some(slot));
-                                    }
-                                    Some(value)
-                                } else {
-                                    None
-                                }
-                            }
-                        } else if let Some((slot, value)) = module.find_string_key_with_slot(key) {
-                            if slot != u8::MAX {
-                                self.current_frame()
-                                    .instructions
-                                    .set_cached_dict_slot(cache_ip, Some(slot));
-                            }
-                            Some(value)
-                        } else {
-                            None
-                        }
-                    }
-                    other => module.get(&other).copied(),
-                };
-
+                let value = self.cached_dict_lookup(module, index, cache_ip);
                 if let Some(value) = value {
                     Ok(value)
                 } else {

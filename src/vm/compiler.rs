@@ -872,39 +872,44 @@ impl<'a> BytecodeEmitter<'a> {
             && self.node_guarantees_cloneable_return(body, name)
     }
 
-    fn recursive_call_count(&self, node: &Node, recursive_name: &str) -> usize {
+    fn count_recursive_calls(&self, node: &Node, recursive_name: &str, count: &mut usize) {
+        if *count >= 2 {
+            return;
+        }
         match node.kind() {
             NodeKind::FunctionCall(func, args) => {
-                let self_calls =
-                    matches!(func.kind(), NodeKind::Ident(name) if name == recursive_name) as usize;
-                self_calls
-                    + args
-                        .iter()
-                        .map(|arg| self.recursive_call_count(arg, recursive_name))
-                        .sum::<usize>()
-                    + self.recursive_call_count(func, recursive_name)
+                if matches!(func.kind(), NodeKind::Ident(name) if name == recursive_name) {
+                    *count += 1;
+                    if *count >= 2 {
+                        return;
+                    }
+                }
+                self.count_recursive_calls(func, recursive_name, count);
+                for arg in args {
+                    self.count_recursive_calls(arg, recursive_name, count);
+                }
             }
             NodeKind::Program(nodes)
             | NodeKind::Statements(nodes)
             | NodeKind::UnscopedStatements(nodes)
             | NodeKind::Block(nodes)
-            | NodeKind::List(nodes) => nodes
-                .iter()
-                .map(|node| self.recursive_call_count(node, recursive_name))
-                .sum(),
-            NodeKind::Dict(entries) => entries
-                .iter()
-                .map(|(key, value)| {
-                    self.recursive_call_count(key, recursive_name)
-                        + self.recursive_call_count(value, recursive_name)
-                })
-                .sum(),
+            | NodeKind::List(nodes) => {
+                for node in nodes {
+                    self.count_recursive_calls(node, recursive_name, count);
+                }
+            }
+            NodeKind::Dict(entries) => {
+                for (key, value) in entries {
+                    self.count_recursive_calls(key, recursive_name, count);
+                    self.count_recursive_calls(value, recursive_name, count);
+                }
+            }
             NodeKind::BinOp(left, _, right)
             | NodeKind::Index(left, right)
             | NodeKind::Range(Some(left), right)
             | NodeKind::Try(left, _, right) => {
-                self.recursive_call_count(left, recursive_name)
-                    + self.recursive_call_count(right, recursive_name)
+                self.count_recursive_calls(left, recursive_name, count);
+                self.count_recursive_calls(right, recursive_name, count);
             }
             NodeKind::UnaryOp(_, expr)
             | NodeKind::ExpressionStatement(expr)
@@ -916,44 +921,48 @@ impl<'a> BytecodeEmitter<'a> {
             | NodeKind::Print(expr)
             | NodeKind::Println(expr)
             | NodeKind::Throw(expr)
-            | NodeKind::MemberAccess(expr, _) => self.recursive_call_count(expr, recursive_name),
+            | NodeKind::MemberAccess(expr, _) => {
+                self.count_recursive_calls(expr, recursive_name, count);
+            }
             NodeKind::If(condition, then_branch, else_branch) => {
-                self.recursive_call_count(condition, recursive_name)
-                    + self.recursive_call_count(then_branch, recursive_name)
-                    + else_branch.as_deref().map_or(0, |branch| {
-                        self.recursive_call_count(branch, recursive_name)
-                    })
+                self.count_recursive_calls(condition, recursive_name, count);
+                self.count_recursive_calls(then_branch, recursive_name, count);
+                if let Some(branch) = else_branch.as_deref() {
+                    self.count_recursive_calls(branch, recursive_name, count);
+                }
             }
             NodeKind::Ternary(condition, when_true, when_false) => {
-                self.recursive_call_count(condition, recursive_name)
-                    + self.recursive_call_count(when_true, recursive_name)
-                    + self.recursive_call_count(when_false, recursive_name)
+                self.count_recursive_calls(condition, recursive_name, count);
+                self.count_recursive_calls(when_true, recursive_name, count);
+                self.count_recursive_calls(when_false, recursive_name, count);
             }
-            NodeKind::While(condition, body) => {
-                self.recursive_call_count(condition, recursive_name)
-                    + self.recursive_call_count(body, recursive_name)
+            NodeKind::While(condition, body) | NodeKind::For(_, condition, body) => {
+                self.count_recursive_calls(condition, recursive_name, count);
+                self.count_recursive_calls(body, recursive_name, count);
             }
-            NodeKind::For(_, iter, body) => {
-                self.recursive_call_count(iter, recursive_name)
-                    + self.recursive_call_count(body, recursive_name)
+            NodeKind::FString(parts) => {
+                for part in parts {
+                    if let FStringPart::Expr(expr) = part {
+                        self.count_recursive_calls(expr, recursive_name, count);
+                    }
+                }
             }
-            NodeKind::FString(parts) => parts
-                .iter()
-                .map(|part| match part {
-                    FStringPart::Literal(_) => 0,
-                    FStringPart::Expr(expr) => self.recursive_call_count(expr, recursive_name),
-                })
-                .sum(),
             NodeKind::Assign(_, expr) | NodeKind::Reassign(_, expr, _) => {
-                self.recursive_call_count(expr, recursive_name)
+                self.count_recursive_calls(expr, recursive_name, count);
             }
             NodeKind::IndexAssign(object, index, value) => {
-                self.recursive_call_count(object, recursive_name)
-                    + self.recursive_call_count(index, recursive_name)
-                    + self.recursive_call_count(value, recursive_name)
+                self.count_recursive_calls(object, recursive_name, count);
+                self.count_recursive_calls(index, recursive_name, count);
+                self.count_recursive_calls(value, recursive_name, count);
             }
-            _ => 0,
+            _ => {}
         }
+    }
+
+    fn has_multiple_recursive_calls(&self, node: &Node, recursive_name: &str) -> bool {
+        let mut count = 0;
+        self.count_recursive_calls(node, recursive_name, &mut count);
+        count >= 2
     }
 
     fn instruction_set_is_pure_int(&self, name: &str, instructions: &InstructionSet) -> bool {
@@ -2720,7 +2729,7 @@ impl<'a> BytecodeEmitter<'a> {
                         }
                     }
                     if self.function_is_pure_cloneable_ast(name, args, body)
-                        && self.recursive_call_count(body, name) > 1
+                        && self.has_multiple_recursive_calls(body, name)
                     {
                         self.known_pure_cloneable_functions.insert(name.clone());
                     }
