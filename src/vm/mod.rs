@@ -2628,92 +2628,22 @@ impl<'a> VM<'a> {
                 // Specialized integer arithmetic (hot path - skips type checking)
                 // SAFETY: Compiler guarantees stack has operands and both are integers
                 Opcode::AddInt => {
-                    let b = self.pop_unchecked();
-                    let a = self.pop_unchecked();
-                    if let (Value::Int(a), Value::Int(b)) = (a, b) {
-                        self.push(Value::Int(a + b));
-                    } else {
-                        // Fallback for safety (shouldn't happen with correct compilation)
-                        return Err(WalrusError::TypeMismatch {
-                            expected: "int and int".to_string(),
-                            found: format!("{} and {}", a.get_type(), b.get_type()),
-                            span,
-                            src: self.source_ref.source().into(),
-                            filename: self.source_ref.filename().into(),
-                        });
-                    }
+                    self.int_binary_op(|a, b| a + b, span)?;
                 }
                 Opcode::AddInt1 => {
-                    let a = self.pop_unchecked();
-                    if let Value::Int(a) = a {
-                        self.push(Value::Int(a + 1));
-                    } else {
-                        return Err(WalrusError::TypeMismatch {
-                            expected: "int".to_string(),
-                            found: a.get_type().to_string(),
-                            span,
-                            src: self.source_ref.source().into(),
-                            filename: self.source_ref.filename().into(),
-                        });
-                    }
+                    self.int_unary_const_op(|a| a + 1, span)?;
                 }
                 Opcode::SubtractInt => {
-                    let b = self.pop_unchecked();
-                    let a = self.pop_unchecked();
-                    if let (Value::Int(a), Value::Int(b)) = (a, b) {
-                        self.push(Value::Int(a - b));
-                    } else {
-                        return Err(WalrusError::TypeMismatch {
-                            expected: "int and int".to_string(),
-                            found: format!("{} and {}", a.get_type(), b.get_type()),
-                            span,
-                            src: self.source_ref.source().into(),
-                            filename: self.source_ref.filename().into(),
-                        });
-                    }
+                    self.int_binary_op(|a, b| a - b, span)?;
                 }
                 Opcode::SubtractInt1 => {
-                    let a = self.pop_unchecked();
-                    if let Value::Int(a) = a {
-                        self.push(Value::Int(a - 1));
-                    } else {
-                        return Err(WalrusError::TypeMismatch {
-                            expected: "int".to_string(),
-                            found: a.get_type().to_string(),
-                            span,
-                            src: self.source_ref.source().into(),
-                            filename: self.source_ref.filename().into(),
-                        });
-                    }
+                    self.int_unary_const_op(|a| a - 1, span)?;
                 }
                 Opcode::SubtractInt2 => {
-                    let a = self.pop_unchecked();
-                    if let Value::Int(a) = a {
-                        self.push(Value::Int(a - 2));
-                    } else {
-                        return Err(WalrusError::TypeMismatch {
-                            expected: "int".to_string(),
-                            found: a.get_type().to_string(),
-                            span,
-                            src: self.source_ref.source().into(),
-                            filename: self.source_ref.filename().into(),
-                        });
-                    }
+                    self.int_unary_const_op(|a| a - 2, span)?;
                 }
                 Opcode::MultiplyInt => {
-                    let b = self.pop_unchecked();
-                    let a = self.pop_unchecked();
-                    if let (Value::Int(a), Value::Int(b)) = (a, b) {
-                        self.push(Value::Int(a * b));
-                    } else {
-                        return Err(WalrusError::TypeMismatch {
-                            expected: "int and int".to_string(),
-                            found: format!("{} and {}", a.get_type(), b.get_type()),
-                            span,
-                            src: self.source_ref.source().into(),
-                            filename: self.source_ref.filename().into(),
-                        });
-                    }
+                    self.int_binary_op(|a, b| a * b, span)?;
                 }
                 Opcode::DivideInt => {
                     let b = self.pop_unchecked();
@@ -2822,22 +2752,7 @@ impl<'a> VM<'a> {
                 Opcode::Subtract => {
                     let b = self.pop_unchecked();
                     let a = self.pop_unchecked();
-
-                    match (a, b) {
-                        (Value::Int(a), Value::Int(b)) => {
-                            self.push(Value::Int(a - b));
-                        }
-                        (Value::Float(FloatOrd(a)), Value::Float(FloatOrd(b))) => {
-                            self.push(Value::Float(FloatOrd(a - b)));
-                        }
-                        (Value::Int(a), Value::Float(FloatOrd(b))) => {
-                            self.push(Value::Float(FloatOrd(a as f64 - b)));
-                        }
-                        (Value::Float(FloatOrd(a)), Value::Int(b)) => {
-                            self.push(Value::Float(FloatOrd(a - b as f64)));
-                        }
-                        _ => return Err(self.construct_err(opcode, a, Some(b), span)),
-                    }
+                    self.numeric_binary_op(a, b, |a, b| a - b, |a, b| a - b, opcode, span)?;
                 }
                 Opcode::Multiply => {
                     let b = self.pop_unchecked();
@@ -2992,101 +2907,42 @@ impl<'a> VM<'a> {
                         self.get_heap().is_truthy(a)? || self.get_heap().is_truthy(b)?,
                     ));
                 }
-                Opcode::Equal => {
+                Opcode::Equal | Opcode::NotEqual => {
+                    let is_equal = matches!(opcode, Opcode::Equal);
                     let b = self.pop(opcode, span)?;
                     let a = self.pop(opcode, span)?;
 
-                    match (a, b) {
+                    let result = match (a, b) {
                         (Value::List(a), Value::List(b)) => {
                             let a = self.get_heap().get_list(a)?;
                             let b = self.get_heap().get_list(b)?;
-
-                            self.push(Value::Bool(a == b));
+                            a == b
                         }
                         (Value::Dict(a), Value::Dict(b)) => {
                             let a = self.get_heap().get_dict(a)?;
                             let b = self.get_heap().get_dict(b)?;
-
-                            self.push(Value::Bool(a == b));
+                            a == b
                         }
                         (Value::Module(a), Value::Module(b)) => {
                             let a = self.get_heap().get_module(a)?;
                             let b = self.get_heap().get_module(b)?;
-
-                            self.push(Value::Bool(a == b));
+                            a == b
                         }
                         (Value::Function(a), Value::Function(b)) => {
                             let a_func = self.get_heap().get_function(a)?;
                             let b_func = self.get_heap().get_function(b)?;
-
-                            self.push(Value::Bool(a_func == b_func));
+                            a_func == b_func
                         }
-                        (Value::Int(a), Value::Float(FloatOrd(b))) => {
-                            self.push(Value::Bool(a as f64 == b));
-                        }
-                        (Value::Float(FloatOrd(a)), Value::Int(b)) => {
-                            self.push(Value::Bool(a == b as f64));
-                        }
-                        _ => self.push(Value::Bool(a == b)),
-                    }
-                }
-                Opcode::NotEqual => {
-                    let b = self.pop(opcode, span)?;
-                    let a = self.pop(opcode, span)?;
-
-                    match (a, b) {
-                        (Value::List(a), Value::List(b)) => {
-                            let a = self.get_heap().get_list(a)?;
-                            let b = self.get_heap().get_list(b)?;
-
-                            self.push(Value::Bool(a != b));
-                        }
-                        (Value::Dict(a), Value::Dict(b)) => {
-                            let a = self.get_heap().get_dict(a)?;
-                            let b = self.get_heap().get_dict(b)?;
-
-                            self.push(Value::Bool(a != b));
-                        }
-                        (Value::Module(a), Value::Module(b)) => {
-                            let a = self.get_heap().get_module(a)?;
-                            let b = self.get_heap().get_module(b)?;
-
-                            self.push(Value::Bool(a != b));
-                        }
-                        (Value::Function(a), Value::Function(b)) => {
-                            let a_func = self.get_heap().get_function(a)?;
-                            let b_func = self.get_heap().get_function(b)?;
-
-                            self.push(Value::Bool(a_func != b_func));
-                        }
-                        (Value::Int(a), Value::Float(FloatOrd(b))) => {
-                            self.push(Value::Bool(a as f64 != b));
-                        }
-                        (Value::Float(FloatOrd(a)), Value::Int(b)) => {
-                            self.push(Value::Bool(a != b as f64));
-                        }
-                        _ => self.push(Value::Bool(a != b)),
-                    }
+                        (Value::Int(a), Value::Float(FloatOrd(b))) => a as f64 == b,
+                        (Value::Float(FloatOrd(a)), Value::Int(b)) => a == b as f64,
+                        _ => a == b,
+                    };
+                    self.push(Value::Bool(result == is_equal));
                 }
                 Opcode::Greater => {
                     let b = self.pop_unchecked();
                     let a = self.pop_unchecked();
-
-                    match (a, b) {
-                        (Value::Int(a), Value::Int(b)) => {
-                            self.push(Value::Bool(a > b));
-                        }
-                        (Value::Float(FloatOrd(a)), Value::Float(FloatOrd(b))) => {
-                            self.push(Value::Bool(a > b));
-                        }
-                        (Value::Float(FloatOrd(a)), Value::Int(b)) => {
-                            self.push(Value::Bool(a > b as f64));
-                        }
-                        (Value::Int(a), Value::Float(FloatOrd(b))) => {
-                            self.push(Value::Bool((a as f64) > b));
-                        }
-                        _ => return Err(self.construct_err(opcode, a, Some(b), span)),
-                    }
+                    self.compare_numeric(a, b, |a, b| a > b, |a, b| a > b, opcode, span)?;
                 }
                 Opcode::GreaterIndexLocalLocalAdd1(local_idx, index_idx) => {
                     let fp = self.frame_pointer();
@@ -3107,22 +2963,7 @@ impl<'a> VM<'a> {
 
                     let b = self.pop_unchecked();
                     let a = self.pop_unchecked();
-
-                    match (a, b) {
-                        (Value::Int(a), Value::Int(b)) => {
-                            self.push(Value::Bool(a > b));
-                        }
-                        (Value::Float(FloatOrd(a)), Value::Float(FloatOrd(b))) => {
-                            self.push(Value::Bool(a > b));
-                        }
-                        (Value::Float(FloatOrd(a)), Value::Int(b)) => {
-                            self.push(Value::Bool(a > b as f64));
-                        }
-                        (Value::Int(a), Value::Float(FloatOrd(b))) => {
-                            self.push(Value::Bool((a as f64) > b));
-                        }
-                        _ => return Err(self.construct_err(Opcode::Greater, a, Some(b), span)),
-                    }
+                    self.compare_numeric(a, b, |a, b| a > b, |a, b| a > b, Opcode::Greater, span)?;
                 }
                 Opcode::SwapAdjacentLocal(local_idx, index_idx) => {
                     let fp = self.frame_pointer();
@@ -3167,62 +3008,17 @@ impl<'a> VM<'a> {
                 Opcode::GreaterEqual => {
                     let b = self.pop(opcode, span)?;
                     let a = self.pop(opcode, span)?;
-
-                    match (a, b) {
-                        (Value::Int(a), Value::Int(b)) => {
-                            self.push(Value::Bool(a >= b));
-                        }
-                        (Value::Float(FloatOrd(a)), Value::Float(FloatOrd(b))) => {
-                            self.push(Value::Bool(a >= b));
-                        }
-                        (Value::Float(FloatOrd(a)), Value::Int(b)) => {
-                            self.push(Value::Bool(a >= b as f64));
-                        }
-                        (Value::Int(a), Value::Float(FloatOrd(b))) => {
-                            self.push(Value::Bool((a as f64) >= b));
-                        }
-                        _ => return Err(self.construct_err(opcode, a, Some(b), span)),
-                    }
+                    self.compare_numeric(a, b, |a, b| a >= b, |a, b| a >= b, opcode, span)?;
                 }
                 Opcode::Less => {
                     let b = self.pop_unchecked();
                     let a = self.pop_unchecked();
-
-                    match (a, b) {
-                        (Value::Int(a), Value::Int(b)) => {
-                            self.push(Value::Bool(a < b));
-                        }
-                        (Value::Float(FloatOrd(a)), Value::Float(FloatOrd(b))) => {
-                            self.push(Value::Bool(a < b));
-                        }
-                        (Value::Float(FloatOrd(a)), Value::Int(b)) => {
-                            self.push(Value::Bool(a < b as f64));
-                        }
-                        (Value::Int(a), Value::Float(FloatOrd(b))) => {
-                            self.push(Value::Bool((a as f64) < b));
-                        }
-                        _ => return Err(self.construct_err(opcode, a, Some(b), span)),
-                    }
+                    self.compare_numeric(a, b, |a, b| a < b, |a, b| a < b, opcode, span)?;
                 }
                 Opcode::LessEqual => {
                     let b = self.pop(opcode, span)?;
                     let a = self.pop(opcode, span)?;
-
-                    match (a, b) {
-                        (Value::Int(a), Value::Int(b)) => {
-                            self.push(Value::Bool(a <= b));
-                        }
-                        (Value::Float(FloatOrd(a)), Value::Float(FloatOrd(b))) => {
-                            self.push(Value::Bool(a <= b));
-                        }
-                        (Value::Float(FloatOrd(a)), Value::Int(b)) => {
-                            self.push(Value::Bool(a <= b as f64));
-                        }
-                        (Value::Int(a), Value::Float(FloatOrd(b))) => {
-                            self.push(Value::Bool((a as f64) <= b));
-                        }
-                        _ => return Err(self.construct_err(opcode, a, Some(b), span)),
-                    }
+                    self.compare_numeric(a, b, |a, b| a <= b, |a, b| a <= b, opcode, span)?;
                 }
                 Opcode::Index => {
                     let b = self.pop_unchecked();
@@ -4079,6 +3875,88 @@ impl<'a> VM<'a> {
             }
             _ => Err(self.construct_err(opcode, a, Some(b), span)),
         }
+    }
+
+    #[inline(always)]
+    fn numeric_binary_op(
+        &mut self,
+        a: Value,
+        b: Value,
+        int_op: fn(i64, i64) -> i64,
+        float_op: fn(f64, f64) -> f64,
+        opcode: Opcode,
+        span: Span,
+    ) -> WalrusResult<()> {
+        match (a, b) {
+            (Value::Int(a), Value::Int(b)) => self.push(Value::Int(int_op(a, b))),
+            (Value::Float(FloatOrd(a)), Value::Float(FloatOrd(b))) => {
+                self.push(Value::Float(FloatOrd(float_op(a, b))));
+            }
+            (Value::Int(a), Value::Float(FloatOrd(b))) => {
+                self.push(Value::Float(FloatOrd(float_op(a as f64, b))));
+            }
+            (Value::Float(FloatOrd(a)), Value::Int(b)) => {
+                self.push(Value::Float(FloatOrd(float_op(a, b as f64))));
+            }
+            _ => return Err(self.construct_err(opcode, a, Some(b), span)),
+        }
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn int_binary_op(&mut self, op: fn(i64, i64) -> i64, span: Span) -> WalrusResult<()> {
+        let b = self.pop_unchecked();
+        let a = self.pop_unchecked();
+        if let (Value::Int(a), Value::Int(b)) = (a, b) {
+            self.push(Value::Int(op(a, b)));
+            Ok(())
+        } else {
+            Err(WalrusError::TypeMismatch {
+                expected: "int and int".to_string(),
+                found: format!("{} and {}", a.get_type(), b.get_type()),
+                span,
+                src: self.source_ref.source().into(),
+                filename: self.source_ref.filename().into(),
+            })
+        }
+    }
+
+    #[inline(always)]
+    fn int_unary_const_op(&mut self, op: fn(i64) -> i64, span: Span) -> WalrusResult<()> {
+        let a = self.pop_unchecked();
+        if let Value::Int(a) = a {
+            self.push(Value::Int(op(a)));
+            Ok(())
+        } else {
+            Err(WalrusError::TypeMismatch {
+                expected: "int".to_string(),
+                found: a.get_type().to_string(),
+                span,
+                src: self.source_ref.source().into(),
+                filename: self.source_ref.filename().into(),
+            })
+        }
+    }
+
+    #[inline(always)]
+    fn compare_numeric(
+        &mut self,
+        a: Value,
+        b: Value,
+        int_op: fn(i64, i64) -> bool,
+        float_op: fn(f64, f64) -> bool,
+        opcode: Opcode,
+        span: Span,
+    ) -> WalrusResult<()> {
+        let result = match (a, b) {
+            (Value::Int(a), Value::Int(b)) => int_op(a, b),
+            (Value::Float(FloatOrd(a)), Value::Float(FloatOrd(b))) => float_op(a, b),
+            (Value::Float(FloatOrd(a)), Value::Int(b)) => float_op(a, b as f64),
+            (Value::Int(a), Value::Float(FloatOrd(b))) => float_op(a as f64, b),
+            _ => return Err(self.construct_err(opcode, a, Some(b), span)),
+        };
+        self.push(Value::Bool(result));
+        Ok(())
     }
 
     fn construct_err(&self, op: Opcode, a: Value, b: Option<Value>, span: Span) -> WalrusError {
