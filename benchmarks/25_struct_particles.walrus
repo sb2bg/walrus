@@ -1,0 +1,46 @@
+// Struct/Object Benchmark - allocation, field mutation, and instance calls
+
+struct Particle {
+    fn init : self, x, y, vx, vy {
+        self.x = x;
+        self.y = y;
+        self.vx = vx;
+        self.vy = vy;
+    }
+
+    fn step : self, bias {
+        self.x = self.x + self.vx + bias;
+        self.y = self.y + self.vy + (bias % 3);
+        self.vx = self.vx + ((bias + 1) % 3) - 1;
+        self.vy = self.vy + ((bias + 2) % 5) - 2;
+        return self.x + self.y + self.vx + self.vy;
+    }
+}
+
+fn build_particles : n {
+    let particles = [];
+    for i in 0..n {
+        particles.push(Particle(i, i * 2, i % 7, (i * 3) % 11));
+    }
+    return particles;
+}
+
+fn particle_benchmark : count, steps {
+    let particles = build_particles(count);
+    let total = 0;
+
+    for step in 0..steps {
+        let bias = step % 5;
+        let i = 0;
+        while i < core.len(particles) {
+            total = total + particles[i].step(bias);
+            i = i + 1;
+        }
+    }
+
+    return total;
+}
+
+let result = particle_benchmark(600, 200);
+
+println(f"Struct particle workload: {result}");

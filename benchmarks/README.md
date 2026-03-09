@@ -88,6 +88,29 @@ cargo run --release -- benchmarks/01_quicksort.walrus
 | `19_arithmetic_heavy` | Heavy arithmetic operations (1M iterations) |
 | `20_method_dispatch`  | Struct/class method calls (100k iterations) |
 
+### Slicing and Text Tests
+
+| File                    | Description                                         |
+| ----------------------- | --------------------------------------------------- |
+| `21_list_slicing`       | Repeated list slice allocation and window reduction |
+| `22_string_unicode_ops` | Unicode indexing and substring slicing             |
+
+### Control Flow and Stdlib Tests
+
+| File                  | Description                                       |
+| --------------------- | ------------------------------------------------- |
+| `23_exception_flow`   | Mixed fast-path and throw/catch loop              |
+| `24_json_roundtrip`   | JSON decode, mutate, and encode roundtrips        |
+
+### Object, Module, and Async Tests
+
+| File                          | Description                                           |
+| ----------------------------- | ----------------------------------------------------- |
+| `25_struct_particles`         | Struct/object allocation and field update workload    |
+| `26_module_calls`             | Imported helper function and constant access          |
+| `27_async_scheduler`          | Task creation, cooperative yields, and gather         |
+| `28_nested_collection_updates` | Nested dict/list mutation and indexed updates         |
+
 ## Interpreting Results
 
 - **Lower times are better**
@@ -105,6 +128,7 @@ cargo run --release -- benchmarks/01_quicksort.walrus
 - Both languages are running equivalent algorithms for fair comparison
 - Memory usage is not directly measured, only GC stress patterns
 - Some Walrus syntax differs from Python (e.g., `0..n` vs `range(n)`)
+- Helper modules for import benchmarks live under `benchmarks/helpers/` and are not auto-discovered as standalone benchmark pairs
 
 ## Syntax Differences
 

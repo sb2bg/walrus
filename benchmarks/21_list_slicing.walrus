@@ -1,0 +1,32 @@
+// List Slicing Benchmark - repeated slice allocation and window reduction
+
+fn build_data : n {
+    let data = [];
+    for i in 0..n {
+        data.push((i * 13 + 7) % 997);
+    }
+    return data;
+}
+
+fn slice_benchmark : data, rounds, width {
+    let total = 0;
+    let limit = core.len(data) - width - 1;
+
+    for r in 0..rounds {
+        let from = (r * 7) % limit;
+        let to = from + width;
+        let middle_to = width - 3;
+        let window = data[from..to];
+        let middle = window[3..middle_to];
+
+        total = total + window[0] + window[core.len(window) - 1];
+        total = total + middle[0] + middle[core.len(middle) - 1] + core.len(middle);
+    }
+
+    return total;
+}
+
+let dataset = build_data(1024);
+let result = slice_benchmark(dataset, 30000, 24);
+
+println(f"List slicing workload: {result}");

@@ -1,0 +1,50 @@
+// JSON Benchmark - repeated decode, mutation, and encode roundtrips
+
+import "std/json" as json;
+
+fn build_payload : {
+    let users = [];
+
+    for i in 0..12 {
+        users.push(
+            {
+                "id": i,
+                "name": f"user_{i}",
+                "flags": [i % 2 == 0, i % 3 == 0],
+                "score": (i * 17) % 101
+            }
+        );
+    }
+
+    return {
+        "version": 3,
+        "name": "walrus",
+        "active": true,
+        "thresholds": [1, 3, 5, 7, 11],
+        "users": users,
+        "meta": {"region": "us", "tags": ["vm", "jit", "bench"], "limit": 128}
+    };
+}
+
+fn json_benchmark : text, rounds {
+    let total = 0;
+
+    for i in 0..rounds {
+        let obj = json.decode(text);
+        let meta = obj["meta"];
+        meta["limit"] = meta["limit"] + (i % 5);
+
+        let encoded = json.encode(obj);
+        let users = obj["users"];
+        let user = users[i % core.len(users)];
+        total = total + core.len(encoded) + user["score"];
+    }
+
+    return total;
+}
+
+let payload = build_payload();
+let text = json.encode(payload);
+let result = json_benchmark(text, 4000);
+
+println(f"JSON roundtrip workload: {result}");

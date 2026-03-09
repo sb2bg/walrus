@@ -1,0 +1,35 @@
+// Unicode String Benchmark - unicode indexing plus ASCII substring slicing
+
+let unicode_text = "🙂walrusédataßλ漢字🙂walrusédataßλ漢字🙂walrusédataßλ漢字🙂walrusédataßλ漢字🙂walrusédataßλ漢字🙂walrusédataßλ漢字🙂walrusédataßλ漢字🙂walrusédataßλ漢字";
+let ascii_text = "walrus-benchmark-runtime-surface-walrus-benchmark-runtime-surface-walrus-benchmark-runtime-surface-walrus-benchmark-runtime-surface-";
+
+fn string_benchmark : unicode_value, ascii_value, rounds {
+    let total = 0;
+    let unicode_limit = 120;
+    let ascii_limit = core.len(ascii_value) - 6;
+
+    for i in 0..rounds {
+        let idx = (i * 13 + 5) % unicode_limit;
+        let piece_from = (i * 11 + 3) % ascii_limit;
+        let piece_end = piece_from + 6;
+        let ch = unicode_value[idx];
+        if ch == "🙂" {
+            total = total + 5;
+        } else if ch == "é" {
+            total = total + 7;
+        } else if ch == "漢" {
+            total = total + 11;
+        } else {
+            total = total + 1;
+        }
+
+        let piece = ascii_value[piece_from..piece_end];
+        total = total + core.len(piece);
+    }
+
+    return total;
+}
+
+let result = string_benchmark(unicode_text, ascii_text, 50000);
+
+println(f"Unicode string workload: {result}");

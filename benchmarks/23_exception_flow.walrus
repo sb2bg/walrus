@@ -1,0 +1,30 @@
+// Exception Flow Benchmark - mixed fast path and throw/catch overhead
+
+fn maybe_fail : i {
+    if i % 7 == 0 {
+        throw "skip";
+    }
+
+    return i * 3 - 1;
+}
+
+fn exception_benchmark : n {
+    let total = 0;
+
+    for i in 0..n {
+        try {
+            total = total + maybe_fail(i);
+            if i % 11 == 0 {
+                total = total + 2;
+            }
+        } catch err {
+            total = total + core.len(err) + i;
+        };
+    }
+
+    return total;
+}
+
+let result = exception_benchmark(50000);
+
+println(f"Exception flow workload: {result}");

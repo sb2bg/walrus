@@ -1,0 +1,38 @@
+// Async Benchmark - task creation, cooperative yields, and gather
+
+import "std/async" as asyncx;
+
+async fn worker: seed, rounds {
+    let acc = seed;
+    let i = 0;
+
+    while i < rounds {
+        acc = acc + ((i + seed) % 7);
+        if i % 4 == 0 {
+            asyncx.yield();
+        }
+        i = i + 1;
+    }
+
+    return acc;
+}
+
+async fn scheduler_benchmark: task_count, rounds {
+    let tasks = [];
+
+    for i in 0..task_count {
+        tasks.push(worker(i + 1, rounds));
+    }
+
+    let results = await asyncx.gather(tasks);
+    let total = 0;
+    for value in results {
+        total = total + value;
+    }
+
+    return total;
+}
+
+let result = await scheduler_benchmark(48, 300);
+
+println(f"Async scheduler workload: {result}");

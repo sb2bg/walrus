@@ -1,0 +1,42 @@
+// Nested Collection Benchmark - dict/list reads, writes, and nested mutation
+
+fn build_data : n {
+    let items = [];
+
+    for i in 0..n {
+        items.push(
+            {
+                "count": i,
+                "values": [i, i + 1, i + 2, i + 3],
+                "meta": {"seen": i % 3}
+            }
+        );
+    }
+
+    return items;
+}
+
+fn nested_benchmark : items, rounds {
+    let total = 0;
+    let size = core.len(items);
+
+    for step in 0..rounds {
+        let idx = (step * 7) % size;
+        let entry = items[idx];
+        let values = entry["values"];
+        let meta = entry["meta"];
+
+        entry["count"] = entry["count"] + values[0] + values[core.len(values) - 1];
+        values[1] = values[1] + (step % 5);
+        meta["seen"] = meta["seen"] + 1;
+
+        total = total + entry["count"] + values[1] + meta["seen"];
+    }
+
+    return total;
+}
+
+let data = build_data(512);
+let result = nested_benchmark(data, 60000);
+
+println(f"Nested collection workload: {result}");
