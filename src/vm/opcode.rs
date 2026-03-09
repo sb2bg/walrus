@@ -42,6 +42,7 @@ pub enum Opcode {
     CallSelf1,                          // Recursive call with one argument
     CallSelfIndexLocalConst1(u32, u32), // Recursive call with arg from local[const]
     CallMemoizedSelf1,                  // Recursive pure int call memoized by argument value
+    CallMemoizedCloneSelf1,             // Recursive pure cloneable call memoized with clone-on-read
     CallPureGlobal1(u32),               // Pure global int-returning call with one constant argument
     CallGlobal1(u32),                   // Statically known global call with one argument
     CallGlobal(u32, u32), // (global index, arg count) for statically known global callees

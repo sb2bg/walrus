@@ -52,6 +52,7 @@ pub struct BytecodeEmitter<'a> {
     known_int_globals: FxHashSet<String>,
     known_int_functions: FxHashSet<String>,
     known_pure_int_functions: FxHashSet<String>,
+    known_pure_cloneable_functions: FxHashSet<String>,
     known_int_scopes: Vec<FxHashSet<String>>,
 }
 
@@ -162,6 +163,7 @@ impl<'a> BytecodeEmitter<'a> {
             known_int_globals: FxHashSet::default(),
             known_int_functions: FxHashSet::default(),
             known_pure_int_functions: FxHashSet::default(),
+            known_pure_cloneable_functions: FxHashSet::default(),
             known_int_scopes: vec![FxHashSet::default()],
         }
     }
@@ -188,6 +190,7 @@ impl<'a> BytecodeEmitter<'a> {
             known_int_globals: self.known_int_globals.clone(),
             known_int_functions: self.known_int_functions.clone(),
             known_pure_int_functions: self.known_pure_int_functions.clone(),
+            known_pure_cloneable_functions: self.known_pure_cloneable_functions.clone(),
             known_int_scopes: vec![FxHashSet::default(), FxHashSet::default()],
         }
     }
@@ -785,6 +788,174 @@ impl<'a> BytecodeEmitter<'a> {
         self.node_is_pure_int_ast(body, name, &mut locals)
     }
 
+    fn expr_is_cloneable_ast(&self, node: &Node, recursive_name: &str) -> bool {
+        match node.kind() {
+            NodeKind::Int(_)
+            | NodeKind::Float(_)
+            | NodeKind::String(_)
+            | NodeKind::Bool(_)
+            | NodeKind::Void
+            | NodeKind::Ident(_) => true,
+            NodeKind::List(nodes) => nodes
+                .iter()
+                .all(|node| self.expr_is_cloneable_ast(node, recursive_name)),
+            NodeKind::Dict(entries) => entries.iter().all(|(key, value)| {
+                self.expr_is_cloneable_ast(key, recursive_name)
+                    && self.expr_is_cloneable_ast(value, recursive_name)
+            }),
+            NodeKind::BinOp(left, _, right)
+            | NodeKind::Index(left, right)
+            | NodeKind::Range(Some(left), right)
+            | NodeKind::Try(left, _, right) => {
+                self.expr_is_cloneable_ast(left, recursive_name)
+                    && self.expr_is_cloneable_ast(right, recursive_name)
+            }
+            NodeKind::UnaryOp(_, expr)
+            | NodeKind::ExpressionStatement(expr)
+            | NodeKind::Return(expr)
+            | NodeKind::Range(None, expr) => self.expr_is_cloneable_ast(expr, recursive_name),
+            NodeKind::FString(parts) => parts.iter().all(|part| match part {
+                FStringPart::Literal(_) => true,
+                FStringPart::Expr(expr) => self.expr_is_cloneable_ast(expr, recursive_name),
+            }),
+            NodeKind::FunctionCall(func, args) => {
+                args.iter()
+                    .all(|arg| self.expr_is_cloneable_ast(arg, recursive_name))
+                    && matches!(
+                        func.kind(),
+                        NodeKind::Ident(name)
+                            if name == recursive_name
+                                || self.known_pure_cloneable_functions.contains(name)
+                    )
+            }
+            NodeKind::If(condition, then_branch, else_branch) => {
+                self.expr_is_cloneable_ast(condition, recursive_name)
+                    && self.expr_is_cloneable_ast(then_branch, recursive_name)
+                    && else_branch
+                        .as_deref()
+                        .is_none_or(|branch| self.expr_is_cloneable_ast(branch, recursive_name))
+            }
+            NodeKind::Ternary(condition, when_true, when_false) => {
+                self.expr_is_cloneable_ast(condition, recursive_name)
+                    && self.expr_is_cloneable_ast(when_true, recursive_name)
+                    && self.expr_is_cloneable_ast(when_false, recursive_name)
+            }
+            NodeKind::Program(nodes)
+            | NodeKind::Statements(nodes)
+            | NodeKind::UnscopedStatements(nodes)
+            | NodeKind::Block(nodes) => nodes
+                .iter()
+                .all(|node| self.expr_is_cloneable_ast(node, recursive_name)),
+            _ => false,
+        }
+    }
+
+    fn node_guarantees_cloneable_return(&self, node: &Node, recursive_name: &str) -> bool {
+        match Self::statement_expr(node).kind() {
+            NodeKind::Return(expr) => self.expr_is_cloneable_ast(expr, recursive_name),
+            NodeKind::If(_, then_branch, Some(else_branch)) => {
+                self.node_guarantees_cloneable_return(then_branch, recursive_name)
+                    && self.node_guarantees_cloneable_return(else_branch, recursive_name)
+            }
+            NodeKind::Program(nodes)
+            | NodeKind::Statements(nodes)
+            | NodeKind::UnscopedStatements(nodes)
+            | NodeKind::Block(nodes) => nodes
+                .last()
+                .is_some_and(|node| self.node_guarantees_cloneable_return(node, recursive_name)),
+            _ => false,
+        }
+    }
+
+    fn function_is_pure_cloneable_ast(&self, name: &str, args: &[String], body: &Node) -> bool {
+        self.function_is_pure_int_ast(name, args, body)
+            && self.node_guarantees_cloneable_return(body, name)
+    }
+
+    fn recursive_call_count(&self, node: &Node, recursive_name: &str) -> usize {
+        match node.kind() {
+            NodeKind::FunctionCall(func, args) => {
+                let self_calls =
+                    matches!(func.kind(), NodeKind::Ident(name) if name == recursive_name) as usize;
+                self_calls
+                    + args
+                        .iter()
+                        .map(|arg| self.recursive_call_count(arg, recursive_name))
+                        .sum::<usize>()
+                    + self.recursive_call_count(func, recursive_name)
+            }
+            NodeKind::Program(nodes)
+            | NodeKind::Statements(nodes)
+            | NodeKind::UnscopedStatements(nodes)
+            | NodeKind::Block(nodes)
+            | NodeKind::List(nodes) => nodes
+                .iter()
+                .map(|node| self.recursive_call_count(node, recursive_name))
+                .sum(),
+            NodeKind::Dict(entries) => entries
+                .iter()
+                .map(|(key, value)| {
+                    self.recursive_call_count(key, recursive_name)
+                        + self.recursive_call_count(value, recursive_name)
+                })
+                .sum(),
+            NodeKind::BinOp(left, _, right)
+            | NodeKind::Index(left, right)
+            | NodeKind::Range(Some(left), right)
+            | NodeKind::Try(left, _, right) => {
+                self.recursive_call_count(left, recursive_name)
+                    + self.recursive_call_count(right, recursive_name)
+            }
+            NodeKind::UnaryOp(_, expr)
+            | NodeKind::ExpressionStatement(expr)
+            | NodeKind::Return(expr)
+            | NodeKind::Range(None, expr)
+            | NodeKind::Await(expr)
+            | NodeKind::Defer(expr)
+            | NodeKind::Free(expr)
+            | NodeKind::Print(expr)
+            | NodeKind::Println(expr)
+            | NodeKind::Throw(expr)
+            | NodeKind::MemberAccess(expr, _) => self.recursive_call_count(expr, recursive_name),
+            NodeKind::If(condition, then_branch, else_branch) => {
+                self.recursive_call_count(condition, recursive_name)
+                    + self.recursive_call_count(then_branch, recursive_name)
+                    + else_branch.as_deref().map_or(0, |branch| {
+                        self.recursive_call_count(branch, recursive_name)
+                    })
+            }
+            NodeKind::Ternary(condition, when_true, when_false) => {
+                self.recursive_call_count(condition, recursive_name)
+                    + self.recursive_call_count(when_true, recursive_name)
+                    + self.recursive_call_count(when_false, recursive_name)
+            }
+            NodeKind::While(condition, body) => {
+                self.recursive_call_count(condition, recursive_name)
+                    + self.recursive_call_count(body, recursive_name)
+            }
+            NodeKind::For(_, iter, body) => {
+                self.recursive_call_count(iter, recursive_name)
+                    + self.recursive_call_count(body, recursive_name)
+            }
+            NodeKind::FString(parts) => parts
+                .iter()
+                .map(|part| match part {
+                    FStringPart::Literal(_) => 0,
+                    FStringPart::Expr(expr) => self.recursive_call_count(expr, recursive_name),
+                })
+                .sum(),
+            NodeKind::Assign(_, expr) | NodeKind::Reassign(_, expr, _) => {
+                self.recursive_call_count(expr, recursive_name)
+            }
+            NodeKind::IndexAssign(object, index, value) => {
+                self.recursive_call_count(object, recursive_name)
+                    + self.recursive_call_count(index, recursive_name)
+                    + self.recursive_call_count(value, recursive_name)
+            }
+            _ => 0,
+        }
+    }
+
     fn instruction_set_is_pure_int(&self, name: &str, instructions: &InstructionSet) -> bool {
         instructions
             .instructions
@@ -1061,6 +1232,20 @@ impl<'a> BytecodeEmitter<'a> {
         }
     }
 
+    fn local_less_equal_zero_condition_pattern(&self, node: &Node) -> Option<u32> {
+        let NodeKind::BinOp(left, Opcode::LessEqual, right) = node.kind() else {
+            return None;
+        };
+
+        match (left.kind(), right.kind()) {
+            (NodeKind::Ident(name), NodeKind::Int(0)) => self
+                .instructions
+                .resolve_local_index(name)
+                .map(|index| index as u32),
+            _ => None,
+        }
+    }
+
     fn adjacent_local_compare_pattern(
         &self,
         left: &Node,
@@ -1111,6 +1296,20 @@ impl<'a> BytecodeEmitter<'a> {
             NodeKind::ExpressionStatement(expr) => expr,
             _ => node,
         }
+    }
+
+    fn is_return_int_zero(node: &Node) -> bool {
+        matches!(
+            Self::statement_expr(node).kind(),
+            NodeKind::Return(expr) if matches!(expr.kind(), NodeKind::Int(0))
+        )
+    }
+
+    fn is_return_void(node: &Node) -> bool {
+        matches!(
+            Self::statement_expr(node).kind(),
+            NodeKind::Return(expr) if matches!(expr.kind(), NodeKind::Void)
+        )
     }
 
     fn adjacent_local_swap_pattern(&self, node: &Node) -> Option<(u32, u32)> {
@@ -1458,6 +1657,28 @@ impl<'a> BytecodeEmitter<'a> {
             }
             NodeKind::If(cond, then, otherwise) => {
                 let swap_adjacent = self.adjacent_local_swap_pattern(&then);
+
+                if otherwise.is_none() {
+                    if let Some(local_index) = self.local_void_condition_pattern(&cond) {
+                        if Self::is_return_int_zero(&then) {
+                            self.instructions.push(Instruction::new(
+                                Opcode::ReturnInt0IfLocalVoid(local_index),
+                                span,
+                            ));
+                            return Ok(());
+                        }
+                    }
+
+                    if let Some(local_index) = self.local_less_equal_zero_condition_pattern(&cond) {
+                        if Self::is_return_void(&then) {
+                            self.instructions.push(Instruction::new(
+                                Opcode::ReturnVoidIfLocalLessEqualZero(local_index),
+                                span,
+                            ));
+                            return Ok(());
+                        }
+                    }
+                }
 
                 if let Some(local_index) = self.local_void_condition_pattern(&cond) {
                     let jump = self.instructions.len();
@@ -2498,6 +2719,11 @@ impl<'a> BytecodeEmitter<'a> {
                             self.known_pure_int_functions.insert(name.clone());
                         }
                     }
+                    if self.function_is_pure_cloneable_ast(name, args, body)
+                        && self.recursive_call_count(body, name) > 1
+                    {
+                        self.known_pure_cloneable_functions.insert(name.clone());
+                    }
                 }
             }
             NodeKind::AsyncFunctionDefinition(name, _, _) => {
@@ -2757,6 +2983,8 @@ impl<'a> BytecodeEmitter<'a> {
                         let opcode = if arg_len == 1 {
                             if self.known_pure_int_functions.contains(name) {
                                 Opcode::CallMemoizedSelf1
+                            } else if self.known_pure_cloneable_functions.contains(name) {
+                                Opcode::CallMemoizedCloneSelf1
                             } else {
                                 Opcode::CallSelf1
                             }

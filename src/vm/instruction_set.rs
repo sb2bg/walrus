@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::fmt::Display;
 
 use log::debug;
@@ -104,6 +105,7 @@ pub struct InstructionSet {
     pub constants: Vec<Value>,
     pub locals: SymbolTable,
     pub globals: SymbolTable,
+    pub dict_slot_cache: Vec<Cell<u8>>,
     // Note: heap is stored globally in ARENA, not per InstructionSet
 
     // JIT metadata (Phase 1)
@@ -123,6 +125,7 @@ impl InstructionSet {
             constants: Vec::new(),
             locals: SymbolTable::new(),
             globals: SymbolTable::new(),
+            dict_slot_cache: Vec::new(),
             loops: Vec::new(),
             functions: Vec::new(),
             debug_info: None,
@@ -135,6 +138,7 @@ impl InstructionSet {
             constants: Vec::new(),
             locals,
             globals: SymbolTable::new(),
+            dict_slot_cache: Vec::new(),
             loops: Vec::new(),
             functions: Vec::new(),
             debug_info: None,
@@ -147,6 +151,7 @@ impl InstructionSet {
             constants: Vec::new(),
             locals: SymbolTable::new(),
             globals,
+            dict_slot_cache: Vec::new(),
             loops: Vec::new(),
             functions: Vec::new(),
             debug_info: None,
@@ -180,6 +185,7 @@ impl InstructionSet {
 
     pub fn push(&mut self, instruction: Instruction) {
         self.instructions.push(instruction);
+        self.dict_slot_cache.push(Cell::new(u8::MAX));
     }
 
     pub fn get(&self, index: usize) -> Instruction {
@@ -258,6 +264,22 @@ impl InstructionSet {
 
     pub fn set(&mut self, index: usize, instruction: Instruction) {
         self.instructions[index] = instruction;
+        if let Some(cache_slot) = self.dict_slot_cache.get(index) {
+            cache_slot.set(u8::MAX);
+        }
+    }
+
+    pub fn cached_dict_slot(&self, index: usize) -> Option<u8> {
+        self.dict_slot_cache
+            .get(index)
+            .map(Cell::get)
+            .filter(|slot| *slot != u8::MAX)
+    }
+
+    pub fn set_cached_dict_slot(&self, index: usize, slot: Option<u8>) {
+        if let Some(cache_slot) = self.dict_slot_cache.get(index) {
+            cache_slot.set(slot.unwrap_or(u8::MAX));
+        }
     }
 
     pub fn disassemble(&self) {

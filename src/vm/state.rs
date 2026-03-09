@@ -29,6 +29,7 @@ impl<'a> VM<'a> {
             module_binding: None,
             awaiting_task: None,
             memoize_result_key: None,
+            memoize_clone_on_return: false,
         };
 
         let (io_wakeup_tx, io_wakeup_rx) = mpsc::channel();
@@ -186,6 +187,7 @@ impl<'a> VM<'a> {
             self.stack.len()
                 + self.locals.len()
                 + self.globals.len()
+                + self.pure_call_cache.len()
                 + self.async_task_queue.len()
                 + self.suspended_tasks.len() * 16
                 + 128,
@@ -193,6 +195,7 @@ impl<'a> VM<'a> {
 
         extend_context_roots(&mut roots, &self.stack, &self.locals, &self.call_stack);
         roots.extend(self.globals.iter().copied());
+        roots.extend(self.pure_call_cache.values().copied());
 
         for &task_key in &self.async_task_queue {
             roots.push(Value::Task(task_key));

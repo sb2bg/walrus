@@ -898,6 +898,7 @@ impl<'a> VM<'a> {
                             module_binding: func.module_binding.clone(),
                             awaiting_task: Some(task_key),
                             memoize_result_key: None,
+                            memoize_clone_on_return: false,
                         }],
                         exception_handlers: Vec::new(),
                         ip: 0,
@@ -998,6 +999,7 @@ impl<'a> VM<'a> {
                     module_binding: func.module_binding.clone(),
                     awaiting_task: None,
                     memoize_result_key: None,
+                    memoize_clone_on_return: false,
                 };
 
                 self.call_stack.push(new_frame);

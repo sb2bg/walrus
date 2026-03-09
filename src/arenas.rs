@@ -139,6 +139,13 @@ impl DictValue {
         }
     }
 
+    pub fn small_entries_copy(&self) -> Option<(usize, [(Value, Value); SMALL_DICT_CAPACITY])> {
+        match self {
+            Self::Small { len, entries } => Some((*len as usize, *entries)),
+            Self::Large(_) => None,
+        }
+    }
+
     pub fn len(&self) -> usize {
         match self {
             Self::Small { len, .. } => *len as usize,
@@ -182,6 +189,46 @@ impl DictValue {
                 None
             }
             Self::Large(map) => map.get(&Value::String(key)).copied(),
+        }
+    }
+
+    #[inline(always)]
+    pub fn get_string_key_at_slot(&self, slot: u8, key: StringKey) -> Option<Value> {
+        match self {
+            Self::Small { len, entries } => {
+                if slot >= *len {
+                    return None;
+                }
+
+                let (entry_key, entry_value) = unsafe { entries.get_unchecked(slot as usize) };
+                match *entry_key {
+                    Value::String(entry_key) if entry_key == key => Some(*entry_value),
+                    _ => None,
+                }
+            }
+            Self::Large(_) => None,
+        }
+    }
+
+    #[inline(always)]
+    pub fn find_string_key_with_slot(&self, key: StringKey) -> Option<(u8, Value)> {
+        match self {
+            Self::Small { len, entries } => {
+                let len = *len as usize;
+                for idx in 0..len {
+                    let (entry_key, entry_value) = unsafe { entries.get_unchecked(idx) };
+                    if let Value::String(entry_key) = *entry_key {
+                        if entry_key == key {
+                            return Some((idx as u8, *entry_value));
+                        }
+                    }
+                }
+                None
+            }
+            Self::Large(map) => map
+                .get(&Value::String(key))
+                .copied()
+                .map(|value| (u8::MAX, value)),
         }
     }
 

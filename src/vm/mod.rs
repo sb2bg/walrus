@@ -65,6 +65,8 @@ struct CallFrame {
     awaiting_task: Option<crate::arenas::TaskKey>,
     /// Cache slot to populate when returning from a pure memoized call.
     memoize_result_key: Option<PureCacheKey>,
+    /// Deep-clone the return value before storing it in the pure-call cache.
+    memoize_clone_on_return: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -397,19 +399,131 @@ impl<'a> VM<'a> {
         self.store_index_value(object, index, value, span)
     }
 
+    fn deep_clone_value_with_memo(
+        &mut self,
+        value: Value,
+        memo: &mut FxHashMap<Value, Value>,
+    ) -> WalrusResult<Value> {
+        match value {
+            Value::Int(_)
+            | Value::Float(_)
+            | Value::Bool(_)
+            | Value::Range(_)
+            | Value::String(_)
+            | Value::Function(_)
+            | Value::StructDef(_)
+            | Value::Module(_)
+            | Value::Iter(_)
+            | Value::Task(_)
+            | Value::Void => return Ok(value),
+            _ => {}
+        }
+
+        if let Some(&cloned) = memo.get(&value) {
+            return Ok(cloned);
+        }
+
+        let cloned = match value {
+            Value::List(list_key) => {
+                let items = self.get_heap().get_list(list_key)?.to_vec();
+                let mut cloned_items = Vec::with_capacity(items.len());
+                for item in items {
+                    cloned_items.push(self.deep_clone_value_with_memo(item, memo)?);
+                }
+                self.get_heap_mut().push(HeapValue::List(cloned_items))
+            }
+            Value::Tuple(tuple_key) => {
+                let items = self.get_heap().get_tuple(tuple_key)?.to_vec();
+                let mut cloned_items = Vec::with_capacity(items.len());
+                for item in items {
+                    cloned_items.push(self.deep_clone_value_with_memo(item, memo)?);
+                }
+                self.get_heap_mut().push(HeapValue::Tuple(&cloned_items))
+            }
+            Value::Dict(dict_key) => {
+                let dict = self.get_heap().get_dict(dict_key)?.clone();
+                let cloned = if let Some((len, entries)) = dict.small_entries_copy() {
+                    let mut cloned_entries =
+                        [(Value::Void, Value::Void); DictValue::small_capacity()];
+                    for idx in 0..len {
+                        let (key, value) = entries[idx];
+                        cloned_entries[idx] = (
+                            self.deep_clone_value_with_memo(key, memo)?,
+                            self.deep_clone_value_with_memo(value, memo)?,
+                        );
+                    }
+                    DictValue::from_inline_entries(len, cloned_entries)
+                } else {
+                    let entries: Vec<(Value, Value)> =
+                        dict.iter().map(|(key, value)| (*key, *value)).collect();
+                    let mut cloned = DictValue::with_capacity(entries.len());
+                    for (key, value) in entries {
+                        let key = self.deep_clone_value_with_memo(key, memo)?;
+                        let value = self.deep_clone_value_with_memo(value, memo)?;
+                        cloned.insert(key, value);
+                    }
+                    cloned
+                };
+                self.get_heap_mut().push(HeapValue::PackedDict(cloned))
+            }
+            _ => value,
+        };
+
+        memo.insert(value, cloned);
+        Ok(cloned)
+    }
+
+    fn deep_clone_value(&mut self, value: Value) -> WalrusResult<Value> {
+        let mut memo = FxHashMap::default();
+        self.deep_clone_value_with_memo(value, &mut memo)
+    }
+
     #[inline(always)]
     fn finish_return(&mut self, mut return_value: Value) -> WalrusResult<Option<RunSignal>> {
         let frame = self
             .call_stack
             .pop()
             .expect("Call stack should never be empty on return");
+        let clone_cache_code_ptr = if frame.memoize_clone_on_return {
+            match frame.memoize_result_key {
+                Some(PureCacheKey::CallSite { code_ptr, .. })
+                | Some(PureCacheKey::FunctionArg { code_ptr, .. }) => Some(code_ptr),
+                None => None,
+            }
+        } else {
+            None
+        };
         self.clear_exception_handlers_from_frame(self.call_stack.len());
 
         if let Some(override_value) = frame.return_override {
             return_value = override_value;
         }
         if let Some(cache_key) = frame.memoize_result_key {
-            self.pure_call_cache.insert(cache_key, return_value);
+            let cached_value = if frame.memoize_clone_on_return {
+                self.deep_clone_value(return_value)?
+            } else {
+                return_value
+            };
+            self.pure_call_cache.insert(cache_key, cached_value);
+        }
+
+        if let Some(code_ptr) = clone_cache_code_ptr {
+            let still_active = self
+                .call_stack
+                .iter()
+                .any(|frame| Rc::as_ptr(&frame.instructions) as usize == code_ptr);
+            if !still_active {
+                self.pure_call_cache.retain(|key, _| match key {
+                    PureCacheKey::CallSite {
+                        code_ptr: key_code_ptr,
+                        ..
+                    }
+                    | PureCacheKey::FunctionArg {
+                        code_ptr: key_code_ptr,
+                        ..
+                    } => *key_code_ptr != code_ptr,
+                });
+            }
         }
         self.complete_task_on_frame_return(frame.awaiting_task, return_value)?;
 
@@ -1114,6 +1228,37 @@ impl<'a> VM<'a> {
                         self.ip = offset as usize;
                     }
                 }
+                Opcode::ReturnInt0IfLocalVoid(local_idx) => {
+                    let fp = self.frame_pointer();
+                    let value = self.load_local_value(fp + local_idx as usize)?;
+                    if matches!(value, Value::Void) {
+                        if let Some(signal) = self.finish_return(Value::Int(0))? {
+                            return Ok(signal);
+                        }
+                    }
+                }
+                Opcode::ReturnVoidIfLocalLessEqualZero(local_idx) => {
+                    let fp = self.frame_pointer();
+                    let value = self.load_local_value(fp + local_idx as usize)?;
+                    let should_return = match value {
+                        Value::Int(value) => value <= 0,
+                        Value::Float(FloatOrd(value)) => value <= 0.0,
+                        other => {
+                            return Err(self.construct_err(
+                                Opcode::LessEqual,
+                                other,
+                                Some(Value::Int(0)),
+                                span,
+                            ));
+                        }
+                    };
+
+                    if should_return {
+                        if let Some(signal) = self.finish_return(Value::Void)? {
+                            return Ok(signal);
+                        }
+                    }
+                }
                 Opcode::Jump(offset) => {
                     // JIT PROFILING: Backward jumps indicate loops (while loops)
                     if profiling_enabled && (offset as usize) < self.ip {
@@ -1177,6 +1322,7 @@ impl<'a> VM<'a> {
                                     module_binding: func.module_binding.clone(),
                                     awaiting_task: None,
                                     memoize_result_key: None,
+                                    memoize_clone_on_return: false,
                                 };
 
                                 self.call_stack.push(new_frame);
@@ -1304,6 +1450,7 @@ impl<'a> VM<'a> {
                         module_binding,
                         awaiting_task: None,
                         memoize_result_key: None,
+                        memoize_clone_on_return: false,
                     };
 
                     self.call_stack.push(new_frame);
@@ -1339,6 +1486,7 @@ impl<'a> VM<'a> {
                         module_binding,
                         awaiting_task: None,
                         memoize_result_key: None,
+                        memoize_clone_on_return: false,
                     };
 
                     self.call_stack.push(new_frame);
@@ -1349,13 +1497,12 @@ impl<'a> VM<'a> {
                     let fp = self.frame_pointer();
                     let object = self.load_local_value(fp + local_idx as usize)?;
                     let key = self.current_frame().instructions.get_constant(const_idx);
-                    self.index_const_value(
+                    let arg = self.lookup_const_index_value(
                         object,
                         key,
                         Opcode::IndexLocalConst(local_idx, const_idx),
                         span,
                     )?;
-                    let arg = self.pop_unchecked();
                     let (instructions, module_binding) = {
                         let frame = self.current_frame();
                         (Rc::clone(&frame.instructions), frame.module_binding.clone())
@@ -1371,6 +1518,7 @@ impl<'a> VM<'a> {
                         module_binding,
                         awaiting_task: None,
                         memoize_result_key: None,
+                        memoize_clone_on_return: false,
                     };
 
                     self.call_stack.push(new_frame);
@@ -1411,6 +1559,49 @@ impl<'a> VM<'a> {
                         module_binding,
                         awaiting_task: None,
                         memoize_result_key: Some(cache_key),
+                        memoize_clone_on_return: false,
+                    };
+
+                    self.call_stack.push(new_frame);
+                    self.push_local_value(arg);
+                    self.ip = 0;
+                }
+                Opcode::CallMemoizedCloneSelf1 => {
+                    if self.stack.is_empty() {
+                        return Err(WalrusError::StackUnderflow {
+                            op: opcode,
+                            span,
+                            src: self.source_ref.source().to_string(),
+                            filename: self.source_ref.filename().to_string(),
+                        });
+                    }
+
+                    let arg = *self.stack.last().expect("checked stack len above");
+                    let cache_key = self.pure_function_arg_key(arg);
+                    if let Some(&value) = self.pure_call_cache.get(&cache_key) {
+                        self.pop_unchecked();
+                        let cloned = self.deep_clone_value(value)?;
+                        self.push(cloned);
+                        continue;
+                    }
+
+                    let arg = self.pop_unchecked();
+                    let (instructions, module_binding) = {
+                        let frame = self.current_frame();
+                        (Rc::clone(&frame.instructions), frame.module_binding.clone())
+                    };
+
+                    let new_frame = CallFrame {
+                        return_ip: self.ip,
+                        frame_pointer: self.locals.len(),
+                        stack_pointer: self.stack.len(),
+                        instructions,
+                        function_name: String::new(),
+                        return_override: None,
+                        module_binding,
+                        awaiting_task: None,
+                        memoize_result_key: Some(cache_key),
+                        memoize_clone_on_return: true,
                     };
 
                     self.call_stack.push(new_frame);
@@ -1475,6 +1666,7 @@ impl<'a> VM<'a> {
                                     module_binding,
                                     awaiting_task: None,
                                     memoize_result_key: Some(cache_key),
+                                    memoize_clone_on_return: false,
                                 };
 
                                 self.call_stack.push(new_frame);
@@ -1537,6 +1729,7 @@ impl<'a> VM<'a> {
                                         } else {
                                             None
                                         },
+                                        memoize_clone_on_return: false,
                                     };
 
                                     self.call_stack.push(new_frame);
@@ -1616,6 +1809,7 @@ impl<'a> VM<'a> {
                                     module_binding,
                                     awaiting_task: None,
                                     memoize_result_key: None,
+                                    memoize_clone_on_return: false,
                                 };
 
                                 self.call_stack.push(new_frame);
@@ -1692,6 +1886,7 @@ impl<'a> VM<'a> {
                                         module_binding: func.module_binding.clone(),
                                         awaiting_task: None,
                                         memoize_result_key: None,
+                                        memoize_clone_on_return: false,
                                     };
 
                                     self.call_stack.push(new_frame);
@@ -1750,6 +1945,7 @@ impl<'a> VM<'a> {
                                         module_binding: init_func.module_binding.clone(),
                                         awaiting_task: None,
                                         memoize_result_key: None,
+                                        memoize_clone_on_return: false,
                                     };
 
                                     self.call_stack.push(new_frame);
@@ -1849,6 +2045,7 @@ impl<'a> VM<'a> {
                                     module_binding,
                                     awaiting_task: None,
                                     memoize_result_key: None,
+                                    memoize_clone_on_return: false,
                                 };
 
                                 self.call_stack.push(new_frame);
@@ -1922,6 +2119,7 @@ impl<'a> VM<'a> {
                                         module_binding: func.module_binding.clone(),
                                         awaiting_task: None,
                                         memoize_result_key: None,
+                                        memoize_clone_on_return: false,
                                     };
 
                                     self.call_stack.push(new_frame);
@@ -1977,6 +2175,7 @@ impl<'a> VM<'a> {
                                         module_binding: init_func.module_binding.clone(),
                                         awaiting_task: None,
                                         memoize_result_key: None,
+                                        memoize_clone_on_return: false,
                                     };
 
                                     self.call_stack.push(new_frame);
@@ -2084,6 +2283,7 @@ impl<'a> VM<'a> {
                                         module_binding: func.module_binding.clone(),
                                         awaiting_task: None,
                                         memoize_result_key: None,
+                                        memoize_clone_on_return: false,
                                     };
 
                                     // Push the new frame
@@ -2145,6 +2345,7 @@ impl<'a> VM<'a> {
                                         module_binding: init_func.module_binding.clone(),
                                         awaiting_task: None,
                                         memoize_result_key: None,
+                                        memoize_clone_on_return: false,
                                     };
 
                                     self.call_stack.push(new_frame);
@@ -3473,6 +3674,7 @@ impl<'a> VM<'a> {
                                     module_binding: method_binding,
                                     awaiting_task: None,
                                     memoize_result_key: None,
+                                    memoize_clone_on_return: false,
                                 };
 
                                 self.call_stack.push(new_frame);
@@ -3564,6 +3766,7 @@ impl<'a> VM<'a> {
                                     module_binding: method_binding,
                                     awaiting_task: None,
                                     memoize_result_key: None,
+                                    memoize_clone_on_return: false,
                                 };
 
                                 self.call_stack.push(new_frame);
@@ -3748,6 +3951,7 @@ impl<'a> VM<'a> {
                                     module_binding: func.module_binding.clone(),
                                     awaiting_task: None,
                                     memoize_result_key: None,
+                                    memoize_clone_on_return: false,
                                 };
 
                                 self.call_stack.push(new_frame);
@@ -3804,6 +4008,7 @@ impl<'a> VM<'a> {
                                     module_binding: func.module_binding.clone(),
                                     awaiting_task: None,
                                     memoize_result_key: None,
+                                    memoize_clone_on_return: false,
                                 };
 
                                 self.call_stack.push(new_frame);
@@ -4130,6 +4335,119 @@ impl<'a> VM<'a> {
         Ok(())
     }
 
+    fn lookup_const_index_value(
+        &mut self,
+        object: Value,
+        index: Value,
+        opcode: Opcode,
+        span: Span,
+    ) -> WalrusResult<Value> {
+        match object {
+            Value::Dict(dict_key) => {
+                let dict = self.get_heap().get_dict(dict_key)?;
+                let cache_ip = self.ip.saturating_sub(1);
+                let value = match index {
+                    Value::String(key) => {
+                        if let Some(slot) =
+                            self.current_frame().instructions.cached_dict_slot(cache_ip)
+                        {
+                            if let Some(value) = dict.get_string_key_at_slot(slot, key) {
+                                Some(value)
+                            } else {
+                                let found = dict.find_string_key_with_slot(key);
+                                if let Some((slot, value)) = found {
+                                    if slot != u8::MAX {
+                                        self.current_frame()
+                                            .instructions
+                                            .set_cached_dict_slot(cache_ip, Some(slot));
+                                    }
+                                    Some(value)
+                                } else {
+                                    None
+                                }
+                            }
+                        } else if let Some((slot, value)) = dict.find_string_key_with_slot(key) {
+                            if slot != u8::MAX {
+                                self.current_frame()
+                                    .instructions
+                                    .set_cached_dict_slot(cache_ip, Some(slot));
+                            }
+                            Some(value)
+                        } else {
+                            None
+                        }
+                    }
+                    other => dict.get(&other).copied(),
+                };
+
+                if let Some(value) = value {
+                    Ok(value)
+                } else {
+                    let key = index.stringify()?;
+                    Err(WalrusError::KeyNotFound {
+                        key,
+                        span,
+                        src: self.source_ref.source().to_string(),
+                        filename: self.source_ref.filename().to_string(),
+                    })
+                }
+            }
+            Value::Module(module_key) => {
+                let module = self.get_heap().get_module(module_key)?;
+                let cache_ip = self.ip.saturating_sub(1);
+                let value = match index {
+                    Value::String(key) => {
+                        if let Some(slot) =
+                            self.current_frame().instructions.cached_dict_slot(cache_ip)
+                        {
+                            if let Some(value) = module.get_string_key_at_slot(slot, key) {
+                                Some(value)
+                            } else {
+                                let found = module.find_string_key_with_slot(key);
+                                if let Some((slot, value)) = found {
+                                    if slot != u8::MAX {
+                                        self.current_frame()
+                                            .instructions
+                                            .set_cached_dict_slot(cache_ip, Some(slot));
+                                    }
+                                    Some(value)
+                                } else {
+                                    None
+                                }
+                            }
+                        } else if let Some((slot, value)) = module.find_string_key_with_slot(key) {
+                            if slot != u8::MAX {
+                                self.current_frame()
+                                    .instructions
+                                    .set_cached_dict_slot(cache_ip, Some(slot));
+                            }
+                            Some(value)
+                        } else {
+                            None
+                        }
+                    }
+                    other => module.get(&other).copied(),
+                };
+
+                if let Some(value) = value {
+                    Ok(value)
+                } else {
+                    let key = index.stringify()?;
+                    Err(WalrusError::KeyNotFound {
+                        key,
+                        span,
+                        src: self.source_ref.source().to_string(),
+                        filename: self.source_ref.filename().to_string(),
+                    })
+                }
+            }
+            _ => {
+                self.index_value(object, index, opcode, span)?;
+                Ok(self.pop_unchecked())
+            }
+        }
+    }
+
     fn index_const_value(
         &mut self,
         object: Value,
@@ -4137,51 +4455,9 @@ impl<'a> VM<'a> {
         opcode: Opcode,
         span: Span,
     ) -> WalrusResult<()> {
-        match object {
-            Value::Dict(dict_key) => {
-                let dict = self.get_heap().get_dict(dict_key)?;
-
-                let value = match index {
-                    Value::String(key) => dict.get_string_key(key),
-                    other => dict.get(&other).copied(),
-                };
-
-                if let Some(value) = value {
-                    self.push(value);
-                    return Ok(());
-                }
-
-                let key = index.stringify()?;
-                Err(WalrusError::KeyNotFound {
-                    key,
-                    span,
-                    src: self.source_ref.source().to_string(),
-                    filename: self.source_ref.filename().to_string(),
-                })
-            }
-            Value::Module(module_key) => {
-                let module = self.get_heap().get_module(module_key)?;
-
-                let value = match index {
-                    Value::String(key) => module.get_string_key(key),
-                    other => module.get(&other).copied(),
-                };
-
-                if let Some(value) = value {
-                    self.push(value);
-                    return Ok(());
-                }
-
-                let key = index.stringify()?;
-                Err(WalrusError::KeyNotFound {
-                    key,
-                    span,
-                    src: self.source_ref.source().to_string(),
-                    filename: self.source_ref.filename().to_string(),
-                })
-            }
-            _ => self.index_value(object, index, opcode, span),
-        }
+        let value = self.lookup_const_index_value(object, index, opcode, span)?;
+        self.push(value);
+        Ok(())
     }
 
     fn store_index_value(
