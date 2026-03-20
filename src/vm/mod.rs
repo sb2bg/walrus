@@ -1327,18 +1327,12 @@ impl<'a> VM<'a> {
                                     });
                                 }
 
-                                let new_frame = CallFrame {
-                                    return_ip: self.ip,
-                                    frame_pointer: self.locals.len(),
-                                    stack_pointer: self.stack.len(),
-                                    instructions: Rc::clone(&func.code),
-                                    function_name: format!("{}::iter", struct_name),
-                                    return_override: None,
-                                    module_binding: func.module_binding.clone(),
-                                    awaiting_task: None,
-                                    memoize_result_key: None,
-                                    memoize_clone_on_return: false,
-                                };
+                                let mut new_frame = self.make_call_frame(
+                                    Rc::clone(&func.code),
+                                    self.stack.len(),
+                                    func.module_binding.clone(),
+                                );
+                                new_frame.function_name = format!("{}::iter", struct_name);
 
                                 self.call_stack.push(new_frame);
                                 self.push_local_value(Value::StructInst(inst_key));
@@ -1454,25 +1448,11 @@ impl<'a> VM<'a> {
                         let frame = self.current_frame();
                         (Rc::clone(&frame.instructions), frame.module_binding.clone())
                     };
+                    let sp = self.stack.len() - arg_count;
 
-                    let new_frame = CallFrame {
-                        return_ip: self.ip,
-                        frame_pointer: self.locals.len(),
-                        stack_pointer: self.stack.len() - arg_count,
-                        instructions,
-                        function_name: String::new(),
-                        return_override: None,
-                        module_binding,
-                        awaiting_task: None,
-                        memoize_result_key: None,
-                        memoize_clone_on_return: false,
-                    };
-
-                    self.call_stack.push(new_frame);
-
-                    let args_start = self.stack.len() - arg_count;
-                    self.copy_stack_tail_to_locals(args_start);
-
+                    self.call_stack
+                        .push(self.make_call_frame(instructions, sp, module_binding));
+                    self.copy_stack_tail_to_locals(sp);
                     self.ip = 0;
                 }
                 Opcode::CallSelf1 => {
@@ -1490,21 +1470,10 @@ impl<'a> VM<'a> {
                         let frame = self.current_frame();
                         (Rc::clone(&frame.instructions), frame.module_binding.clone())
                     };
+                    let sp = self.stack.len();
 
-                    let new_frame = CallFrame {
-                        return_ip: self.ip,
-                        frame_pointer: self.locals.len(),
-                        stack_pointer: self.stack.len(),
-                        instructions,
-                        function_name: String::new(),
-                        return_override: None,
-                        module_binding,
-                        awaiting_task: None,
-                        memoize_result_key: None,
-                        memoize_clone_on_return: false,
-                    };
-
-                    self.call_stack.push(new_frame);
+                    self.call_stack
+                        .push(self.make_call_frame(instructions, sp, module_binding));
                     self.push_local_value(arg);
                     self.ip = 0;
                 }
@@ -1522,21 +1491,10 @@ impl<'a> VM<'a> {
                         let frame = self.current_frame();
                         (Rc::clone(&frame.instructions), frame.module_binding.clone())
                     };
+                    let sp = self.stack.len();
 
-                    let new_frame = CallFrame {
-                        return_ip: self.ip,
-                        frame_pointer: self.locals.len(),
-                        stack_pointer: self.stack.len(),
-                        instructions,
-                        function_name: String::new(),
-                        return_override: None,
-                        module_binding,
-                        awaiting_task: None,
-                        memoize_result_key: None,
-                        memoize_clone_on_return: false,
-                    };
-
-                    self.call_stack.push(new_frame);
+                    self.call_stack
+                        .push(self.make_call_frame(instructions, sp, module_binding));
                     self.push_local_value(arg);
                     self.ip = 0;
                 }
@@ -1570,19 +1528,11 @@ impl<'a> VM<'a> {
                         let frame = self.current_frame();
                         (Rc::clone(&frame.instructions), frame.module_binding.clone())
                     };
+                    let sp = self.stack.len();
 
-                    let new_frame = CallFrame {
-                        return_ip: self.ip,
-                        frame_pointer: self.locals.len(),
-                        stack_pointer: self.stack.len(),
-                        instructions,
-                        function_name: String::new(),
-                        return_override: None,
-                        module_binding,
-                        awaiting_task: None,
-                        memoize_result_key: Some(cache_key),
-                        memoize_clone_on_return: clone_on_return,
-                    };
+                    let mut new_frame = self.make_call_frame(instructions, sp, module_binding);
+                    new_frame.memoize_result_key = Some(cache_key);
+                    new_frame.memoize_clone_on_return = clone_on_return;
 
                     self.call_stack.push(new_frame);
                     self.push_local_value(arg);
@@ -1636,18 +1586,9 @@ impl<'a> VM<'a> {
                         match fast_call {
                             FastPureGlobalCall1::Vm(code, module_binding) => {
                                 let arg = self.pop_unchecked();
-                                let new_frame = CallFrame {
-                                    return_ip: self.ip,
-                                    frame_pointer: self.locals.len(),
-                                    stack_pointer: self.stack.len(),
-                                    instructions: code,
-                                    function_name: String::new(),
-                                    return_override: None,
-                                    module_binding,
-                                    awaiting_task: None,
-                                    memoize_result_key: Some(cache_key),
-                                    memoize_clone_on_return: false,
-                                };
+                                let sp = self.stack.len();
+                                let mut new_frame = self.make_call_frame(code, sp, module_binding);
+                                new_frame.memoize_result_key = Some(cache_key);
 
                                 self.call_stack.push(new_frame);
                                 self.push_local_value(arg);
@@ -1691,26 +1632,15 @@ impl<'a> VM<'a> {
                                     }
 
                                     let arg = self.pop_unchecked();
-                                    let new_frame = CallFrame {
-                                        return_ip: self.ip,
-                                        frame_pointer: self.locals.len(),
-                                        stack_pointer: self.stack.len(),
-                                        instructions: Rc::clone(&func.code),
-                                        function_name: String::new(),
-                                        return_override: None,
-                                        module_binding: func.module_binding.clone(),
-                                        awaiting_task: None,
-                                        memoize_result_key: if self
-                                            .current_frame()
-                                            .module_binding
-                                            .is_none()
-                                        {
-                                            Some(cache_key)
-                                        } else {
-                                            None
-                                        },
-                                        memoize_clone_on_return: false,
-                                    };
+                                    let sp = self.stack.len();
+                                    let mut new_frame = self.make_call_frame(
+                                        Rc::clone(&func.code),
+                                        sp,
+                                        func.module_binding.clone(),
+                                    );
+                                    if self.current_frame().module_binding.is_none() {
+                                        new_frame.memoize_result_key = Some(cache_key);
+                                    }
 
                                     self.call_stack.push(new_frame);
                                     self.push_local_value(arg);
@@ -1779,23 +1709,13 @@ impl<'a> VM<'a> {
 
                         match fast_call {
                             FastGlobalCall::Vm(code, module_binding) => {
-                                let new_frame = CallFrame {
-                                    return_ip: self.ip,
-                                    frame_pointer: self.locals.len(),
-                                    stack_pointer: self.stack.len() - arg_count,
-                                    instructions: code,
-                                    function_name: String::new(),
-                                    return_override: None,
+                                let sp = self.stack.len() - arg_count;
+                                self.call_stack.push(self.make_call_frame(
+                                    code,
+                                    sp,
                                     module_binding,
-                                    awaiting_task: None,
-                                    memoize_result_key: None,
-                                    memoize_clone_on_return: false,
-                                };
-
-                                self.call_stack.push(new_frame);
-
-                                let args_start = self.stack.len() - arg_count;
-                                self.copy_stack_tail_to_locals(args_start);
+                                ));
+                                self.copy_stack_tail_to_locals(sp);
 
                                 self.ip = 0;
                                 continue;
@@ -1856,23 +1776,13 @@ impl<'a> VM<'a> {
                                         continue;
                                     }
 
-                                    let new_frame = CallFrame {
-                                        return_ip: self.ip,
-                                        frame_pointer: self.locals.len(),
-                                        stack_pointer: self.stack.len() - arg_count,
-                                        instructions: Rc::clone(&func.code),
-                                        function_name: String::new(),
-                                        return_override: None,
-                                        module_binding: func.module_binding.clone(),
-                                        awaiting_task: None,
-                                        memoize_result_key: None,
-                                        memoize_clone_on_return: false,
-                                    };
-
-                                    self.call_stack.push(new_frame);
-
-                                    let args_start = self.stack.len() - arg_count;
-                                    self.copy_stack_tail_to_locals(args_start);
+                                    let sp = self.stack.len() - arg_count;
+                                    self.call_stack.push(self.make_call_frame(
+                                        Rc::clone(&func.code),
+                                        sp,
+                                        func.module_binding.clone(),
+                                    ));
+                                    self.copy_stack_tail_to_locals(sp);
 
                                     self.ip = 0;
                                 }
@@ -1915,24 +1825,19 @@ impl<'a> VM<'a> {
                                     let instance_value =
                                         self.get_heap_mut().push(HeapValue::StructInst(instance));
 
-                                    let new_frame = CallFrame {
-                                        return_ip: self.ip,
-                                        frame_pointer: self.locals.len(),
-                                        stack_pointer: self.stack.len() - arg_count,
-                                        instructions: Rc::clone(&init_func.code),
-                                        function_name: format!("{}::init", struct_name),
-                                        return_override: Some(instance_value),
-                                        module_binding: init_func.module_binding.clone(),
-                                        awaiting_task: None,
-                                        memoize_result_key: None,
-                                        memoize_clone_on_return: false,
-                                    };
+                                    let sp = self.stack.len() - arg_count;
+                                    let mut new_frame = self.make_call_frame(
+                                        Rc::clone(&init_func.code),
+                                        sp,
+                                        init_func.module_binding.clone(),
+                                    );
+                                    new_frame.function_name = format!("{}::init", struct_name);
+                                    new_frame.return_override = Some(instance_value);
 
                                     self.call_stack.push(new_frame);
 
                                     self.push_local_value(instance_value);
-                                    let args_start = self.stack.len() - arg_count;
-                                    self.copy_stack_tail_to_locals(args_start);
+                                    self.copy_stack_tail_to_locals(sp);
                                     self.ip = 0;
                                 }
                                 Some(_) => {
@@ -2015,20 +1920,12 @@ impl<'a> VM<'a> {
                         match fast_call {
                             FastGlobalCall1::Vm(code, module_binding) => {
                                 let arg = self.pop_unchecked();
-                                let new_frame = CallFrame {
-                                    return_ip: self.ip,
-                                    frame_pointer: self.locals.len(),
-                                    stack_pointer: self.stack.len(),
-                                    instructions: code,
-                                    function_name: String::new(),
-                                    return_override: None,
+                                let sp = self.stack.len();
+                                self.call_stack.push(self.make_call_frame(
+                                    code,
+                                    sp,
                                     module_binding,
-                                    awaiting_task: None,
-                                    memoize_result_key: None,
-                                    memoize_clone_on_return: false,
-                                };
-
-                                self.call_stack.push(new_frame);
+                                ));
                                 self.push_local_value(arg);
                                 self.ip = 0;
                                 continue;
@@ -2089,20 +1986,12 @@ impl<'a> VM<'a> {
                                     }
 
                                     let arg = self.pop_unchecked();
-                                    let new_frame = CallFrame {
-                                        return_ip: self.ip,
-                                        frame_pointer: self.locals.len(),
-                                        stack_pointer: self.stack.len(),
-                                        instructions: Rc::clone(&func.code),
-                                        function_name: String::new(),
-                                        return_override: None,
-                                        module_binding: func.module_binding.clone(),
-                                        awaiting_task: None,
-                                        memoize_result_key: None,
-                                        memoize_clone_on_return: false,
-                                    };
-
-                                    self.call_stack.push(new_frame);
+                                    let sp = self.stack.len();
+                                    self.call_stack.push(self.make_call_frame(
+                                        Rc::clone(&func.code),
+                                        sp,
+                                        func.module_binding.clone(),
+                                    ));
                                     self.push_local_value(arg);
                                     self.ip = 0;
                                 }
@@ -2145,18 +2034,14 @@ impl<'a> VM<'a> {
                                         self.get_heap_mut().push(HeapValue::StructInst(instance));
                                     let arg = self.pop_unchecked();
 
-                                    let new_frame = CallFrame {
-                                        return_ip: self.ip,
-                                        frame_pointer: self.locals.len(),
-                                        stack_pointer: self.stack.len(),
-                                        instructions: Rc::clone(&init_func.code),
-                                        function_name: format!("{}::init", struct_name),
-                                        return_override: Some(instance_value),
-                                        module_binding: init_func.module_binding.clone(),
-                                        awaiting_task: None,
-                                        memoize_result_key: None,
-                                        memoize_clone_on_return: false,
-                                    };
+                                    let sp = self.stack.len();
+                                    let mut new_frame = self.make_call_frame(
+                                        Rc::clone(&init_func.code),
+                                        sp,
+                                        init_func.module_binding.clone(),
+                                    );
+                                    new_frame.function_name = format!("{}::init", struct_name);
+                                    new_frame.return_override = Some(instance_value);
 
                                     self.call_stack.push(new_frame);
                                     self.push_local_value(instance_value);
@@ -2253,21 +2138,12 @@ impl<'a> VM<'a> {
                                     }
 
                                     // Create a new call frame instead of a child VM
-                                    let new_frame = CallFrame {
-                                        return_ip: self.ip,                          // Where to return after this function
-                                        frame_pointer: self.locals.len(), // New frame starts at current locals end
-                                        stack_pointer: self.stack.len() - arg_count, // Operand stack position for cleanup on return
-                                        instructions: Rc::clone(&func.code), // Share the instruction set via Rc
-                                        function_name: String::new(),
-                                        return_override: None,
-                                        module_binding: func.module_binding.clone(),
-                                        awaiting_task: None,
-                                        memoize_result_key: None,
-                                        memoize_clone_on_return: false,
-                                    };
-
-                                    // Push the new frame
-                                    self.call_stack.push(new_frame);
+                                    let sp = self.stack.len() - arg_count;
+                                    self.call_stack.push(self.make_call_frame(
+                                        Rc::clone(&func.code),
+                                        sp,
+                                        func.module_binding.clone(),
+                                    ));
 
                                     // Move arguments directly from operand stack to locals.
                                     let args_start = self.stack.len() - arg_count;
@@ -2315,24 +2191,19 @@ impl<'a> VM<'a> {
                                     let instance_value =
                                         self.get_heap_mut().push(HeapValue::StructInst(instance));
 
-                                    let new_frame = CallFrame {
-                                        return_ip: self.ip,
-                                        frame_pointer: self.locals.len(),
-                                        stack_pointer: self.stack.len() - arg_count,
-                                        instructions: Rc::clone(&init_func.code),
-                                        function_name: format!("{}::init", struct_name),
-                                        return_override: Some(instance_value),
-                                        module_binding: init_func.module_binding.clone(),
-                                        awaiting_task: None,
-                                        memoize_result_key: None,
-                                        memoize_clone_on_return: false,
-                                    };
+                                    let sp = self.stack.len() - arg_count;
+                                    let mut new_frame = self.make_call_frame(
+                                        Rc::clone(&init_func.code),
+                                        sp,
+                                        init_func.module_binding.clone(),
+                                    );
+                                    new_frame.function_name = format!("{}::init", struct_name);
+                                    new_frame.return_override = Some(instance_value);
 
                                     self.call_stack.push(new_frame);
 
                                     self.push_local_value(instance_value);
-                                    let args_start = self.stack.len() - arg_count;
-                                    self.copy_stack_tail_to_locals(args_start);
+                                    self.copy_stack_tail_to_locals(sp);
                                     self.ip = 0;
                                 }
                                 Some(_) => {
@@ -2799,29 +2670,7 @@ impl<'a> VM<'a> {
                 Opcode::Divide => {
                     let b = self.pop(opcode, span)?;
                     let a = self.pop(opcode, span)?;
-
-                    match (a, b) {
-                        (Value::Int(a), Value::Int(b)) => {
-                            if b == 0 {
-                                return Err(WalrusError::DivisionByZero {
-                                    span,
-                                    src: self.source_ref.source().to_string(),
-                                    filename: self.source_ref.filename().to_string(),
-                                });
-                            }
-                            self.push(Value::Int(a / b));
-                        }
-                        (Value::Float(FloatOrd(a)), Value::Float(FloatOrd(b))) => {
-                            self.push(Value::Float(FloatOrd(a / b)));
-                        }
-                        (Value::Int(a), Value::Float(FloatOrd(b))) => {
-                            self.push(Value::Float(FloatOrd(a as f64 / b)));
-                        }
-                        (Value::Float(FloatOrd(a)), Value::Int(b)) => {
-                            self.push(Value::Float(FloatOrd(a / b as f64)));
-                        }
-                        _ => return Err(self.construct_err(opcode, a, Some(b), span)),
-                    }
+                    self.checked_numeric_binary_op(a, b, |a, b| a / b, |a, b| a / b, opcode, span)?;
                 }
                 Opcode::Power => {
                     let b = self.pop(opcode, span)?;
@@ -2830,7 +2679,6 @@ impl<'a> VM<'a> {
                     match (a, b) {
                         (Value::Int(a), Value::Int(b)) => {
                             if b < 0 {
-                                // Convert to float for negative exponents
                                 let result = (a as f64).powf(b as f64);
                                 self.push(Value::Float(FloatOrd(result)));
                             } else {
@@ -2852,29 +2700,7 @@ impl<'a> VM<'a> {
                 Opcode::Modulo => {
                     let b = self.pop(opcode, span)?;
                     let a = self.pop(opcode, span)?;
-
-                    match (a, b) {
-                        (Value::Int(a), Value::Int(b)) => {
-                            if b == 0 {
-                                return Err(WalrusError::DivisionByZero {
-                                    span,
-                                    src: self.source_ref.source().to_string(),
-                                    filename: self.source_ref.filename().to_string(),
-                                });
-                            }
-                            self.push(Value::Int(a % b));
-                        }
-                        (Value::Float(FloatOrd(a)), Value::Float(FloatOrd(b))) => {
-                            self.push(Value::Float(FloatOrd(a % b)));
-                        }
-                        (Value::Int(a), Value::Float(FloatOrd(b))) => {
-                            self.push(Value::Float(FloatOrd(a as f64 % b)));
-                        }
-                        (Value::Float(FloatOrd(a)), Value::Int(b)) => {
-                            self.push(Value::Float(FloatOrd(a % b as f64)));
-                        }
-                        _ => return Err(self.construct_err(opcode, a, Some(b), span)),
-                    }
+                    self.checked_numeric_binary_op(a, b, |a, b| a % b, |a, b| a % b, opcode, span)?;
                 }
                 Opcode::Negate => {
                     let a = self.pop(opcode, span)?;
@@ -3440,20 +3266,11 @@ impl<'a> VM<'a> {
                                     });
                                 }
 
-                                let new_frame = CallFrame {
-                                    return_ip: self.ip,
-                                    frame_pointer: self.locals.len(),
-                                    stack_pointer: object_idx,
-                                    instructions: method_code,
-                                    function_name: String::new(),
-                                    return_override: None,
-                                    module_binding: method_binding,
-                                    awaiting_task: None,
-                                    memoize_result_key: None,
-                                    memoize_clone_on_return: false,
-                                };
-
-                                self.call_stack.push(new_frame);
+                                self.call_stack.push(self.make_call_frame(
+                                    method_code,
+                                    object_idx,
+                                    method_binding,
+                                ));
 
                                 let args_start = object_idx + 1;
                                 self.copy_stack_tail_to_locals(args_start);
@@ -3532,20 +3349,11 @@ impl<'a> VM<'a> {
                                     });
                                 }
 
-                                let new_frame = CallFrame {
-                                    return_ip: self.ip,
-                                    frame_pointer: self.locals.len(),
-                                    stack_pointer: object_idx,
-                                    instructions: method_code,
-                                    function_name: String::new(),
-                                    return_override: None,
-                                    module_binding: method_binding,
-                                    awaiting_task: None,
-                                    memoize_result_key: None,
-                                    memoize_clone_on_return: false,
-                                };
-
-                                self.call_stack.push(new_frame);
+                                self.call_stack.push(self.make_call_frame(
+                                    method_code,
+                                    object_idx,
+                                    method_binding,
+                                ));
 
                                 self.push_local_value(Value::StructInst(inst_key));
                                 let args_start = object_idx + 1;
@@ -3717,20 +3525,12 @@ impl<'a> VM<'a> {
                                     });
                                 }
 
-                                let new_frame = CallFrame {
-                                    return_ip: self.ip,
-                                    frame_pointer: self.locals.len(),
-                                    stack_pointer: self.stack.len(),
-                                    instructions: Rc::clone(&func.code),
-                                    function_name: String::new(),
-                                    return_override: None,
-                                    module_binding: func.module_binding.clone(),
-                                    awaiting_task: None,
-                                    memoize_result_key: None,
-                                    memoize_clone_on_return: false,
-                                };
-
-                                self.call_stack.push(new_frame);
+                                let sp = self.stack.len();
+                                self.call_stack.push(self.make_call_frame(
+                                    Rc::clone(&func.code),
+                                    sp,
+                                    func.module_binding.clone(),
+                                ));
 
                                 for arg in args {
                                     self.push_local_value(arg);
@@ -3774,20 +3574,12 @@ impl<'a> VM<'a> {
                                     });
                                 }
 
-                                let new_frame = CallFrame {
-                                    return_ip: self.ip,
-                                    frame_pointer: self.locals.len(),
-                                    stack_pointer: self.stack.len(),
-                                    instructions: Rc::clone(&func.code),
-                                    function_name: String::new(),
-                                    return_override: None,
-                                    module_binding: func.module_binding.clone(),
-                                    awaiting_task: None,
-                                    memoize_result_key: None,
-                                    memoize_clone_on_return: false,
-                                };
-
-                                self.call_stack.push(new_frame);
+                                let sp = self.stack.len();
+                                self.call_stack.push(self.make_call_frame(
+                                    Rc::clone(&func.code),
+                                    sp,
+                                    func.module_binding.clone(),
+                                ));
                                 self.push_local_value(Value::StructInst(inst_key));
                                 for arg in args {
                                     self.push_local_value(arg);
@@ -3875,6 +3667,41 @@ impl<'a> VM<'a> {
             }
             _ => Err(self.construct_err(opcode, a, Some(b), span)),
         }
+    }
+
+    #[inline(always)]
+    fn checked_numeric_binary_op(
+        &mut self,
+        a: Value,
+        b: Value,
+        int_op: fn(i64, i64) -> i64,
+        float_op: fn(f64, f64) -> f64,
+        opcode: Opcode,
+        span: Span,
+    ) -> WalrusResult<()> {
+        match (a, b) {
+            (Value::Int(a), Value::Int(b)) => {
+                if b == 0 {
+                    return Err(WalrusError::DivisionByZero {
+                        span,
+                        src: self.source_ref.source().to_string(),
+                        filename: self.source_ref.filename().to_string(),
+                    });
+                }
+                self.push(Value::Int(int_op(a, b)));
+            }
+            (Value::Float(FloatOrd(a)), Value::Float(FloatOrd(b))) => {
+                self.push(Value::Float(FloatOrd(float_op(a, b))));
+            }
+            (Value::Int(a), Value::Float(FloatOrd(b))) => {
+                self.push(Value::Float(FloatOrd(float_op(a as f64, b))));
+            }
+            (Value::Float(FloatOrd(a)), Value::Int(b)) => {
+                self.push(Value::Float(FloatOrd(float_op(a, b as f64))));
+            }
+            _ => return Err(self.construct_err(opcode, a, Some(b), span)),
+        }
+        Ok(())
     }
 
     #[inline(always)]

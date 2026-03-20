@@ -989,18 +989,10 @@ impl<'a> VM<'a> {
                     return Ok(Some(task));
                 }
 
-                let new_frame = CallFrame {
-                    return_ip: self.ip,
-                    frame_pointer: self.locals.len(),
-                    stack_pointer: self.stack.len(),
-                    instructions: Rc::clone(&func.code),
-                    function_name: func.name.clone(),
-                    return_override: None,
-                    module_binding: func.module_binding.clone(),
-                    awaiting_task: None,
-                    memoize_result_key: None,
-                    memoize_clone_on_return: false,
-                };
+                let sp = self.stack.len();
+                let mut new_frame =
+                    self.make_call_frame(Rc::clone(&func.code), sp, func.module_binding.clone());
+                new_frame.function_name = func.name.clone();
 
                 self.call_stack.push(new_frame);
                 self.locals.extend(args);

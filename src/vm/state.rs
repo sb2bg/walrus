@@ -107,6 +107,27 @@ impl<'a> VM<'a> {
     }
 
     #[inline(always)]
+    pub(super) fn make_call_frame(
+        &self,
+        instructions: Rc<InstructionSet>,
+        stack_pointer: usize,
+        module_binding: Option<Rc<VmModuleBinding>>,
+    ) -> CallFrame {
+        CallFrame {
+            return_ip: self.ip,
+            frame_pointer: self.locals.len(),
+            stack_pointer,
+            instructions,
+            function_name: String::new(),
+            return_override: None,
+            module_binding,
+            awaiting_task: None,
+            memoize_result_key: None,
+            memoize_clone_on_return: false,
+        }
+    }
+
+    #[inline(always)]
     pub(super) fn current_frame(&self) -> &CallFrame {
         unsafe { self.call_stack.last().unwrap_unchecked() }
     }
