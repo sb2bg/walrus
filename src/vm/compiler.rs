@@ -48,12 +48,6 @@ pub struct BytecodeEmitter<'a> {
     current_struct_methods: Option<FxHashSet<String>>, // Known method names for current struct
     current_function_name: Option<String>,
     current_function_arity: Option<usize>,
-    top_level_global_names: FxHashSet<String>,
-    known_int_globals: FxHashSet<String>,
-    known_int_functions: FxHashSet<String>,
-    known_pure_int_functions: FxHashSet<String>,
-    known_pure_cloneable_functions: FxHashSet<String>,
-    known_int_scopes: Vec<FxHashSet<String>>,
 }
 
 struct LoopContext {
@@ -159,12 +153,6 @@ impl<'a> BytecodeEmitter<'a> {
             current_struct_methods: None,
             current_function_name: None,
             current_function_arity: None,
-            top_level_global_names: FxHashSet::default(),
-            known_int_globals: FxHashSet::default(),
-            known_int_functions: FxHashSet::default(),
-            known_pure_int_functions: FxHashSet::default(),
-            known_pure_cloneable_functions: FxHashSet::default(),
-            known_int_scopes: vec![FxHashSet::default()],
         }
     }
 
@@ -186,895 +174,7 @@ impl<'a> BytecodeEmitter<'a> {
             current_struct_methods: self.current_struct_methods.clone(),
             current_function_name: None,
             current_function_arity: None,
-            top_level_global_names: self.top_level_global_names.clone(),
-            known_int_globals: self.known_int_globals.clone(),
-            known_int_functions: self.known_int_functions.clone(),
-            known_pure_int_functions: self.known_pure_int_functions.clone(),
-            known_pure_cloneable_functions: self.known_pure_cloneable_functions.clone(),
-            known_int_scopes: vec![FxHashSet::default(), FxHashSet::default()],
         }
-    }
-
-    fn is_known_int_name(&self, name: &str) -> bool {
-        if let Some(depth) = self.instructions.resolve_depth(name) {
-            return self
-                .known_int_scopes
-                .get(depth)
-                .is_some_and(|scope| scope.contains(name));
-        }
-
-        self.known_int_globals.contains(name)
-    }
-
-    fn is_known_int_function_call(&self, func: &Node, recursive_name: Option<&str>) -> bool {
-        match func.kind() {
-            NodeKind::Ident(name) => {
-                self.instructions.resolve_local_index(name).is_none()
-                    && (self.known_int_functions.contains(name)
-                        || recursive_name.is_some_and(|current| current == name))
-            }
-            NodeKind::MemberAccess(object, method_name) => {
-                matches!(object.kind(), NodeKind::Ident(module_name) if module_name == "core")
-                    && method_name == "len"
-            }
-            _ => false,
-        }
-    }
-
-    fn is_known_int_expr_with_recursion(&self, node: &Node, recursive_name: Option<&str>) -> bool {
-        match node.kind() {
-            NodeKind::Int(_) => true,
-            NodeKind::Ident(name) => self.is_known_int_name(name),
-            NodeKind::UnaryOp(Opcode::Negate, expr) => {
-                self.is_known_int_expr_with_recursion(expr, recursive_name)
-            }
-            NodeKind::FunctionCall(func, _) => {
-                self.is_known_int_function_call(func, recursive_name)
-            }
-            NodeKind::BinOp(left, op, right) => {
-                matches!(
-                    op,
-                    Opcode::Add
-                        | Opcode::Subtract
-                        | Opcode::Multiply
-                        | Opcode::Divide
-                        | Opcode::Modulo
-                ) && self.is_known_int_expr_with_recursion(left, recursive_name)
-                    && self.is_known_int_expr_with_recursion(right, recursive_name)
-            }
-            _ => false,
-        }
-    }
-
-    fn is_known_int_expr(&self, node: &Node) -> bool {
-        self.is_known_int_expr_with_recursion(node, None)
-    }
-
-    fn is_known_int_expr_with_assumptions(
-        &self,
-        node: &Node,
-        recursive_name: Option<&str>,
-        assumed_int_names: &FxHashSet<String>,
-    ) -> bool {
-        match node.kind() {
-            NodeKind::Int(_) => true,
-            NodeKind::Ident(name) => {
-                assumed_int_names.contains(name) || self.is_known_int_name(name)
-            }
-            NodeKind::UnaryOp(Opcode::Negate, expr) => {
-                self.is_known_int_expr_with_assumptions(expr, recursive_name, assumed_int_names)
-            }
-            NodeKind::FunctionCall(func, _) => {
-                self.is_known_int_function_call(func, recursive_name)
-            }
-            NodeKind::BinOp(left, op, right) => {
-                matches!(
-                    op,
-                    Opcode::Add
-                        | Opcode::Subtract
-                        | Opcode::Multiply
-                        | Opcode::Divide
-                        | Opcode::Modulo
-                ) && self.is_known_int_expr_with_assumptions(
-                    left,
-                    recursive_name,
-                    assumed_int_names,
-                ) && self.is_known_int_expr_with_assumptions(
-                    right,
-                    recursive_name,
-                    assumed_int_names,
-                )
-            }
-            _ => false,
-        }
-    }
-
-    fn specialized_int_opcode(&self, op: Opcode, left: &Node, right: &Node) -> Option<Opcode> {
-        if self.is_known_int_expr(left) {
-            match (op, right.kind()) {
-                (Opcode::Add, NodeKind::Int(1)) => return Some(Opcode::AddInt1),
-                (Opcode::Subtract, NodeKind::Int(1)) => return Some(Opcode::SubtractInt1),
-                (Opcode::Subtract, NodeKind::Int(2)) => return Some(Opcode::SubtractInt2),
-                (Opcode::LessEqual, NodeKind::Int(1)) => return Some(Opcode::LessEqualInt1),
-                _ => {}
-            }
-        }
-
-        if !self.is_known_int_expr(left) || !self.is_known_int_expr(right) {
-            return None;
-        }
-
-        match op {
-            Opcode::Add => Some(Opcode::AddInt),
-            Opcode::Subtract => Some(Opcode::SubtractInt),
-            Opcode::Multiply => Some(Opcode::MultiplyInt),
-            Opcode::Divide => Some(Opcode::DivideInt),
-            Opcode::Modulo => Some(Opcode::ModuloInt),
-            Opcode::Less => Some(Opcode::LessInt),
-            Opcode::LessEqual => Some(Opcode::LessEqualInt),
-            _ => None,
-        }
-    }
-
-    fn mark_known_int(&mut self, name: &str, is_global: bool, known: bool) {
-        if is_global {
-            if known {
-                self.known_int_globals.insert(name.to_string());
-            } else {
-                self.known_int_globals.remove(name);
-            }
-            return;
-        }
-
-        let Some(depth) = self.instructions.resolve_depth(name) else {
-            return;
-        };
-        let Some(scope) = self.known_int_scopes.get_mut(depth) else {
-            return;
-        };
-        if known {
-            scope.insert(name.to_string());
-        } else {
-            scope.remove(name);
-        }
-    }
-
-    fn name_used_in_int_context(node: &Node, name: &str) -> bool {
-        match node.kind() {
-            NodeKind::BinOp(left, op, right) => {
-                (matches!(
-                    op,
-                    Opcode::Add
-                        | Opcode::Subtract
-                        | Opcode::Multiply
-                        | Opcode::Divide
-                        | Opcode::Modulo
-                        | Opcode::Less
-                        | Opcode::LessEqual
-                        | Opcode::Greater
-                        | Opcode::GreaterEqual
-                ) && (Self::references_name(left, name) || Self::references_name(right, name)))
-                    || Self::name_used_in_int_context(left, name)
-                    || Self::name_used_in_int_context(right, name)
-            }
-            NodeKind::UnaryOp(Opcode::Negate, expr) => {
-                Self::references_name(expr, name) || Self::name_used_in_int_context(expr, name)
-            }
-            NodeKind::Index(_, index) => {
-                Self::references_name(index, name) || Self::name_used_in_int_context(index, name)
-            }
-            NodeKind::Range(Some(start), end) => {
-                Self::name_used_in_int_context(start, name)
-                    || Self::name_used_in_int_context(end, name)
-            }
-            NodeKind::Range(None, end)
-            | NodeKind::Assign(_, end)
-            | NodeKind::ExpressionStatement(end)
-            | NodeKind::Return(end)
-            | NodeKind::Print(end)
-            | NodeKind::Println(end)
-            | NodeKind::Throw(end)
-            | NodeKind::Free(end)
-            | NodeKind::Defer(end)
-            | NodeKind::Await(end) => Self::name_used_in_int_context(end, name),
-            NodeKind::Reassign(_, expr, _) | NodeKind::MemberAccess(expr, _) => {
-                Self::name_used_in_int_context(expr, name)
-            }
-            NodeKind::Program(nodes)
-            | NodeKind::Statements(nodes)
-            | NodeKind::UnscopedStatements(nodes)
-            | NodeKind::List(nodes)
-            | NodeKind::Block(nodes)
-            | NodeKind::StructDefinition(_, nodes) => nodes
-                .iter()
-                .any(|node| Self::name_used_in_int_context(node, name)),
-            NodeKind::Dict(entries) => entries.iter().any(|(key, value)| {
-                Self::name_used_in_int_context(key, name)
-                    || Self::name_used_in_int_context(value, name)
-            }),
-            NodeKind::FunctionCall(func, args) => {
-                Self::name_used_in_int_context(func, name)
-                    || args
-                        .iter()
-                        .any(|arg| Self::name_used_in_int_context(arg, name))
-            }
-            NodeKind::If(condition, then_branch, else_branch) => {
-                Self::name_used_in_int_context(condition, name)
-                    || Self::name_used_in_int_context(then_branch, name)
-                    || else_branch
-                        .as_deref()
-                        .is_some_and(|branch| Self::name_used_in_int_context(branch, name))
-            }
-            NodeKind::Ternary(condition, when_true, when_false) => {
-                Self::name_used_in_int_context(condition, name)
-                    || Self::name_used_in_int_context(when_true, name)
-                    || Self::name_used_in_int_context(when_false, name)
-            }
-            NodeKind::While(condition, body) => {
-                Self::name_used_in_int_context(condition, name)
-                    || Self::name_used_in_int_context(body, name)
-            }
-            NodeKind::For(_, iter, body) => {
-                Self::name_used_in_int_context(iter, name)
-                    || Self::name_used_in_int_context(body, name)
-            }
-            _ => false,
-        }
-    }
-
-    fn int_parameter_names(args: &[String], body: &Node) -> FxHashSet<String> {
-        args.iter()
-            .filter(|arg| Self::name_used_in_int_context(body, arg))
-            .cloned()
-            .collect()
-    }
-
-    fn extend_assumed_int_names(
-        &self,
-        node: &Node,
-        recursive_name: &str,
-        assumed_int_names: &mut FxHashSet<String>,
-    ) {
-        match node.kind() {
-            NodeKind::Program(nodes)
-            | NodeKind::Statements(nodes)
-            | NodeKind::UnscopedStatements(nodes)
-            | NodeKind::Block(nodes)
-            | NodeKind::List(nodes)
-            | NodeKind::StructDefinition(_, nodes) => {
-                for node in nodes {
-                    self.extend_assumed_int_names(node, recursive_name, assumed_int_names);
-                }
-            }
-            NodeKind::Assign(name, expr) => {
-                if self.is_known_int_expr_with_assumptions(
-                    expr,
-                    Some(recursive_name),
-                    assumed_int_names,
-                ) {
-                    assumed_int_names.insert(name.clone());
-                }
-            }
-            NodeKind::Reassign(name, expr, op) => {
-                let current_is_int = assumed_int_names.contains(name.value());
-                let expr_is_int = self.is_known_int_expr_with_assumptions(
-                    expr,
-                    Some(recursive_name),
-                    assumed_int_names,
-                );
-                let next_is_int = match op {
-                    Opcode::Equal => expr_is_int,
-                    Opcode::Add
-                    | Opcode::Subtract
-                    | Opcode::Multiply
-                    | Opcode::Divide
-                    | Opcode::Modulo => current_is_int && expr_is_int,
-                    _ => false,
-                };
-
-                if next_is_int {
-                    assumed_int_names.insert(name.value().to_string());
-                }
-            }
-            NodeKind::Dict(entries) => {
-                for (key, value) in entries {
-                    self.extend_assumed_int_names(key, recursive_name, assumed_int_names);
-                    self.extend_assumed_int_names(value, recursive_name, assumed_int_names);
-                }
-            }
-            NodeKind::BinOp(left, _, right)
-            | NodeKind::Index(left, right)
-            | NodeKind::Range(Some(left), right)
-            | NodeKind::Try(left, _, right) => {
-                self.extend_assumed_int_names(left, recursive_name, assumed_int_names);
-                self.extend_assumed_int_names(right, recursive_name, assumed_int_names);
-            }
-            NodeKind::UnaryOp(_, expr)
-            | NodeKind::ExpressionStatement(expr)
-            | NodeKind::Return(expr)
-            | NodeKind::Print(expr)
-            | NodeKind::Println(expr)
-            | NodeKind::Throw(expr)
-            | NodeKind::Free(expr)
-            | NodeKind::Defer(expr)
-            | NodeKind::Await(expr)
-            | NodeKind::MemberAccess(expr, _)
-            | NodeKind::Range(None, expr) => {
-                self.extend_assumed_int_names(expr, recursive_name, assumed_int_names);
-            }
-            NodeKind::FunctionCall(func, args) => {
-                self.extend_assumed_int_names(func, recursive_name, assumed_int_names);
-                for arg in args {
-                    self.extend_assumed_int_names(arg, recursive_name, assumed_int_names);
-                }
-            }
-            NodeKind::If(condition, then_branch, else_branch) => {
-                self.extend_assumed_int_names(condition, recursive_name, assumed_int_names);
-                self.extend_assumed_int_names(then_branch, recursive_name, assumed_int_names);
-                if let Some(else_branch) = else_branch {
-                    self.extend_assumed_int_names(else_branch, recursive_name, assumed_int_names);
-                }
-            }
-            NodeKind::Ternary(condition, when_true, when_false) => {
-                self.extend_assumed_int_names(condition, recursive_name, assumed_int_names);
-                self.extend_assumed_int_names(when_true, recursive_name, assumed_int_names);
-                self.extend_assumed_int_names(when_false, recursive_name, assumed_int_names);
-            }
-            NodeKind::While(condition, body) => {
-                self.extend_assumed_int_names(condition, recursive_name, assumed_int_names);
-                self.extend_assumed_int_names(body, recursive_name, assumed_int_names);
-            }
-            NodeKind::For(name, iter, body) => {
-                if Self::name_used_in_int_context(iter, name) {
-                    assumed_int_names.insert(name.clone());
-                }
-                self.extend_assumed_int_names(iter, recursive_name, assumed_int_names);
-                self.extend_assumed_int_names(body, recursive_name, assumed_int_names);
-            }
-            _ => {}
-        }
-    }
-
-    fn assumed_int_names_for_function(
-        &self,
-        recursive_name: &str,
-        args: &[String],
-        body: &Node,
-    ) -> FxHashSet<String> {
-        let mut assumed_int_names = Self::int_parameter_names(args, body);
-        self.extend_assumed_int_names(body, recursive_name, &mut assumed_int_names);
-        assumed_int_names
-    }
-
-    fn sequence_guarantees_int_return(
-        &self,
-        nodes: &[Node],
-        recursive_name: &str,
-        assumed_int_names: &FxHashSet<String>,
-    ) -> bool {
-        nodes
-            .iter()
-            .any(|node| self.node_guarantees_int_return(node, recursive_name, assumed_int_names))
-    }
-
-    fn node_guarantees_int_return(
-        &self,
-        node: &Node,
-        recursive_name: &str,
-        assumed_int_names: &FxHashSet<String>,
-    ) -> bool {
-        match node.kind() {
-            NodeKind::Return(expr) => self.is_known_int_expr_with_assumptions(
-                expr,
-                Some(recursive_name),
-                assumed_int_names,
-            ),
-            NodeKind::If(_, then_branch, Some(else_branch)) => {
-                self.node_guarantees_int_return(then_branch, recursive_name, assumed_int_names)
-                    && self.node_guarantees_int_return(
-                        else_branch,
-                        recursive_name,
-                        assumed_int_names,
-                    )
-            }
-            NodeKind::Program(nodes)
-            | NodeKind::Statements(nodes)
-            | NodeKind::UnscopedStatements(nodes)
-            | NodeKind::Block(nodes) => {
-                self.sequence_guarantees_int_return(nodes, recursive_name, assumed_int_names)
-            }
-            _ => false,
-        }
-    }
-
-    fn function_guarantees_int_return(&self, name: &str, args: &[String], body: &Node) -> bool {
-        let assumed_int_names = self.assumed_int_names_for_function(name, args, body);
-        self.node_guarantees_int_return(body, name, &assumed_int_names)
-    }
-
-    fn top_level_binding_name(node: &Node) -> Option<String> {
-        match node.kind() {
-            NodeKind::Assign(name, _) => Some(name.clone()),
-            NodeKind::FunctionDefinition(name, _, _)
-            | NodeKind::AsyncFunctionDefinition(name, _, _)
-            | NodeKind::StructDefinition(name, _) => Some(name.clone()),
-            NodeKind::PackageImport(name, alias) | NodeKind::ModuleImport(name, alias) => {
-                Some(alias.clone().unwrap_or_else(|| name.clone()))
-            }
-            _ => None,
-        }
-    }
-
-    fn top_level_binding_must_be_global(node: &Node) -> bool {
-        matches!(
-            node.kind(),
-            NodeKind::FunctionDefinition(_, _, _)
-                | NodeKind::AsyncFunctionDefinition(_, _, _)
-                | NodeKind::StructDefinition(_, _)
-        )
-    }
-
-    fn top_level_body_references(node: &Node, name: &str) -> bool {
-        match node.kind() {
-            NodeKind::FunctionDefinition(_, _, body)
-            | NodeKind::AsyncFunctionDefinition(_, _, body) => Self::references_name(body, name),
-            NodeKind::StructDefinition(_, members) => {
-                members.iter().any(|member| match member.kind() {
-                    NodeKind::StructFunctionDefinition(_, _, body) => {
-                        Self::references_name(body, name)
-                    }
-                    _ => false,
-                })
-            }
-            _ => false,
-        }
-    }
-
-    fn prepare_top_level_scope(&mut self, nodes: &[Node]) {
-        if self.depth != 0 || !self.top_level_global_names.is_empty() {
-            return;
-        }
-
-        let mut binding_names = FxHashSet::default();
-        let mut global_names = FxHashSet::default();
-
-        for node in nodes {
-            if let Some(name) = Self::top_level_binding_name(node) {
-                binding_names.insert(name.clone());
-                if Self::top_level_binding_must_be_global(node) {
-                    global_names.insert(name);
-                }
-            }
-        }
-
-        for name in &binding_names {
-            if global_names.contains(name) {
-                continue;
-            }
-
-            if nodes
-                .iter()
-                .any(|node| Self::top_level_body_references(node, name))
-            {
-                global_names.insert(name.clone());
-            }
-        }
-
-        self.top_level_global_names = global_names;
-    }
-
-    fn node_is_pure_int_ast(
-        &self,
-        node: &Node,
-        recursive_name: &str,
-        locals: &mut FxHashSet<String>,
-    ) -> bool {
-        match node.kind() {
-            NodeKind::Program(nodes)
-            | NodeKind::Statements(nodes)
-            | NodeKind::UnscopedStatements(nodes)
-            | NodeKind::Block(nodes) => nodes
-                .iter()
-                .all(|node| self.node_is_pure_int_ast(node, recursive_name, locals)),
-            NodeKind::Assign(name, expr) => {
-                if !self.node_is_pure_int_ast(expr, recursive_name, locals) {
-                    return false;
-                }
-                locals.insert(name.clone());
-                true
-            }
-            NodeKind::Reassign(name, expr, _) => {
-                locals.contains(name.value())
-                    && self.node_is_pure_int_ast(expr, recursive_name, locals)
-            }
-            NodeKind::Return(expr)
-            | NodeKind::ExpressionStatement(expr)
-            | NodeKind::UnaryOp(_, expr)
-            | NodeKind::Range(None, expr)
-            | NodeKind::MemberAccess(expr, _) => {
-                self.node_is_pure_int_ast(expr, recursive_name, locals)
-            }
-            NodeKind::Int(_)
-            | NodeKind::Float(_)
-            | NodeKind::String(_)
-            | NodeKind::Bool(_)
-            | NodeKind::Void => true,
-            NodeKind::FString(parts) => parts.iter().all(|part| match part {
-                FStringPart::Literal(_) => true,
-                FStringPart::Expr(expr) => self.node_is_pure_int_ast(expr, recursive_name, locals),
-            }),
-            NodeKind::Ident(name) => locals.contains(name),
-            NodeKind::List(nodes) => nodes
-                .iter()
-                .all(|node| self.node_is_pure_int_ast(node, recursive_name, locals)),
-            NodeKind::Dict(entries) => entries.iter().all(|(key, value)| {
-                self.node_is_pure_int_ast(key, recursive_name, locals)
-                    && self.node_is_pure_int_ast(value, recursive_name, locals)
-            }),
-            NodeKind::BinOp(left, _, right)
-            | NodeKind::Index(left, right)
-            | NodeKind::Range(Some(left), right)
-            | NodeKind::Try(left, _, right) => {
-                self.node_is_pure_int_ast(left, recursive_name, locals)
-                    && self.node_is_pure_int_ast(right, recursive_name, locals)
-            }
-            NodeKind::FunctionCall(func, args) => {
-                let args_are_pure = args
-                    .iter()
-                    .all(|arg| self.node_is_pure_int_ast(arg, recursive_name, locals));
-                if !args_are_pure {
-                    return false;
-                }
-
-                match func.kind() {
-                    NodeKind::Ident(name) => {
-                        !locals.contains(name)
-                            && (name == recursive_name
-                                || self.known_pure_int_functions.contains(name))
-                    }
-                    NodeKind::MemberAccess(object, method_name) => {
-                        matches!(object.kind(), NodeKind::Ident(module_name) if module_name == "core")
-                            && method_name == "len"
-                    }
-                    _ => false,
-                }
-            }
-            NodeKind::If(condition, then_branch, else_branch) => {
-                self.node_is_pure_int_ast(condition, recursive_name, locals)
-                    && self.node_is_pure_int_ast(then_branch, recursive_name, locals)
-                    && else_branch.as_deref().is_none_or(|branch| {
-                        self.node_is_pure_int_ast(branch, recursive_name, locals)
-                    })
-            }
-            NodeKind::Ternary(condition, when_true, when_false) => {
-                self.node_is_pure_int_ast(condition, recursive_name, locals)
-                    && self.node_is_pure_int_ast(when_true, recursive_name, locals)
-                    && self.node_is_pure_int_ast(when_false, recursive_name, locals)
-            }
-            NodeKind::While(condition, body) => {
-                self.node_is_pure_int_ast(condition, recursive_name, locals)
-                    && self.node_is_pure_int_ast(body, recursive_name, locals)
-            }
-            NodeKind::For(name, iter, body) => {
-                if !self.node_is_pure_int_ast(iter, recursive_name, locals) {
-                    return false;
-                }
-                locals.insert(name.clone());
-                self.node_is_pure_int_ast(body, recursive_name, locals)
-            }
-            NodeKind::Print(_)
-            | NodeKind::Println(_)
-            | NodeKind::Throw(_)
-            | NodeKind::Free(_)
-            | NodeKind::Defer(_)
-            | NodeKind::Await(_)
-            | NodeKind::IndexAssign(_, _, _)
-            | NodeKind::AnonFunctionDefinition(_, _)
-            | NodeKind::AsyncAnonFunctionDefinition(_, _)
-            | NodeKind::FunctionDefinition(_, _, _)
-            | NodeKind::AsyncFunctionDefinition(_, _, _)
-            | NodeKind::ExternFunctionDefinition(_, _)
-            | NodeKind::StructDefinition(_, _)
-            | NodeKind::StructFunctionDefinition(_, _, _)
-            | NodeKind::PackageImport(_, _)
-            | NodeKind::ModuleImport(_, _)
-            | NodeKind::Break
-            | NodeKind::Continue => false,
-        }
-    }
-
-    fn function_is_pure_int_ast(&self, name: &str, args: &[String], body: &Node) -> bool {
-        let mut locals: FxHashSet<String> = args.iter().cloned().collect();
-        self.node_is_pure_int_ast(body, name, &mut locals)
-    }
-
-    fn expr_is_cloneable_ast(&self, node: &Node, recursive_name: &str) -> bool {
-        match node.kind() {
-            NodeKind::Int(_)
-            | NodeKind::Float(_)
-            | NodeKind::String(_)
-            | NodeKind::Bool(_)
-            | NodeKind::Void
-            | NodeKind::Ident(_) => true,
-            NodeKind::List(nodes) => nodes
-                .iter()
-                .all(|node| self.expr_is_cloneable_ast(node, recursive_name)),
-            NodeKind::Dict(entries) => entries.iter().all(|(key, value)| {
-                self.expr_is_cloneable_ast(key, recursive_name)
-                    && self.expr_is_cloneable_ast(value, recursive_name)
-            }),
-            NodeKind::BinOp(left, _, right)
-            | NodeKind::Index(left, right)
-            | NodeKind::Range(Some(left), right)
-            | NodeKind::Try(left, _, right) => {
-                self.expr_is_cloneable_ast(left, recursive_name)
-                    && self.expr_is_cloneable_ast(right, recursive_name)
-            }
-            NodeKind::UnaryOp(_, expr)
-            | NodeKind::ExpressionStatement(expr)
-            | NodeKind::Return(expr)
-            | NodeKind::Range(None, expr) => self.expr_is_cloneable_ast(expr, recursive_name),
-            NodeKind::FString(parts) => parts.iter().all(|part| match part {
-                FStringPart::Literal(_) => true,
-                FStringPart::Expr(expr) => self.expr_is_cloneable_ast(expr, recursive_name),
-            }),
-            NodeKind::FunctionCall(func, args) => {
-                args.iter()
-                    .all(|arg| self.expr_is_cloneable_ast(arg, recursive_name))
-                    && matches!(
-                        func.kind(),
-                        NodeKind::Ident(name)
-                            if name == recursive_name
-                                || self.known_pure_cloneable_functions.contains(name)
-                    )
-            }
-            NodeKind::If(condition, then_branch, else_branch) => {
-                self.expr_is_cloneable_ast(condition, recursive_name)
-                    && self.expr_is_cloneable_ast(then_branch, recursive_name)
-                    && else_branch
-                        .as_deref()
-                        .is_none_or(|branch| self.expr_is_cloneable_ast(branch, recursive_name))
-            }
-            NodeKind::Ternary(condition, when_true, when_false) => {
-                self.expr_is_cloneable_ast(condition, recursive_name)
-                    && self.expr_is_cloneable_ast(when_true, recursive_name)
-                    && self.expr_is_cloneable_ast(when_false, recursive_name)
-            }
-            NodeKind::Program(nodes)
-            | NodeKind::Statements(nodes)
-            | NodeKind::UnscopedStatements(nodes)
-            | NodeKind::Block(nodes) => nodes
-                .iter()
-                .all(|node| self.expr_is_cloneable_ast(node, recursive_name)),
-            _ => false,
-        }
-    }
-
-    fn node_guarantees_cloneable_return(&self, node: &Node, recursive_name: &str) -> bool {
-        match Self::statement_expr(node).kind() {
-            NodeKind::Return(expr) => self.expr_is_cloneable_ast(expr, recursive_name),
-            NodeKind::If(_, then_branch, Some(else_branch)) => {
-                self.node_guarantees_cloneable_return(then_branch, recursive_name)
-                    && self.node_guarantees_cloneable_return(else_branch, recursive_name)
-            }
-            NodeKind::Program(nodes)
-            | NodeKind::Statements(nodes)
-            | NodeKind::UnscopedStatements(nodes)
-            | NodeKind::Block(nodes) => nodes
-                .last()
-                .is_some_and(|node| self.node_guarantees_cloneable_return(node, recursive_name)),
-            _ => false,
-        }
-    }
-
-    fn function_is_pure_cloneable_ast(&self, name: &str, args: &[String], body: &Node) -> bool {
-        self.function_is_pure_int_ast(name, args, body)
-            && self.node_guarantees_cloneable_return(body, name)
-    }
-
-    fn count_recursive_calls(&self, node: &Node, recursive_name: &str, count: &mut usize) {
-        if *count >= 2 {
-            return;
-        }
-        match node.kind() {
-            NodeKind::FunctionCall(func, args) => {
-                if matches!(func.kind(), NodeKind::Ident(name) if name == recursive_name) {
-                    *count += 1;
-                    if *count >= 2 {
-                        return;
-                    }
-                }
-                self.count_recursive_calls(func, recursive_name, count);
-                for arg in args {
-                    self.count_recursive_calls(arg, recursive_name, count);
-                }
-            }
-            NodeKind::Program(nodes)
-            | NodeKind::Statements(nodes)
-            | NodeKind::UnscopedStatements(nodes)
-            | NodeKind::Block(nodes)
-            | NodeKind::List(nodes) => {
-                for node in nodes {
-                    self.count_recursive_calls(node, recursive_name, count);
-                }
-            }
-            NodeKind::Dict(entries) => {
-                for (key, value) in entries {
-                    self.count_recursive_calls(key, recursive_name, count);
-                    self.count_recursive_calls(value, recursive_name, count);
-                }
-            }
-            NodeKind::BinOp(left, _, right)
-            | NodeKind::Index(left, right)
-            | NodeKind::Range(Some(left), right)
-            | NodeKind::Try(left, _, right) => {
-                self.count_recursive_calls(left, recursive_name, count);
-                self.count_recursive_calls(right, recursive_name, count);
-            }
-            NodeKind::UnaryOp(_, expr)
-            | NodeKind::ExpressionStatement(expr)
-            | NodeKind::Return(expr)
-            | NodeKind::Range(None, expr)
-            | NodeKind::Await(expr)
-            | NodeKind::Defer(expr)
-            | NodeKind::Free(expr)
-            | NodeKind::Print(expr)
-            | NodeKind::Println(expr)
-            | NodeKind::Throw(expr)
-            | NodeKind::MemberAccess(expr, _) => {
-                self.count_recursive_calls(expr, recursive_name, count);
-            }
-            NodeKind::If(condition, then_branch, else_branch) => {
-                self.count_recursive_calls(condition, recursive_name, count);
-                self.count_recursive_calls(then_branch, recursive_name, count);
-                if let Some(branch) = else_branch.as_deref() {
-                    self.count_recursive_calls(branch, recursive_name, count);
-                }
-            }
-            NodeKind::Ternary(condition, when_true, when_false) => {
-                self.count_recursive_calls(condition, recursive_name, count);
-                self.count_recursive_calls(when_true, recursive_name, count);
-                self.count_recursive_calls(when_false, recursive_name, count);
-            }
-            NodeKind::While(condition, body) | NodeKind::For(_, condition, body) => {
-                self.count_recursive_calls(condition, recursive_name, count);
-                self.count_recursive_calls(body, recursive_name, count);
-            }
-            NodeKind::FString(parts) => {
-                for part in parts {
-                    if let FStringPart::Expr(expr) = part {
-                        self.count_recursive_calls(expr, recursive_name, count);
-                    }
-                }
-            }
-            NodeKind::Assign(_, expr) | NodeKind::Reassign(_, expr, _) => {
-                self.count_recursive_calls(expr, recursive_name, count);
-            }
-            NodeKind::IndexAssign(object, index, value) => {
-                self.count_recursive_calls(object, recursive_name, count);
-                self.count_recursive_calls(index, recursive_name, count);
-                self.count_recursive_calls(value, recursive_name, count);
-            }
-            _ => {}
-        }
-    }
-
-    fn has_multiple_recursive_calls(&self, node: &Node, recursive_name: &str) -> bool {
-        let mut count = 0;
-        self.count_recursive_calls(node, recursive_name, &mut count);
-        count >= 2
-    }
-
-    fn instruction_set_is_pure_int(&self, name: &str, instructions: &InstructionSet) -> bool {
-        instructions
-            .instructions
-            .iter()
-            .all(|instruction| match instruction.opcode() {
-                Opcode::LoadConst(_)
-                | Opcode::LoadConst0
-                | Opcode::LoadConst1
-                | Opcode::Load(_)
-                | Opcode::LoadLocal0
-                | Opcode::LoadLocal1
-                | Opcode::LoadLocal2
-                | Opcode::LoadLocal3
-                | Opcode::LoadLocal4
-                | Opcode::LoadLocal5
-                | Opcode::LoadLocal6
-                | Opcode::LoadLocal7
-                | Opcode::LoadLocal8
-                | Opcode::LoadLocal9
-                | Opcode::LoadLocal10
-                | Opcode::LoadLocal11
-                | Opcode::StoreAt(_)
-                | Opcode::StoreLocal0
-                | Opcode::StoreLocal1
-                | Opcode::StoreLocal2
-                | Opcode::StoreLocal3
-                | Opcode::StoreLocal4
-                | Opcode::StoreLocal5
-                | Opcode::StoreLocal6
-                | Opcode::StoreLocal7
-                | Opcode::StoreLocal8
-                | Opcode::StoreLocal9
-                | Opcode::StoreLocal10
-                | Opcode::StoreLocal11
-                | Opcode::Reassign(_)
-                | Opcode::ReassignLocal0
-                | Opcode::ReassignLocal1
-                | Opcode::ReassignLocal2
-                | Opcode::ReassignLocal3
-                | Opcode::ReassignLocal4
-                | Opcode::ReassignLocal5
-                | Opcode::ReassignLocal6
-                | Opcode::ReassignLocal7
-                | Opcode::ReassignLocal8
-                | Opcode::ReassignLocal9
-                | Opcode::ReassignLocal10
-                | Opcode::ReassignLocal11
-                | Opcode::AddAssignLocal(_)
-                | Opcode::AddAssignLocalInt(_)
-                | Opcode::IncrementLocal(_)
-                | Opcode::DecrementLocal(_)
-                | Opcode::JumpIfFalse(_)
-                | Opcode::Jump(_)
-                | Opcode::PopLocal(_)
-                | Opcode::Index
-                | Opcode::IndexConst(_)
-                | Opcode::IndexLocal(_)
-                | Opcode::IndexLocalConst(_, _)
-                | Opcode::IndexLocalLocal(_, _)
-                | Opcode::IndexLocalLocalAdd1(_, _)
-                | Opcode::List(_)
-                | Opcode::Dict(_)
-                | Opcode::Range
-                | Opcode::True
-                | Opcode::False
-                | Opcode::Void
-                | Opcode::Return
-                | Opcode::Pop
-                | Opcode::Add
-                | Opcode::Subtract
-                | Opcode::Multiply
-                | Opcode::Divide
-                | Opcode::Modulo
-                | Opcode::Negate
-                | Opcode::Equal
-                | Opcode::NotEqual
-                | Opcode::Greater
-                | Opcode::GreaterEqual
-                | Opcode::Less
-                | Opcode::LessEqual
-                | Opcode::AddInt
-                | Opcode::AddInt1
-                | Opcode::SubtractInt
-                | Opcode::SubtractInt1
-                | Opcode::SubtractInt2
-                | Opcode::MultiplyInt
-                | Opcode::DivideInt
-                | Opcode::ModuloInt
-                | Opcode::LessInt
-                | Opcode::LessEqualInt
-                | Opcode::LessEqualInt1
-                | Opcode::ForRangeInit(_)
-                | Opcode::ForRangeNext(_, _)
-                | Opcode::ForRangeNextDiscard(_, _)
-                | Opcode::Nop => true,
-                Opcode::CallSelf(_) | Opcode::CallSelf1 => true,
-                Opcode::CallGlobal1(index) => instructions
-                    .globals
-                    .get_name(index as usize)
-                    .is_some_and(|callee| {
-                        callee == name || self.known_pure_int_functions.contains(callee)
-                    }),
-                Opcode::CallGlobal(index, _) => instructions
-                    .globals
-                    .get_name(index as usize)
-                    .is_some_and(|callee| {
-                        callee == name || self.known_pure_int_functions.contains(callee)
-                    }),
-                _ => false,
-            })
     }
 
     fn references_name(node: &Node, name: &str) -> bool {
@@ -1164,21 +264,6 @@ impl<'a> BytecodeEmitter<'a> {
         }
     }
 
-    fn collect_accumulator_add_terms(node: &Node, name: &str, terms: &mut Vec<Node>) -> bool {
-        match node.kind() {
-            NodeKind::Ident(ident) => ident == name,
-            NodeKind::BinOp(left, Opcode::Add, right) => {
-                if Self::collect_accumulator_add_terms(left, name, terms) {
-                    terms.push((**right).clone());
-                    true
-                } else {
-                    false
-                }
-            }
-            _ => false,
-        }
-    }
-
     fn string_constant_index(&mut self, node: &Node) -> Option<u32> {
         match node.kind() {
             NodeKind::String(value) => {
@@ -1193,24 +278,8 @@ impl<'a> BytecodeEmitter<'a> {
     }
 
     fn local_int_index_pattern(&self, node: &Node) -> Option<(u32, bool)> {
-        match node.kind() {
-            NodeKind::Ident(name) if self.is_known_int_name(name) => self
-                .instructions
-                .resolve_local_index(name)
-                .map(|index| (index as u32, false)),
-            NodeKind::BinOp(left, Opcode::Add, right)
-                if matches!(right.kind(), NodeKind::Int(1)) =>
-            {
-                match left.kind() {
-                    NodeKind::Ident(name) if self.is_known_int_name(name) => self
-                        .instructions
-                        .resolve_local_index(name)
-                        .map(|index| (index as u32, true)),
-                    _ => None,
-                }
-            }
-            _ => None,
-        }
+        let _ = node;
+        None
     }
 
     fn local_const_index_pattern(&mut self, node: &Node) -> Option<(u32, u32)> {
@@ -1415,7 +484,6 @@ impl<'a> BytecodeEmitter<'a> {
         match node.into_kind() {
             NodeKind::Program(nodes) => {
                 // Two-pass compilation for forward declarations:
-                self.prepare_top_level_scope(&nodes);
                 // Pass 1: Pre-register all top-level function and struct names
                 for node in &nodes {
                     self.pre_register_declarations(node);
@@ -1635,21 +703,9 @@ impl<'a> BytecodeEmitter<'a> {
                         }
 
                         // Normal binary operations
-                        let specialized = self.specialized_int_opcode(op, &left, &right);
                         self.emit(*left)?;
-                        if !matches!(
-                            specialized,
-                            Some(
-                                Opcode::AddInt1
-                                    | Opcode::SubtractInt1
-                                    | Opcode::SubtractInt2
-                                    | Opcode::LessEqualInt1
-                            )
-                        ) {
-                            self.emit(*right)?;
-                        }
-                        self.instructions
-                            .push(Instruction::new(specialized.unwrap_or(op), span));
+                        self.emit(*right)?;
+                        self.instructions.push(Instruction::new(op, span));
                     }
                 }
             }
@@ -1840,7 +896,6 @@ impl<'a> BytecodeEmitter<'a> {
                     let uses_loop_var = Self::references_name(&body, &name);
                     let var_idx = if uses_loop_var {
                         let var_idx = self.instructions.push_local(name.clone());
-                        self.mark_known_int(&name, false, true);
                         Some(var_idx)
                     } else {
                         None
@@ -2162,8 +1217,7 @@ impl<'a> BytecodeEmitter<'a> {
                 }
             }
             NodeKind::Assign(name, node) => {
-                let is_global = self.depth == 0 && self.top_level_global_names.contains(&name);
-                let value_is_known_int = self.is_known_int_expr(&node);
+                let is_global = self.depth == 0;
 
                 if !is_global {
                     // Check for redefinition only in local scopes
@@ -2183,10 +1237,8 @@ impl<'a> BytecodeEmitter<'a> {
 
                 if is_global {
                     self.define_global_variable(name.clone(), span);
-                    self.mark_known_int(&name, true, value_is_known_int);
                 } else {
                     self.define_variable(name.clone(), span);
-                    self.mark_known_int(&name, false, value_is_known_int);
                 }
             }
             NodeKind::Reassign(name, node, op) => {
@@ -2212,34 +1264,16 @@ impl<'a> BytecodeEmitter<'a> {
                         optimize::ReassignOptimization::Increment => {
                             self.instructions
                                 .push(Instruction::new(Opcode::IncrementLocal(index), span));
-                            if self.is_known_int_name(name.value()) {
-                                self.mark_known_int(name.value(), false, true);
-                            }
                             return Ok(());
                         }
                         optimize::ReassignOptimization::Decrement => {
                             self.instructions
                                 .push(Instruction::new(Opcode::DecrementLocal(index), span));
-                            if self.is_known_int_name(name.value()) {
-                                self.mark_known_int(name.value(), false, true);
-                            }
                             return Ok(());
                         }
                         optimize::ReassignOptimization::None => {}
                     }
                 }
-
-                let current_is_known_int = self.is_known_int_name(name.value());
-                let rhs_is_known_int = self.is_known_int_expr(&node);
-                let new_is_known_int = match op {
-                    Opcode::Equal => rhs_is_known_int,
-                    Opcode::Add
-                    | Opcode::Subtract
-                    | Opcode::Multiply
-                    | Opcode::Divide
-                    | Opcode::Modulo => current_is_known_int && rhs_is_known_int,
-                    _ => false,
-                };
 
                 if op == Opcode::Add {
                     if !is_global {
@@ -2254,10 +1288,9 @@ impl<'a> BytecodeEmitter<'a> {
 
                     self.emit(*node)?;
                     self.instructions.push(Instruction::new(
-                        Self::add_assign_opcode(index, is_global, new_is_known_int),
+                        Self::add_assign_opcode(index, is_global, false),
                         span,
                     ));
-                    self.mark_known_int(name.value(), is_global, new_is_known_int);
                     return Ok(());
                 }
 
@@ -2275,27 +1308,15 @@ impl<'a> BytecodeEmitter<'a> {
                             }
                         }
                     }
-
-                    let mut add_terms = Vec::new();
-                    if Self::collect_accumulator_add_terms(&node, name.value(), &mut add_terms)
-                        && current_is_known_int
-                        && add_terms.iter().all(|term| self.is_known_int_expr(term))
-                    {
-                        for term in add_terms {
-                            self.emit(term)?;
-                            self.instructions.push(Instruction::new(
-                                Self::add_assign_opcode(index, is_global, true),
-                                span,
-                            ));
-                        }
-                        self.mark_known_int(name.value(), is_global, true);
-                        return Ok(());
-                    }
                 }
 
                 // For compound assignments (+=, -=, etc.), we need to load the current value first
                 match op {
-                    Opcode::Subtract | Opcode::Multiply | Opcode::Divide | Opcode::Modulo => {
+                    Opcode::Add
+                    | Opcode::Subtract
+                    | Opcode::Multiply
+                    | Opcode::Divide
+                    | Opcode::Modulo => {
                         // Load current value
                         if is_global {
                             self.instructions
@@ -2307,19 +1328,7 @@ impl<'a> BytecodeEmitter<'a> {
                         // Emit the right-hand side
                         self.emit(*node)?;
                         // Perform the operation
-                        let opcode = if current_is_known_int && rhs_is_known_int {
-                            match op {
-                                Opcode::Add => Opcode::AddInt,
-                                Opcode::Subtract => Opcode::SubtractInt,
-                                Opcode::Multiply => Opcode::MultiplyInt,
-                                Opcode::Divide => Opcode::DivideInt,
-                                Opcode::Modulo => Opcode::ModuloInt,
-                                _ => op,
-                            }
-                        } else {
-                            op
-                        };
-                        self.instructions.push(Instruction::new(opcode, span));
+                        self.instructions.push(Instruction::new(op, span));
                     }
                     _ => {
                         // Simple assignment (=), just emit the new value
@@ -2331,17 +1340,14 @@ impl<'a> BytecodeEmitter<'a> {
                 if is_global {
                     self.instructions
                         .push(Instruction::new(Opcode::ReassignGlobal(index), span));
-                    self.mark_known_int(name.value(), true, new_is_known_int);
                 } else {
                     self.instructions
                         .push(Instruction::new(Self::local_reassign_opcode(index), span));
-                    self.mark_known_int(name.value(), false, new_is_known_int);
                 }
             }
             NodeKind::Statements(nodes) => {
                 // Two-pass compilation for forward declarations at global scope:
                 if self.depth == 0 {
-                    self.prepare_top_level_scope(&nodes);
                     // Pass 1: Pre-register all top-level function and struct names
                     for node in &nodes {
                         self.pre_register_declarations(node);
@@ -2491,15 +1497,10 @@ impl<'a> BytecodeEmitter<'a> {
                             let arg_len = args.len();
                             emitter.current_function_name = Some(method_name.clone());
                             emitter.current_function_arity = Some(arg_len);
-                            let int_params = Self::int_parameter_names(&args, &body);
 
                             // Define method parameters as locals
                             for arg in args {
-                                let is_int = int_params.contains(&arg);
                                 emitter.define_parameter(arg.clone());
-                                if is_int {
-                                    emitter.mark_known_int(&arg, false, true);
-                                }
                             }
 
                             emitter.emit(*body)?;
@@ -2718,21 +1719,10 @@ impl<'a> BytecodeEmitter<'a> {
     /// This is called in Pass 1 before the main compilation Pass 2.
     fn pre_register_declarations(&mut self, node: &Node) {
         match node.kind() {
-            NodeKind::FunctionDefinition(name, args, body) => {
+            NodeKind::FunctionDefinition(name, _, _) => {
                 // Only pre-register at global scope
                 if self.depth == 0 {
                     self.instructions.push_global(name.clone());
-                    if self.function_guarantees_int_return(name, args, body) {
-                        self.known_int_functions.insert(name.clone());
-                        if self.function_is_pure_int_ast(name, args, body) {
-                            self.known_pure_int_functions.insert(name.clone());
-                        }
-                    }
-                    if self.function_is_pure_cloneable_ast(name, args, body)
-                        && self.has_multiple_recursive_calls(body, name)
-                    {
-                        self.known_pure_cloneable_functions.insert(name.clone());
-                    }
                 }
             }
             NodeKind::AsyncFunctionDefinition(name, _, _) => {
@@ -2756,14 +1746,10 @@ impl<'a> BytecodeEmitter<'a> {
 
     fn inc_depth(&mut self) {
         self.instructions.inc_depth();
-        self.known_int_scopes.push(FxHashSet::default());
     }
 
     fn dec_depth(&mut self, span: Span) {
         let popped = self.instructions.dec_depth();
-        if self.known_int_scopes.len() > 1 {
-            self.known_int_scopes.pop();
-        }
 
         if popped > 0 {
             self.instructions
@@ -2817,14 +1803,9 @@ impl<'a> BytecodeEmitter<'a> {
         let arg_len = args.len();
         emitter.current_function_name = Some(name.clone());
         emitter.current_function_arity = Some(arg_len);
-        let int_params = Self::int_parameter_names(&args, &body);
 
         for arg in args {
-            let is_int = int_params.contains(&arg);
             emitter.define_parameter(arg.clone());
-            if is_int {
-                emitter.mark_known_int(&arg, false, true);
-            }
         }
 
         emitter.emit(body)?;
@@ -2832,12 +1813,6 @@ impl<'a> BytecodeEmitter<'a> {
         emitter.emit_return(span);
 
         let func_instructions = emitter.instruction_set();
-        if is_global
-            && self.known_int_functions.contains(&name)
-            && self.instruction_set_is_pure_int(&name, &func_instructions)
-        {
-            self.known_pure_int_functions.insert(name.clone());
-        }
         self.instructions
             .register_function(name.clone(), 0, arg_len);
 
@@ -2990,13 +1965,7 @@ impl<'a> BytecodeEmitter<'a> {
                         }
 
                         let opcode = if arg_len == 1 {
-                            if self.known_pure_int_functions.contains(name) {
-                                Opcode::CallMemoizedSelf1
-                            } else if self.known_pure_cloneable_functions.contains(name) {
-                                Opcode::CallMemoizedCloneSelf1
-                            } else {
-                                Opcode::CallSelf1
-                            }
+                            Opcode::CallSelf1
                         } else {
                             Opcode::CallSelf(arg_len as u32)
                         };
@@ -3006,19 +1975,6 @@ impl<'a> BytecodeEmitter<'a> {
 
                     if let Some(index) = self.instructions.resolve_global_index(name) {
                         let arg_len = args.len();
-
-                        if arg_len == 1
-                            && !self.loop_stack.is_empty()
-                            && self.known_pure_int_functions.contains(name)
-                            && optimize::try_get_constant(&args[0]).is_some()
-                        {
-                            self.emit(args.into_iter().next().expect("arg_len checked above"))?;
-                            self.instructions.push(Instruction::new(
-                                Opcode::CallPureGlobal1(index as u32),
-                                span,
-                            ));
-                            return Ok(());
-                        }
 
                         for arg in args {
                             self.emit(arg)?;
