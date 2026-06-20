@@ -121,7 +121,10 @@ pub enum CompiledPattern {
 
 impl CompiledFunction {
     /// Call this function as an integer range loop
-    /// Safety: caller must ensure the function was compiled for this signature
+    ///
+    /// # Safety
+    ///
+    /// Caller must ensure the function was compiled for this signature.
     pub unsafe fn call_int_range(&self, start: i64, end: i64) -> i64 {
         unsafe {
             let func: IntRangeLoopFn = mem::transmute(self.func_ptr);
@@ -130,6 +133,10 @@ impl CompiledFunction {
     }
 
     /// Call this function as an integer range loop with accumulator
+    ///
+    /// # Safety
+    ///
+    /// Caller must ensure the function was compiled for this signature.
     pub unsafe fn call_int_range_accum(&self, start: i64, end: i64, initial: i64) -> i64 {
         unsafe {
             let func: IntRangeAccumFn = mem::transmute(self.func_ptr);
