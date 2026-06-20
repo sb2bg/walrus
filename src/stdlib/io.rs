@@ -16,15 +16,12 @@ pub fn file_open(path: &str, mode: &str, _span: Span) -> WalrusResult<Value> {
             .create(true)
             .truncate(true)
             .open(path),
-        "a" => OpenOptions::new()
-            .write(true)
-            .create(true)
-            .append(true)
-            .open(path),
+        "a" => OpenOptions::new().create(true).append(true).open(path),
         "rw" => OpenOptions::new()
             .read(true)
             .write(true)
             .create(true)
+            .truncate(false)
             .open(path),
         _ => {
             return Err(WalrusError::InvalidFileMode {
