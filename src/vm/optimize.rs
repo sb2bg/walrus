@@ -45,27 +45,26 @@ pub fn analyze_reassign_for_increment(
     }
 
     // Check for x = x + 1, x = 1 + x, x = x - 1 patterns
-    if op == Opcode::Equal {
-        if let NodeKind::BinOp(lhs, bin_op, rhs) = node.kind() {
-            // Check for x = x + 1 or x = 1 + x
-            if *bin_op == Opcode::Add {
-                let is_increment = match (lhs.kind(), rhs.kind()) {
-                    (NodeKind::Ident(var), NodeKind::Int(1)) if var == var_name => true,
-                    (NodeKind::Int(1), NodeKind::Ident(var)) if var == var_name => true,
-                    _ => false,
-                };
-                if is_increment {
-                    return ReassignOptimization::Increment;
-                }
+    if op == Opcode::Equal
+        && let NodeKind::BinOp(lhs, bin_op, rhs) = node.kind()
+    {
+        // Check for x = x + 1 or x = 1 + x
+        if *bin_op == Opcode::Add {
+            let is_increment = match (lhs.kind(), rhs.kind()) {
+                (NodeKind::Ident(var), NodeKind::Int(1)) if var == var_name => true,
+                (NodeKind::Int(1), NodeKind::Ident(var)) if var == var_name => true,
+                _ => false,
+            };
+            if is_increment {
+                return ReassignOptimization::Increment;
             }
-            // Check for x = x - 1
-            if *bin_op == Opcode::Subtract {
-                if let (NodeKind::Ident(var), NodeKind::Int(1)) = (lhs.kind(), rhs.kind()) {
-                    if var == var_name {
-                        return ReassignOptimization::Decrement;
-                    }
-                }
-            }
+        }
+        // Check for x = x - 1
+        if *bin_op == Opcode::Subtract
+            && let (NodeKind::Ident(var), NodeKind::Int(1)) = (lhs.kind(), rhs.kind())
+            && var == var_name
+        {
+            return ReassignOptimization::Decrement;
         }
     }
 

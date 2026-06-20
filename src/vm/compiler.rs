@@ -642,7 +642,7 @@ impl<'a> BytecodeEmitter<'a> {
                     let is_known_method = self
                         .current_struct_methods
                         .as_ref()
-                        .map_or(false, |methods| methods.contains(&name));
+                        .is_some_and(|methods| methods.contains(&name));
 
                     if !is_known_method {
                         return Err(WalrusError::UndefinedVariable {
@@ -703,15 +703,15 @@ impl<'a> BytecodeEmitter<'a> {
 
                 if !is_global {
                     // Check for redefinition only in local scopes
-                    if let Some(depth) = self.instructions.resolve_depth(&name) {
-                        if depth >= self.instructions.local_depth() {
-                            return Err(WalrusError::RedefinedLocal {
-                                name,
-                                span,
-                                src: self.source_ref.source().to_string(),
-                                filename: self.source_ref.filename().to_string(),
-                            });
-                        }
+                    if let Some(depth) = self.instructions.resolve_depth(&name)
+                        && depth >= self.instructions.local_depth()
+                    {
+                        return Err(WalrusError::RedefinedLocal {
+                            name,
+                            span,
+                            src: self.source_ref.source().to_string(),
+                            filename: self.source_ref.filename().to_string(),
+                        });
                     }
                 }
 
@@ -1139,24 +1139,14 @@ impl<'a> BytecodeEmitter<'a> {
     /// This is called in Pass 1 before the main compilation Pass 2.
     fn pre_register_declarations(&mut self, node: &Node) {
         match node.kind() {
-            NodeKind::FunctionDefinition(name, _, _) => {
-                // Only pre-register at global scope
-                if self.depth == 0 {
-                    self.instructions.push_global(name.clone());
-                }
-            }
-            NodeKind::AsyncFunctionDefinition(name, _, _) => {
-                // Reserve the name so references resolve consistently before
-                // async code generation lands.
-                if self.depth == 0 {
-                    self.instructions.push_global(name.clone());
-                }
-            }
-            NodeKind::StructDefinition(name, _) => {
-                // Structs are also global declarations
-                if self.depth == 0 {
-                    self.instructions.push_global(name.clone());
-                }
+            NodeKind::FunctionDefinition(name, _, _)
+            | NodeKind::AsyncFunctionDefinition(name, _, _)
+            | NodeKind::StructDefinition(name, _)
+                if self.depth == 0 =>
+            {
+                // Functions and structs are global declarations. Async functions
+                // reserve their names before async code generation lands.
+                self.instructions.push_global(name.clone());
             }
             _ => {
                 // Other node types don't need pre-registration

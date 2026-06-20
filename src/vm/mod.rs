@@ -153,6 +153,7 @@ struct UserChannel {
 /// - Loop headers (for hot loop detection)
 /// - Function calls (for hot function detection)
 /// - Arithmetic operations (for type specialization)
+///
 /// When a loop becomes "hot" (>1000 iterations), it is compiled to native code
 /// using Cranelift and executed directly, bypassing the interpreter.
 pub struct VM<'a> {
@@ -264,20 +265,19 @@ impl<'a> VM<'a> {
             }
 
             // Check if debugger should pause
-            if self.debug_mode {
-                if let Some(ref mut dbg) = self.debugger {
-                    let call_depth = self.call_stack.len();
-                    if dbg.should_break(self.ip, call_depth) || dbg.should_prompt {
-                        dbg.trigger_prompt();
-                        let instructions = Rc::clone(&self.current_frame().instructions);
-                        match self.run_debugger_prompt(instructions.as_ref())? {
-                            debugger::DebuggerCommand::Quit => {
-                                return Err(WalrusError::UnknownError {
-                                    message: "Debugger quit".to_string(),
-                                });
-                            }
-                            _ => {} // Continue execution with the new mode
-                        }
+            if self.debug_mode
+                && let Some(ref mut dbg) = self.debugger
+            {
+                let call_depth = self.call_stack.len();
+                if dbg.should_break(self.ip, call_depth) || dbg.should_prompt {
+                    dbg.trigger_prompt();
+                    let instructions = Rc::clone(&self.current_frame().instructions);
+                    if let debugger::DebuggerCommand::Quit =
+                        self.run_debugger_prompt(instructions.as_ref())?
+                    {
+                        return Err(WalrusError::UnknownError {
+                            message: "Debugger quit".to_string(),
+                        });
                     }
                 }
             }
@@ -745,23 +745,22 @@ impl<'a> VM<'a> {
                     }
 
                     // JIT PROFILING: Track function calls and argument types
-                    if profiling_enabled {
-                        if let Value::Function(key) = func {
-                            if let Ok(func_ref) = self.get_heap().get_function(key) {
-                                let name = match func_ref {
-                                    WalrusFunction::Vm(f) => f.name.clone(),
-                                    WalrusFunction::Native(f) => f.name().to_string(),
-                                };
-                                if self.hotspot_detector.record_function_call(&name) {
-                                    debug!("Hot function detected: {}", name);
-                                }
-                                // Track argument types
-                                let args_start = self.stack.len() - arg_count;
-                                for (i, arg) in self.stack[args_start..].iter().enumerate() {
-                                    let arg_type = WalrusType::from_value(arg);
-                                    self.type_profile.observe(self.ip - 1 + i, arg_type);
-                                }
-                            }
+                    if profiling_enabled
+                        && let Value::Function(key) = func
+                        && let Ok(func_ref) = self.get_heap().get_function(key)
+                    {
+                        let name = match func_ref {
+                            WalrusFunction::Vm(f) => f.name.clone(),
+                            WalrusFunction::Native(f) => f.name().to_string(),
+                        };
+                        if self.hotspot_detector.record_function_call(&name) {
+                            debug!("Hot function detected: {}", name);
+                        }
+                        // Track argument types
+                        let args_start = self.stack.len() - arg_count;
+                        for (i, arg) in self.stack[args_start..].iter().enumerate() {
+                            let arg_type = WalrusType::from_value(arg);
+                            self.type_profile.observe(self.ip - 1 + i, arg_type);
                         }
                     }
 
@@ -1146,10 +1145,10 @@ impl<'a> VM<'a> {
                     self.exception_handlers.push(handler);
                 }
                 Opcode::PopExceptionHandler => {
-                    if let Some(handler) = self.exception_handlers.last().copied() {
-                        if handler.frame_index == self.current_frame_index() {
-                            self.exception_handlers.pop();
-                        }
+                    if let Some(handler) = self.exception_handlers.last().copied()
+                        && handler.frame_index == self.current_frame_index()
+                    {
+                        self.exception_handlers.pop();
                     }
                 }
                 Opcode::Throw => {
@@ -1671,7 +1670,7 @@ impl<'a> VM<'a> {
 
                                 return Err(WalrusError::KeyNotFound {
                                     key: b_str,
-                                    span: span,
+                                    span,
                                     src: self.source_ref.source().to_string(),
                                     filename: self.source_ref.filename().to_string(),
                                 });
@@ -2174,7 +2173,7 @@ impl<'a> VM<'a> {
 
                     // Fast path for struct VM methods:
                     // avoid creating an args Vec and move arguments directly into locals.
-                    if self.stack.len() >= arg_count + 1 {
+                    if self.stack.len() > arg_count {
                         let object_idx = self.stack.len() - arg_count - 1;
                         match self.stack[object_idx] {
                             Value::StructDef(key) => {

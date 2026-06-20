@@ -349,30 +349,26 @@ fn print_variable(ctx: &DebugContext, name: &str) {
     // Try to find the variable in locals
     if let Some(debug_info) = ctx.debug_info {
         for (i, local_name) in debug_info.local_names.iter().enumerate() {
-            if local_name == name {
-                if i < ctx.locals.len() {
-                    println!("{} = {:?}", name, ctx.locals[i]);
-                    return;
-                }
+            if local_name == name && i < ctx.locals.len() {
+                println!("{} = {:?}", name, ctx.locals[i]);
+                return;
             }
         }
         // Try globals
         for (i, global_name) in debug_info.global_names.iter().enumerate() {
-            if global_name == name {
-                if i < ctx.globals.len() {
-                    println!("{} = {:?}", name, ctx.globals[i]);
-                    return;
-                }
+            if global_name == name && i < ctx.globals.len() {
+                println!("{} = {:?}", name, ctx.globals[i]);
+                return;
             }
         }
         println!("Variable '{}' not found", name);
     } else {
         // No debug info, try numeric index
-        if let Ok(idx) = name.parse::<usize>() {
-            if idx < ctx.locals.len() {
-                println!("local[{}] = {:?}", idx, ctx.locals[idx]);
-                return;
-            }
+        if let Ok(idx) = name.parse::<usize>()
+            && idx < ctx.locals.len()
+        {
+            println!("local[{}] = {:?}", idx, ctx.locals[idx]);
+            return;
         }
         println!("No debug info available. Use numeric index.");
     }
