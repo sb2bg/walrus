@@ -10,4 +10,4 @@ pub mod vm {
 
 pub type WalrusResult<T> = Result<T, error::WalrusError>;
 
-lalrpop_mod!(#[allow(clippy::all)] pub grammar);
+lalrpop_mod!(#[allow(clippy::all, unused_imports)] pub grammar);

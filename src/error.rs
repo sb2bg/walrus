@@ -294,7 +294,7 @@ pub fn parse_fstring<T>(
     use crate::ast::FStringPart;
     use lalrpop_util::lalrpop_mod;
 
-    lalrpop_mod!(pub grammar);
+    lalrpop_mod!(#[allow(clippy::all, unused_imports)] pub grammar);
     let parser = grammar::ExpressionParser::new();
 
     let raw = spanned.value();
