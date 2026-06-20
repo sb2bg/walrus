@@ -105,15 +105,15 @@ pub fn resolve_package_main(
         });
     };
 
-    if let Some(requested_version) = dependency.version() {
-        if requested_version != locked.version {
-            return Err(WalrusError::GenericError {
-                message: format!(
-                    "Package '@{package_name}' is pinned to version '{}' in {}, but '{}' is requested in {}",
-                    locked.version, LOCK_FILENAME, requested_version, MANIFEST_FILENAME
-                ),
-            });
-        }
+    if let Some(requested_version) = dependency.version()
+        && requested_version != locked.version
+    {
+        return Err(WalrusError::GenericError {
+            message: format!(
+                "Package '@{package_name}' is pinned to version '{}' in {}, but '{}' is requested in {}",
+                locked.version, LOCK_FILENAME, requested_version, MANIFEST_FILENAME
+            ),
+        });
     }
 
     let package_root = resolve_path(&project_root, &locked.path)?;
@@ -180,15 +180,14 @@ pub fn sync_lock_from(start_dir: &Path) -> Result<PathBuf, WalrusError> {
         if let Some(actual_name) = manifest_package
             .and_then(|entry| entry.name.as_deref())
             .and_then(non_empty)
+            && actual_name != name
         {
-            if actual_name != name {
-                return Err(WalrusError::GenericError {
-                    message: format!(
-                        "Dependency key '{name}' does not match package name '{actual_name}' in '{}'",
-                        package_root.join(MANIFEST_FILENAME).display()
-                    ),
-                });
-            }
+            return Err(WalrusError::GenericError {
+                message: format!(
+                    "Dependency key '{name}' does not match package name '{actual_name}' in '{}'",
+                    package_root.join(MANIFEST_FILENAME).display()
+                ),
+            });
         }
 
         let requested_version = dependency.version();

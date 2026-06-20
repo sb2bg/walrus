@@ -556,9 +556,7 @@ fn inject_core_prelude(ast: Node) -> PreludeInjection {
                 node.kind(),
                 NodeKind::ModuleImport(module, alias)
                     if module == "std/core"
-                        && alias
-                            .as_deref()
-                            .map_or(true, |name| name == "core")
+                        && alias.as_deref().is_none_or(|name| name == "core")
             )
         })
     }

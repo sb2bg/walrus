@@ -253,7 +253,7 @@ impl HotSpotDetector {
             .values()
             .filter(|hs| hs.should_compile())
             .collect();
-        candidates.sort_by(|a, b| b.priority.cmp(&a.priority));
+        candidates.sort_by_key(|hotspot| std::cmp::Reverse(hotspot.priority));
         candidates
     }
 

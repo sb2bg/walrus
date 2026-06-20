@@ -469,44 +469,42 @@ impl LanguageServer for Backend {
             &context.callee_name,
             scope_id,
             context.open_paren_offset,
+        ) && matches!(
+            definition.kind,
+            WalrusSymbolKind::Function | WalrusSymbolKind::Method
         ) {
-            if matches!(
-                definition.kind,
-                WalrusSymbolKind::Function | WalrusSymbolKind::Method
-            ) {
-                let signature = SignatureInformation {
-                    label: definition_signature(definition),
-                    documentation: definition
-                        .documentation
-                        .as_deref()
-                        .map(documentation_from_text),
-                    parameters: Some(
-                        definition
-                            .parameters
-                            .iter()
-                            .map(|parameter| ParameterInformation {
-                                label: ParameterLabel::Simple(parameter.clone()),
-                                documentation: None,
-                            })
-                            .collect(),
-                    ),
-                    active_parameter: None,
-                };
+            let signature = SignatureInformation {
+                label: definition_signature(definition),
+                documentation: definition
+                    .documentation
+                    .as_deref()
+                    .map(documentation_from_text),
+                parameters: Some(
+                    definition
+                        .parameters
+                        .iter()
+                        .map(|parameter| ParameterInformation {
+                            label: ParameterLabel::Simple(parameter.clone()),
+                            documentation: None,
+                        })
+                        .collect(),
+                ),
+                active_parameter: None,
+            };
 
-                let active_parameter = if definition.parameters.is_empty() {
-                    0
-                } else {
-                    context
-                        .arg_index
-                        .min(definition.parameters.len().saturating_sub(1))
-                };
+            let active_parameter = if definition.parameters.is_empty() {
+                0
+            } else {
+                context
+                    .arg_index
+                    .min(definition.parameters.len().saturating_sub(1))
+            };
 
-                return Ok(Some(SignatureHelp {
-                    signatures: vec![signature],
-                    active_signature: Some(0),
-                    active_parameter: Some(active_parameter as u32),
-                }));
-            }
+            return Ok(Some(SignatureHelp {
+                signatures: vec![signature],
+                active_signature: Some(0),
+                active_parameter: Some(active_parameter as u32),
+            }));
         }
 
         if let Some(builtin) = builtin_by_name(&context.callee_name) {
@@ -610,7 +608,7 @@ fn function_snippet(name: &str, params: &[impl AsRef<str>]) -> String {
     }
 }
 
-fn definition_at_offset<'a>(analysis: &'a Analysis, offset: usize) -> Option<&'a Definition> {
+fn definition_at_offset(analysis: &Analysis, offset: usize) -> Option<&Definition> {
     if let Some(definition) = analysis.definition_at_offset(offset) {
         return Some(definition);
     }

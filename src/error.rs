@@ -31,10 +31,10 @@ fn is_ident_char(ch: char) -> bool {
 /// lexer can still tokenize the full `f"..."` literal.
 pub fn preprocess_fstrings_for_lexer(source: &str) -> String {
     fn has_matching_quote_before_interp_end(
-        mut chars: std::iter::Peekable<std::str::Chars<'_>>,
+        chars: std::iter::Peekable<std::str::Chars<'_>>,
         mut interp_depth: usize,
     ) -> bool {
-        while let Some(ch) = chars.next() {
+        for ch in chars {
             if ch == '"' {
                 return true;
             }
@@ -108,7 +108,7 @@ pub fn preprocess_fstrings_for_lexer(source: &str) -> String {
 
                 let starts_fstring = ch == 'f'
                     && matches!(chars.peek(), Some('"'))
-                    && prev_char.map_or(true, |prev| !is_ident_char(prev));
+                    && prev_char.is_none_or(|prev| !is_ident_char(prev));
 
                 if starts_fstring {
                     out.push(ch);
