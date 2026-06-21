@@ -100,9 +100,7 @@ fn native_core_len(vm: &mut VM<'_>, args: &[Value], span: Span) -> WalrusResult<
         }
         other => Err(WalrusError::NoLength {
             type_name: other.get_type().to_string(),
-            span,
-            src: vm.source_ref().source().to_string(),
-            filename: vm.source_ref().filename().to_string(),
+            context: vm.source_ref().error_context(span),
         }),
     }
 }
@@ -211,9 +209,7 @@ fn native_core_gc_threshold(vm: &mut VM<'_>, args: &[Value], span: Span) -> Walr
     let n = vm.value_to_int(args[0], span)?;
     if n <= 0 {
         return Err(WalrusError::InvalidGcThresholdArg {
-            span,
-            src: vm.source_ref().source().to_string(),
-            filename: vm.source_ref().filename().to_string(),
+            context: vm.source_ref().error_context(span),
         });
     }
 

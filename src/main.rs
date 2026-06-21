@@ -106,7 +106,8 @@ fn main() {
 
     if let Err(err) = try_main() {
         eprintln!();
-        eprintln!("[ERROR] Fatal exception during execution -> {}", err);
+        err.write_cli(std::io::stderr().lock())
+            .unwrap_or_else(|_| eprintln!("[ERROR] Fatal exception during execution -> {err}"));
         eprintln!();
     }
 }

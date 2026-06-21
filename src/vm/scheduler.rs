@@ -47,9 +47,7 @@ impl<'a> VM<'a> {
                         name: "spawn".to_string(),
                         expected: 0,
                         got: args.len(),
-                        span,
-                        src: self.source_ref.source().into(),
-                        filename: self.source_ref.filename().into(),
+                        context: self.source_ref.error_context(span),
                     });
                 }
                 Ok(Value::Task(task_key))
@@ -65,9 +63,7 @@ impl<'a> VM<'a> {
                         name: function.to_string(),
                         expected,
                         got: args.len(),
-                        span,
-                        src: self.source_ref.source().into(),
-                        filename: self.source_ref.filename().into(),
+                        context: self.source_ref.error_context(span),
                     });
                 }
                 Ok(self.create_task_for_function_key(function_key, args))
@@ -75,9 +71,7 @@ impl<'a> VM<'a> {
             other => Err(WalrusError::TypeMismatch {
                 expected: "function or task".to_string(),
                 found: other.get_type().to_string(),
-                span,
-                src: self.source_ref.source().into(),
-                filename: self.source_ref.filename().into(),
+                context: self.source_ref.error_context(span),
             }),
         }
     }
@@ -874,9 +868,7 @@ impl<'a> VM<'a> {
                             name: func.name.clone(),
                             expected: func.arity,
                             got: args.len(),
-                            span,
-                            src: self.source_ref.source().into(),
-                            filename: self.source_ref.filename().into(),
+                            context: self.source_ref.error_context(span),
                         },
                     );
                 }
@@ -886,6 +878,7 @@ impl<'a> VM<'a> {
                 } else {
                     ExecutionContext {
                         stack: Vec::new(),
+                        stack_origins: Vec::new(),
                         locals: args,
                         call_stack: vec![CallFrame {
                             return_ip: 0,
@@ -974,9 +967,7 @@ impl<'a> VM<'a> {
                         name: func.name.clone(),
                         expected: func.arity,
                         got: args.len(),
-                        span,
-                        src: self.source_ref.source().into(),
-                        filename: self.source_ref.filename().into(),
+                        context: self.source_ref.error_context(span),
                     });
                 }
 

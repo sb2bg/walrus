@@ -44,8 +44,10 @@ impl<'a> VM<'a> {
             module_key,
             global_names: Rc::new(global_names),
             global_values: Rc::new(global_values),
-            source: Rc::new(self.source_ref.source().to_string()),
-            filename: Rc::new(self.source_ref.filename().to_string()),
+            source_map: self.source_ref.source_map(),
+            file_id: self.source_ref.file_id(),
+            source: self.source_ref.source_handle(),
+            filename: self.source_ref.filename_handle(),
         }))
     }
 
@@ -61,21 +63,18 @@ impl<'a> VM<'a> {
             .cloned()
             .unwrap_or_else(|| format!("<global[{index}]>"));
 
-        let (src, filename) = if let Some(ctx) = binding {
-            (ctx.source.to_string(), ctx.filename.to_string())
+        let context = if let Some(binding) = binding {
+            let span = if span.file_id().is_unknown() {
+                span.with_file_id(binding.file_id)
+            } else {
+                span
+            };
+            crate::error::ErrorContext::from_source_map(span, binding.source_map.clone())
         } else {
-            (
-                self.source_ref.source().to_string(),
-                self.source_ref.filename().to_string(),
-            )
+            self.source_ref.error_context(span)
         };
 
-        WalrusError::UndefinedVariable {
-            name,
-            span,
-            src,
-            filename,
-        }
+        WalrusError::UndefinedVariable { name, context }
     }
 
     pub(super) fn load_global_value(&mut self, index: usize, span: Span) -> WalrusResult<Value> {
@@ -197,8 +196,10 @@ impl<'a> VM<'a> {
             module_key,
             global_names: Rc::new(global_names),
             global_values: Rc::new(global_values),
-            source: Rc::new(self.source_ref.source().to_string()),
-            filename: Rc::new(self.source_ref.filename().to_string()),
+            source_map: self.source_ref.source_map(),
+            file_id: self.source_ref.file_id(),
+            source: self.source_ref.source_handle(),
+            filename: self.source_ref.filename_handle(),
         });
 
         // Rebind exported values that contain VM functions so global accesses

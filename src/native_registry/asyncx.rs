@@ -152,9 +152,7 @@ fn native_async_gather(vm: &mut VM<'_>, args: &[Value], span: Span) -> WalrusRes
                 return Err(WalrusError::TypeMismatch {
                     expected: "task".to_string(),
                     found: other.get_type().to_string(),
-                    span,
-                    src: vm.source_ref().source().into(),
-                    filename: vm.source_ref().filename().into(),
+                    context: vm.source_ref().error_context(span),
                 });
             }
         }
@@ -172,9 +170,7 @@ fn native_async_race(vm: &mut VM<'_>, args: &[Value], span: Span) -> WalrusResul
                 return Err(WalrusError::TypeMismatch {
                     expected: "task".to_string(),
                     found: other.get_type().to_string(),
-                    span,
-                    src: vm.source_ref().source().into(),
-                    filename: vm.source_ref().filename().into(),
+                    context: vm.source_ref().error_context(span),
                 });
             }
         }
@@ -192,9 +188,7 @@ fn native_async_all_settled(vm: &mut VM<'_>, args: &[Value], span: Span) -> Walr
                 return Err(WalrusError::TypeMismatch {
                     expected: "task".to_string(),
                     found: other.get_type().to_string(),
-                    span,
-                    src: vm.source_ref().source().into(),
-                    filename: vm.source_ref().filename().into(),
+                    context: vm.source_ref().error_context(span),
                 });
             }
         }
@@ -217,9 +211,7 @@ fn native_async_send(vm: &mut VM<'_>, args: &[Value], span: Span) -> WalrusResul
             return Err(WalrusError::TypeMismatch {
                 expected: "channel sender".to_string(),
                 found: other.get_type().to_string(),
-                span,
-                src: vm.source_ref().source().into(),
-                filename: vm.source_ref().filename().into(),
+                context: vm.source_ref().error_context(span),
             });
         }
     };
@@ -234,9 +226,7 @@ fn native_async_recv(vm: &mut VM<'_>, args: &[Value], span: Span) -> WalrusResul
             return Err(WalrusError::TypeMismatch {
                 expected: "channel receiver".to_string(),
                 found: other.get_type().to_string(),
-                span,
-                src: vm.source_ref().source().into(),
-                filename: vm.source_ref().filename().into(),
+                context: vm.source_ref().error_context(span),
             });
         }
     };
@@ -250,9 +240,7 @@ fn native_async_close(vm: &mut VM<'_>, args: &[Value], span: Span) -> WalrusResu
             return Err(WalrusError::TypeMismatch {
                 expected: "channel endpoint".to_string(),
                 found: other.get_type().to_string(),
-                span,
-                src: vm.source_ref().source().into(),
-                filename: vm.source_ref().filename().into(),
+                context: vm.source_ref().error_context(span),
             });
         }
     };

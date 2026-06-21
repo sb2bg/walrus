@@ -1,9 +1,9 @@
 use crate::ast::{Node, NodeKind};
 use crate::vm::opcode::Opcode;
-use crate::span::{Span, Spanned};
+use crate::span::{FileId, Span, Spanned};
 use crate::error::{RecoveredParseError, parse_int, parse_float, escape_string, parse_fstring};
 
-grammar;
+grammar(file_id: FileId);
 
 match {
     // Skip whitespace and comments
@@ -314,6 +314,6 @@ Delim<T, D>: Vec<T> = {
     }
 };
 
-Sp<Rule>: Box<Node> = <l: @L> <rule: Rule> <r: @R> => Box::new(Node::new(rule, Span(l, r)));
-RawSp<Rule>: Node = <l: @L> <rule: Rule> <r: @R> => Node::new(rule, Span(l, r));
-StrSp<Rule>: Spanned<String> = <l: @L> <rule: Rule> <r: @R> => Spanned::new(rule.to_string(), Span(l, r));
+Sp<Rule>: Box<Node> = <l: @L> <rule: Rule> <r: @R> => Box::new(Node::new(rule, Span::new(file_id, l, r)));
+RawSp<Rule>: Node = <l: @L> <rule: Rule> <r: @R> => Node::new(rule, Span::new(file_id, l, r));
+StrSp<Rule>: Spanned<String> = <l: @L> <rule: Rule> <r: @R> => Spanned::new(rule.to_string(), Span::new(file_id, l, r));

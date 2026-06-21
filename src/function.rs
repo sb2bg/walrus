@@ -1,4 +1,6 @@
 use crate::arenas::DictKey;
+use crate::source_ref::SourceMap;
+use crate::span::FileId;
 use crate::value::Value;
 use crate::vm::instruction_set::InstructionSet;
 use std::fmt::Display;
@@ -9,8 +11,10 @@ pub struct VmModuleBinding {
     pub module_key: DictKey,
     pub global_names: Rc<Vec<String>>,
     pub global_values: Rc<Vec<Value>>,
-    pub source: Rc<String>,
-    pub filename: Rc<String>,
+    pub source_map: SourceMap,
+    pub file_id: FileId,
+    pub source: Rc<str>,
+    pub filename: Rc<str>,
 }
 
 #[derive(Debug, Clone)]

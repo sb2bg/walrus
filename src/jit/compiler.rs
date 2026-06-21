@@ -272,7 +272,11 @@ impl JitCompiler {
         self.ctx.func.name = cranelift_codegen::ir::UserFuncName::user(0, func_id.as_u32());
 
         // Import external functions if needed for print operations
-        let print_func_ref = if loop_analysis.has_print {
+        let print_func_ref = if loop_analysis
+            .operations
+            .iter()
+            .any(|op| matches!(op, JitOp::PrintInt))
+        {
             let local_print_id = self
                 .module
                 .declare_func_in_func(self.print_int_id, &mut self.ctx.func);
@@ -281,7 +285,11 @@ impl JitCompiler {
             None
         };
 
-        let println_func_ref = if loop_analysis.has_println {
+        let println_func_ref = if loop_analysis
+            .operations
+            .iter()
+            .any(|op| matches!(op, JitOp::PrintlnInt))
+        {
             let local_println_id = self
                 .module
                 .declare_func_in_func(self.println_int_id, &mut self.ctx.func);
@@ -375,11 +383,13 @@ impl JitCompiler {
         let func_ptr = self.module.get_finalized_function(func_id);
 
         let compiled_pattern = match loop_analysis.pattern {
-            LoopPattern::SumIndex => CompiledPattern::SumIndex,
+            LoopPattern::SumIndex
+            | LoopPattern::SumConstant(_)
+            | LoopPattern::SumIndexTimesConstant(_) => CompiledPattern::SumIndex,
             LoopPattern::CountIterations => CompiledPattern::CountIterations,
+            LoopPattern::EmptyLoop => CompiledPattern::EmptyLoop,
             LoopPattern::PrintOnly => CompiledPattern::PrintOnly,
             LoopPattern::SumIndexWithPrint => CompiledPattern::SumIndexWithPrint,
-            _ => CompiledPattern::SumIndex,
         };
 
         let compiled = CompiledFunction {
@@ -404,138 +414,113 @@ impl JitCompiler {
         header_ip: usize,
         exit_ip: usize,
     ) -> JitResult<LoopAnalysis> {
-        let mut analysis = LoopAnalysis::default();
-
-        // Walk through the bytecode from header to exit
-        let mut ip = header_ip;
-        while ip < exit_ip && ip < instructions.instructions.len() {
-            let instruction = instructions.get(ip);
-            let opcode = instruction.opcode();
-
-            match opcode {
-                // Skip loop control opcodes
-                Opcode::ForRangeNext(_, _) | Opcode::ForRangeInit(_) | Opcode::Jump(_) => {}
-                // Pop after ForRangeNext means empty loop body (loop var is discarded)
-                Opcode::Pop => {
-                    // If this is the only instruction after ForRangeNext, it's an empty body
-                    if ip == header_ip + 1 {
-                        analysis.is_empty_body = true;
-                    }
-                }
-                Opcode::StoreAt(idx) => {
-                    // Track which local is being stored to - this is likely the accumulator
-                    analysis.stores_to_local = true;
-                    analysis.accumulator_local = Some(idx);
-                }
-                Opcode::Reassign(idx) => {
-                    analysis.has_reassign = true;
-                    analysis.accumulator_local = Some(idx);
-                }
-                Opcode::Load(idx) => {
-                    analysis.loads_local = true;
-                    // If we load and then add/store, the loaded local is the accumulator
-                    if analysis.accumulator_local.is_none() {
-                        analysis.accumulator_local = Some(idx);
-                    }
-                }
-                Opcode::LoadLocal0 => {
-                    analysis.loads_local = true;
-                    if analysis.accumulator_local.is_none() {
-                        analysis.accumulator_local = Some(0);
-                    }
-                }
-                Opcode::LoadLocal1 => {
-                    analysis.loads_local = true;
-                    if analysis.accumulator_local.is_none() {
-                        analysis.accumulator_local = Some(1);
-                    }
-                }
-                Opcode::LoadLocal2 => {
-                    analysis.loads_local = true;
-                    if analysis.accumulator_local.is_none() {
-                        analysis.accumulator_local = Some(2);
-                    }
-                }
-                Opcode::LoadLocal3 => {
-                    analysis.loads_local = true;
-                    if analysis.accumulator_local.is_none() {
-                        analysis.accumulator_local = Some(3);
-                    }
-                }
-                Opcode::Add | Opcode::AddInt => {
-                    analysis.has_add = true;
-                }
-                Opcode::Subtract | Opcode::SubtractInt => {
-                    analysis.has_sub = true;
-                }
-                Opcode::Multiply => {
-                    analysis.has_mul = true;
-                }
-                Opcode::LoadConst(_) | Opcode::LoadConst0 | Opcode::LoadConst1 => {
-                    // Constants are fine
-                }
-                Opcode::IncrementLocal(_) => {
-                    analysis.has_increment = true;
-                }
-                // Print/Println can be JIT compiled with callbacks
-                // But only if we're printing the loop variable (simple case)
-                Opcode::Print => {
-                    analysis.print_count += 1;
-                    // Only allow one print per loop iteration for now
-                    // Multiple prints might involve string constants we can't handle
-                    if analysis.print_count > 1 {
-                        return Err(JitError::NotJitCompatible(
-                            "Loop contains multiple print operations".into(),
-                        ));
-                    }
-                    analysis.has_print = true;
-                    analysis.operations.push(JitOp::PrintInt);
-                }
-                Opcode::Println => {
-                    analysis.print_count += 1;
-                    if analysis.print_count > 1 {
-                        return Err(JitError::NotJitCompatible(
-                            "Loop contains multiple print operations".into(),
-                        ));
-                    }
-                    analysis.has_println = true;
-                    analysis.operations.push(JitOp::PrintlnInt);
-                }
-                // LoadString means we're dealing with string operations - not JIT-able
-                // Note: String constants are loaded via LoadConst, but we allow those
-                // for now since they might be used in non-print contexts
-                // Function calls make the loop not JIT-able (for now)
-                Opcode::Call(_) => {
-                    return Err(JitError::NotJitCompatible(
-                        "Loop contains function calls".into(),
-                    ));
-                }
-                _ => {
-                    // For now, reject unknown opcodes
-                    // In the future we can support more
-                }
-            }
-            ip += 1;
+        let len = instructions.instructions.len();
+        if header_ip >= len || exit_ip > len || exit_ip <= header_ip + 1 {
+            return Err(JitError::NotJitCompatible(format!(
+                "Invalid loop range {}..{} for {} instructions",
+                header_ip, exit_ip, len
+            )));
         }
 
-        // Determine the pattern based on analysis
-        if analysis.is_empty_body {
-            analysis.pattern = LoopPattern::CountIterations;
-        } else if analysis.has_print || analysis.has_println {
-            // Print loop - might also have accumulation
-            if analysis.has_add && analysis.loads_local && analysis.stores_to_local {
-                analysis.pattern = LoopPattern::SumIndexWithPrint;
-            } else {
-                analysis.pattern = LoopPattern::PrintOnly;
+        let Opcode::ForRangeNext(jump_target, _) = instructions.get(header_ip).opcode() else {
+            return Err(JitError::NotJitCompatible(format!(
+                "Loop header at IP {} is not ForRangeNext",
+                header_ip
+            )));
+        };
+        if jump_target as usize != exit_ip {
+            return Err(JitError::NotJitCompatible(format!(
+                "Loop exit mismatch at IP {}: opcode exits to {}, metadata exits to {}",
+                header_ip, jump_target, exit_ip
+            )));
+        }
+
+        let back_edge_ip = exit_ip - 1;
+        match instructions.get(back_edge_ip).opcode() {
+            Opcode::Jump(target) if target as usize == header_ip => {}
+            opcode => {
+                return Err(JitError::NotJitCompatible(format!(
+                    "Loop at IP {} does not end with a back-edge jump, found {:?} at IP {}",
+                    header_ip, opcode, back_edge_ip
+                )));
             }
-        } else if analysis.has_add && analysis.loads_local && analysis.stores_to_local {
-            // Classic acc += i pattern
-            analysis.pattern = LoopPattern::SumIndex;
-        } else if analysis.has_increment {
-            analysis.pattern = LoopPattern::CountIterations;
-        } else {
-            // Default to sum pattern
-            analysis.pattern = LoopPattern::SumIndex;
+        }
+
+        let mut ip = header_ip + 1;
+        let loop_var_local = match instructions.get(ip).opcode() {
+            Opcode::StoreAt(idx) => {
+                ip += 1;
+                idx
+            }
+            opcode => {
+                return Err(JitError::NotJitCompatible(format!(
+                    "Loop at IP {} does not start by storing the range value, found {:?} at IP {}",
+                    header_ip, opcode, ip
+                )));
+            }
+        };
+
+        let mut analysis = LoopAnalysis::default();
+        let mut saw_accumulator = false;
+
+        while ip < back_edge_ip {
+            if let Some(op) = match_print_index(instructions, ip, loop_var_local, back_edge_ip)? {
+                if !analysis.operations.is_empty() {
+                    return Err(JitError::NotJitCompatible(
+                        "Loop contains multiple print operations".into(),
+                    ));
+                }
+                analysis.operations.push(op);
+                ip += 2;
+                continue;
+            }
+
+            if let Opcode::IncrementLocal(accumulator) = instructions.get(ip).opcode() {
+                if saw_accumulator {
+                    return Err(JitError::NotJitCompatible(
+                        "Loop contains multiple accumulator updates".into(),
+                    ));
+                }
+                analysis.pattern = LoopPattern::CountIterations;
+                analysis.accumulator_local = Some(accumulator);
+                saw_accumulator = true;
+                ip += 1;
+                continue;
+            }
+
+            if let Some((accumulator, next_ip)) =
+                match_sum_index(instructions, ip, loop_var_local, back_edge_ip)?
+            {
+                if saw_accumulator {
+                    return Err(JitError::NotJitCompatible(
+                        "Loop contains multiple accumulator updates".into(),
+                    ));
+                }
+                analysis.pattern = LoopPattern::SumIndex;
+                analysis.accumulator_local = Some(accumulator);
+                saw_accumulator = true;
+                ip = next_ip;
+                continue;
+            }
+
+            let opcode = instructions.get(ip).opcode();
+            return Err(JitError::UnsupportedOperation(format!(
+                "{:?} at IP {} in range loop {}..{}",
+                opcode, ip, header_ip, exit_ip
+            )));
+        }
+
+        if !analysis.operations.is_empty() {
+            analysis.pattern = match analysis.pattern {
+                LoopPattern::SumIndex => LoopPattern::SumIndexWithPrint,
+                LoopPattern::EmptyLoop => LoopPattern::PrintOnly,
+                LoopPattern::CountIterations => {
+                    return Err(JitError::NotJitCompatible(
+                        "Counting loops with print operations are not supported".into(),
+                    ));
+                }
+                pattern => pattern,
+            };
         }
 
         Ok(analysis)
@@ -601,14 +586,13 @@ fn generate_loop_body(
             let one = builder.ins().iconst(types::I64, 1);
             Ok(builder.ins().iadd(acc, one))
         }
+        LoopPattern::EmptyLoop => {
+            // No observable body side effects and no accumulator.
+            Ok(acc)
+        }
         LoopPattern::PrintOnly => {
             // No accumulation, just return acc unchanged
             Ok(acc)
-        }
-        LoopPattern::Complex => {
-            // For complex patterns, just count iterations for now
-            let one = builder.ins().iconst(types::I64, 1);
-            Ok(builder.ins().iadd(acc, one))
         }
     }
 }
@@ -616,21 +600,9 @@ fn generate_loop_body(
 /// Analysis of a loop's computation pattern
 #[derive(Debug, Default)]
 struct LoopAnalysis {
-    has_add: bool,
-    has_sub: bool,
-    has_mul: bool,
-    has_reassign: bool,
-    has_increment: bool,
-    has_print: bool,
-    has_println: bool,
-    print_count: usize,
-    loads_local: bool,
-    stores_to_local: bool,
     pattern: LoopPattern,
     /// The local index being accumulated into (if detected)
     accumulator_local: Option<u32>,
-    /// Whether the loop body is empty (just Pop)
-    is_empty_body: bool,
     /// Sequence of JIT operations to emit
     operations: Vec<JitOp>,
 }
@@ -646,7 +618,6 @@ enum JitOp {
 #[derive(Debug, Default, Clone, Copy)]
 enum LoopPattern {
     /// acc += i
-    #[default]
     SumIndex,
     /// acc += constant
     SumConstant(i64),
@@ -654,12 +625,80 @@ enum LoopPattern {
     SumIndexTimesConstant(i64),
     /// acc += 1 (counting)
     CountIterations,
+    /// No observable loop body
+    #[default]
+    EmptyLoop,
     /// Print loop index only (no accumulation)
     PrintOnly,
     /// acc += i with print
     SumIndexWithPrint,
-    /// Complex pattern (not fully recognized)
-    Complex,
+}
+
+fn match_print_index(
+    instructions: &InstructionSet,
+    ip: usize,
+    loop_var_local: u32,
+    body_end: usize,
+) -> JitResult<Option<JitOp>> {
+    if ip + 1 >= body_end || load_local_index(instructions.get(ip).opcode()) != Some(loop_var_local)
+    {
+        return Ok(None);
+    }
+
+    let op = match instructions.get(ip + 1).opcode() {
+        Opcode::Print => JitOp::PrintInt,
+        Opcode::Println => JitOp::PrintlnInt,
+        _ => return Ok(None),
+    };
+
+    Ok(Some(op))
+}
+
+fn match_sum_index(
+    instructions: &InstructionSet,
+    ip: usize,
+    loop_var_local: u32,
+    body_end: usize,
+) -> JitResult<Option<(u32, usize)>> {
+    if ip + 3 >= body_end {
+        return Ok(None);
+    }
+
+    let Some(accumulator) = load_local_index(instructions.get(ip).opcode()) else {
+        return Ok(None);
+    };
+    if load_local_index(instructions.get(ip + 1).opcode()) != Some(loop_var_local) {
+        return Ok(None);
+    }
+
+    match instructions.get(ip + 2).opcode() {
+        Opcode::Add | Opcode::AddInt => {}
+        _ => return Ok(None),
+    }
+
+    match instructions.get(ip + 3).opcode() {
+        Opcode::Reassign(idx) if idx == accumulator => Ok(Some((accumulator, ip + 4))),
+        Opcode::Reassign(idx) => Err(JitError::NotJitCompatible(format!(
+            "Accumulator load at IP {} targets local {}, but reassign targets local {}",
+            ip, accumulator, idx
+        ))),
+        opcode => Err(JitError::UnsupportedOperation(format!(
+            "{:?} at IP {} after accumulator addition",
+            opcode,
+            ip + 3
+        ))),
+    }
+}
+
+fn load_local_index(opcode: Opcode) -> Option<u32> {
+    match opcode {
+        Opcode::Load(idx) => Some(idx),
+        Opcode::LoadLocal0 => Some(0),
+        Opcode::LoadLocal1 => Some(1),
+        Opcode::LoadLocal2 => Some(2),
+        Opcode::LoadLocal3 => Some(3),
+        _ => None,
+    }
 }
 
 /// Statistics about JIT compilation

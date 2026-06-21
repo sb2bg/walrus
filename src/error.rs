@@ -1,19 +1,36 @@
-use std::cmp::min;
+use std::io::{self, Write};
+use std::ops::Range;
+use std::rc::Rc;
 use std::str::FromStr;
 
+use ariadne::{Color, Config, IndexType, Label, Report, ReportKind, sources};
 use float_ord::FloatOrd;
 use git_version::git_version;
 use lalrpop_util::ParseError;
 use lalrpop_util::lexer::Token;
-use line_span::{find_line_end, find_line_start};
 use snailquote::{UnescapeError, unescape};
 use thiserror::Error;
 
 use crate::ast::NodeKind;
+use crate::source_ref::SourceMap;
 use crate::span::{Span, Spanned};
 use crate::vm::opcode::Opcode;
 
 const FSTRING_INTERP_QUOTE_SENTINEL: char = '\u{001F}';
+const DIAGNOSTIC_LABEL_COLORS: [Color; 6] = [
+    Color::Fixed(38),  // muted cyan
+    Color::Fixed(108), // soft green
+    Color::Fixed(172), // warm orange
+    Color::Fixed(75),  // blue
+    Color::Fixed(179), // tan
+    Color::Fixed(167), // soft red
+];
+
+#[derive(Clone, Copy)]
+enum FStringInterpStringMode {
+    Raw,
+    Escaped,
+}
 
 #[derive(Debug)]
 pub enum RecoveredParseError {
@@ -30,24 +47,27 @@ fn is_ident_char(ch: char) -> bool {
 /// Rewrites raw `"` inside f-string interpolations to a sentinel byte so the
 /// lexer can still tokenize the full `f"..."` literal.
 pub fn preprocess_fstrings_for_lexer(source: &str) -> String {
-    fn has_matching_quote_before_interp_end(
+    fn has_matching_interp_string_quote(
         chars: std::iter::Peekable<std::str::Chars<'_>>,
-        mut interp_depth: usize,
+        mode: FStringInterpStringMode,
     ) -> bool {
+        let mut escaped = false;
+
         for ch in chars {
-            if ch == '"' {
-                return true;
-            }
-
-            if ch == '{' {
-                interp_depth += 1;
-                continue;
-            }
-
-            if ch == '}' {
-                interp_depth = interp_depth.saturating_sub(1);
-                if interp_depth == 0 {
-                    return false;
+            match mode {
+                FStringInterpStringMode::Raw => {
+                    if escaped {
+                        escaped = false;
+                    } else if ch == '\\' {
+                        escaped = true;
+                    } else if ch == '"' {
+                        return true;
+                    }
+                }
+                FStringInterpStringMode::Escaped => {
+                    if ch == '"' {
+                        return true;
+                    }
                 }
             }
         }
@@ -68,7 +88,7 @@ pub fn preprocess_fstrings_for_lexer(source: &str) -> String {
         FString {
             interp_depth: usize,
             literal_escape: bool,
-            in_interp_string: bool,
+            interp_string_mode: Option<FStringInterpStringMode>,
         },
     }
 
@@ -118,7 +138,7 @@ pub fn preprocess_fstrings_for_lexer(source: &str) -> String {
                     state = ScannerState::FString {
                         interp_depth: 0,
                         literal_escape: false,
-                        in_interp_string: false,
+                        interp_string_mode: None,
                     };
                     continue;
                 }
@@ -164,7 +184,7 @@ pub fn preprocess_fstrings_for_lexer(source: &str) -> String {
             ScannerState::FString {
                 mut interp_depth,
                 mut literal_escape,
-                mut in_interp_string,
+                mut interp_string_mode,
             } => {
                 if interp_depth == 0 {
                     out.push(ch);
@@ -176,13 +196,13 @@ pub fn preprocess_fstrings_for_lexer(source: &str) -> String {
                         literal_escape = true;
                     } else if ch == '{' {
                         interp_depth = 1;
-                        in_interp_string = false;
+                        interp_string_mode = None;
                     } else if ch == '"' {
                         state = ScannerState::Normal;
                         continue;
                     }
                 } else {
-                    if in_interp_string {
+                    if let Some(mode) = interp_string_mode {
                         let emitted = if ch == '"' {
                             FSTRING_INTERP_QUOTE_SENTINEL
                         } else {
@@ -191,15 +211,35 @@ pub fn preprocess_fstrings_for_lexer(source: &str) -> String {
                         out.push(emitted);
                         prev_char = Some(ch);
 
-                        if ch == '"' {
-                            in_interp_string = false;
+                        match mode {
+                            FStringInterpStringMode::Raw => {
+                                if ch == '\\' {
+                                    literal_escape = !literal_escape;
+                                } else {
+                                    if ch == '"' && !literal_escape {
+                                        interp_string_mode = None;
+                                    }
+                                    literal_escape = false;
+                                }
+                            }
+                            FStringInterpStringMode::Escaped => {
+                                if ch == '"' {
+                                    interp_string_mode = None;
+                                }
+                            }
                         }
                     } else {
                         if ch == '"' {
-                            if has_matching_quote_before_interp_end(chars.clone(), interp_depth) {
+                            let mode = if prev_char == Some('\\') {
+                                FStringInterpStringMode::Escaped
+                            } else {
+                                FStringInterpStringMode::Raw
+                            };
+                            if has_matching_interp_string_quote(chars.clone(), mode) {
                                 out.push(FSTRING_INTERP_QUOTE_SENTINEL);
                                 prev_char = Some(ch);
-                                in_interp_string = true;
+                                interp_string_mode = Some(mode);
+                                literal_escape = false;
                             } else {
                                 out.push(ch);
                                 prev_char = Some(ch);
@@ -222,7 +262,7 @@ pub fn preprocess_fstrings_for_lexer(source: &str) -> String {
                 state = ScannerState::FString {
                     interp_depth,
                     literal_escape,
-                    in_interp_string,
+                    interp_string_mode,
                 };
             }
         }
@@ -305,7 +345,8 @@ pub fn parse_fstring<T>(
     } else {
         raw
     };
-    let base_offset = spanned.span().0; // Start position of the f-string
+    let base_span = spanned.span();
+    let base_offset = base_span.0; // Start position of the f-string
 
     // Remove f" and trailing " -> f" is 2 chars, so content starts at base_offset + 2
     let content = &raw[2..raw.len() - 1];
@@ -336,24 +377,32 @@ pub fn parse_fstring<T>(
         }
     }
 
+    fn decode_next_fstring_escape<T>(
+        char_indices: &mut std::iter::Peekable<std::str::CharIndices<'_>>,
+        base_span: Span,
+        content_offset: usize,
+        slash_pos: usize,
+    ) -> Result<(char, char), ParseError<usize, T, RecoveredParseError>> {
+        if let Some((_, next_ch)) = char_indices.next() {
+            let escape_span = base_span.in_same_file(
+                content_offset + slash_pos,
+                content_offset + slash_pos + 1 + next_ch.len_utf8(),
+            );
+            Ok((decode_fstring_escape(next_ch, escape_span)?, next_ch))
+        } else {
+            let escape_span =
+                base_span.in_same_file(content_offset + slash_pos, content_offset + slash_pos + 1);
+            Err(ParseError::User {
+                error: RecoveredParseError::InvalidEscapeSequence("\\".to_string(), escape_span),
+            })
+        }
+    }
+
     while let Some((byte_pos, ch)) = char_indices.next() {
         if ch == '\\' {
-            if let Some((_, next_ch)) = char_indices.next() {
-                let escape_span = Span(
-                    content_offset + byte_pos,
-                    content_offset + byte_pos + 1 + next_ch.len_utf8(),
-                );
-                let decoded = decode_fstring_escape(next_ch, escape_span)?;
-                current_literal.push(decoded);
-            } else {
-                let escape_span = Span(content_offset + byte_pos, content_offset + byte_pos + 1);
-                return Err(ParseError::User {
-                    error: RecoveredParseError::InvalidEscapeSequence(
-                        "\\".to_string(),
-                        escape_span,
-                    ),
-                });
-            }
+            let (decoded, _) =
+                decode_next_fstring_escape(&mut char_indices, base_span, content_offset, byte_pos)?;
+            current_literal.push(decoded);
         } else if ch == '{' {
             // Start of an interpolation
             if !current_literal.is_empty() {
@@ -366,46 +415,70 @@ pub fn parse_fstring<T>(
             let mut expr_str = String::new();
             let mut brace_depth = 1;
             let mut interpolation_closed = false;
-            let mut in_string_literal = false;
+            let mut string_mode = None;
             let mut string_escape = false;
 
             while let Some((expr_pos, expr_ch)) = char_indices.next() {
-                let emitted = if expr_ch == '\\' {
-                    if let Some((_, next_ch)) = char_indices.next() {
-                        let escape_span = Span(
-                            content_offset + expr_pos,
-                            content_offset + expr_pos + 1 + next_ch.len_utf8(),
-                        );
-                        decode_fstring_escape(next_ch, escape_span)?
-                    } else {
-                        let escape_span =
-                            Span(content_offset + expr_pos, content_offset + expr_pos + 1);
-                        return Err(ParseError::User {
-                            error: RecoveredParseError::InvalidEscapeSequence(
-                                "\\".to_string(),
-                                escape_span,
-                            ),
-                        });
-                    }
-                } else {
-                    expr_ch
-                };
+                if let Some(mode) = string_mode {
+                    match mode {
+                        FStringInterpStringMode::Raw => {
+                            expr_str.push(expr_ch);
 
-                if in_string_literal {
-                    if string_escape {
-                        string_escape = false;
-                    } else if emitted == '\\' {
-                        string_escape = true;
-                    } else if emitted == '"' {
-                        in_string_literal = false;
+                            if string_escape {
+                                string_escape = false;
+                            } else if expr_ch == '\\' {
+                                string_escape = true;
+                            } else if expr_ch == '"' {
+                                string_mode = None;
+                            }
+                        }
+                        FStringInterpStringMode::Escaped => {
+                            let emitted = if expr_ch == '\\' {
+                                let (decoded, _) = decode_next_fstring_escape(
+                                    &mut char_indices,
+                                    base_span,
+                                    content_offset,
+                                    expr_pos,
+                                )?;
+                                decoded
+                            } else {
+                                expr_ch
+                            };
+
+                            if string_escape {
+                                string_escape = false;
+                            } else if emitted == '\\' {
+                                string_escape = true;
+                            } else if emitted == '"' {
+                                string_mode = None;
+                            }
+
+                            expr_str.push(emitted);
+                        }
                     }
 
-                    expr_str.push(emitted);
                     continue;
                 }
 
+                let (emitted, escaped_quote) = if expr_ch == '\\' {
+                    let (decoded, next_ch) = decode_next_fstring_escape(
+                        &mut char_indices,
+                        base_span,
+                        content_offset,
+                        expr_pos,
+                    )?;
+                    (decoded, next_ch == '"')
+                } else {
+                    (expr_ch, false)
+                };
+
                 if emitted == '"' {
-                    in_string_literal = true;
+                    string_mode = Some(if escaped_quote {
+                        FStringInterpStringMode::Escaped
+                    } else {
+                        FStringInterpStringMode::Raw
+                    });
+                    string_escape = false;
                     expr_str.push(emitted);
                     continue;
                 }
@@ -430,7 +503,8 @@ pub fn parse_fstring<T>(
             }
 
             if !interpolation_closed {
-                let expr_span = Span(content_offset + expr_start, content_offset + content.len());
+                let expr_span = base_span
+                    .in_same_file(content_offset + expr_start, content_offset + content.len());
                 return Err(ParseError::User {
                     error: RecoveredParseError::InvalidFStringExpression(expr_str, expr_span),
                 });
@@ -438,17 +512,18 @@ pub fn parse_fstring<T>(
 
             // Parse the expression with proper span
             if expr_str.trim().is_empty() {
-                let expr_span = Span(content_offset + expr_start, content_offset + expr_start);
+                let expr_span = base_span
+                    .in_same_file(content_offset + expr_start, content_offset + expr_start);
                 return Err(ParseError::User {
                     error: RecoveredParseError::InvalidFStringExpression(expr_str, expr_span),
                 });
             }
 
-            match parser.parse(&expr_str) {
+            match parser.parse(base_span.file_id(), &expr_str) {
                 Ok(node) => {
                     // Adjust the span to reflect the actual position in the source file
                     let expr_span = node.span();
-                    let adjusted_span = Span(
+                    let adjusted_span = base_span.in_same_file(
                         content_offset + expr_start + expr_span.0,
                         content_offset + expr_start + expr_span.1,
                     );
@@ -458,7 +533,7 @@ pub fn parse_fstring<T>(
                 }
                 Err(_) => {
                     // If parsing fails, return an error
-                    let expr_span = Span(
+                    let expr_span = base_span.in_same_file(
                         content_offset + expr_start,
                         content_offset + expr_start + expr_str.len(),
                     );
@@ -479,8 +554,179 @@ pub fn parse_fstring<T>(
     Ok(NodeKind::FString(parts))
 }
 
-// todo: accept &str instead of String, and source_refs when possible
-// fixme: lower error size
+#[derive(Debug, Clone)]
+pub struct ErrorContext {
+    span: Span,
+    source_map: SourceMap,
+}
+
+impl ErrorContext {
+    pub fn new(span: Span, src: impl Into<Rc<str>>, filename: impl Into<Rc<str>>) -> Self {
+        let source_map = SourceMap::new();
+        let (file_id, _) = source_map.add_source(src, filename);
+        let span = if span.file_id().is_unknown() {
+            span.with_file_id(file_id)
+        } else {
+            span
+        };
+        Self { span, source_map }
+    }
+
+    pub fn from_source_map(span: Span, source_map: SourceMap) -> Self {
+        Self { span, source_map }
+    }
+
+    pub fn span(&self) -> Span {
+        self.span
+    }
+
+    pub fn source_map(&self) -> SourceMap {
+        self.source_map.clone()
+    }
+
+    fn source_file(&self, span: Span) -> Option<crate::source_ref::SourceFileRef> {
+        self.source_map.get(span.file_id())
+    }
+
+    pub fn with_span(&self, span: Span) -> Self {
+        Self {
+            span,
+            source_map: self.source_map(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct WalrusDiagnostic {
+    message: String,
+    source: Option<ErrorContext>,
+    labels: Vec<DiagnosticLabel>,
+    notes: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+struct DiagnosticLabel {
+    span: Span,
+    message: Option<String>,
+}
+
+impl WalrusDiagnostic {
+    fn plain(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            source: None,
+            labels: Vec::new(),
+            notes: Vec::new(),
+        }
+    }
+
+    fn source_error_with_labels(
+        message: impl Into<String>,
+        context: ErrorContext,
+        labels: Vec<DiagnosticLabel>,
+    ) -> Self {
+        Self {
+            message: message.into(),
+            source: Some(context),
+            labels,
+            notes: Vec::new(),
+        }
+    }
+
+    pub fn write<W: Write>(&self, mut writer: W) -> io::Result<()> {
+        let Some(source) = &self.source else {
+            writeln!(writer, "Error: {}", self.message)?;
+            for note in &self.notes {
+                writeln!(writer, "Note: {note}")?;
+            }
+            return Ok(());
+        };
+
+        let primary_span = self
+            .labels
+            .first()
+            .map(|label| label.span)
+            .unwrap_or_default();
+        let Some(primary_file) = source.source_file(primary_span) else {
+            writeln!(writer, "Error: {}", self.message)?;
+            for note in &self.notes {
+                writeln!(writer, "Note: {note}")?;
+            }
+            return Ok(());
+        };
+
+        let primary_source = primary_file.source;
+        let primary_filename = primary_file.filename.to_string();
+        let primary_range = diagnostic_range(&primary_source, primary_span);
+        let mut builder = Report::build(
+            ReportKind::Error,
+            (primary_filename.clone(), primary_range.clone()),
+        )
+        .with_config(
+            Config::default()
+                .with_color(true)
+                .with_index_type(IndexType::Byte),
+        )
+        .with_message(&self.message);
+
+        for (index, label) in self.labels.iter().enumerate() {
+            let Some(label_file) = source.source_file(label.span) else {
+                continue;
+            };
+            let mut ariadne_label = Label::new((
+                label_file.filename.to_string(),
+                diagnostic_range(&label_file.source, label.span),
+            ))
+            .with_color(diagnostic_label_color(index));
+            if let Some(message) = &label.message {
+                ariadne_label = ariadne_label.with_message(message);
+            }
+            builder = builder.with_label(ariadne_label);
+        }
+
+        for note in &self.notes {
+            builder = builder.with_note(note);
+        }
+
+        let mut source_entries = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for label in &self.labels {
+            if let Some(file) = source.source_file(label.span) {
+                let filename = file.filename.to_string();
+                if seen.insert(filename.clone()) {
+                    source_entries.push((filename, file.source.to_string()));
+                }
+            }
+        }
+        if seen.insert(primary_filename.clone()) {
+            source_entries.push((primary_filename, primary_source.to_string()));
+        }
+
+        builder.finish().write(sources(source_entries), &mut writer)
+    }
+}
+
+fn diagnostic_range(src: &str, span: Span) -> Range<usize> {
+    let len = src.len();
+    let start = span.0.min(len);
+    let end = span.1.min(len).max(start);
+    start..end
+}
+
+fn diagnostic_label_color(index: usize) -> Color {
+    DIAGNOSTIC_LABEL_COLORS[index % DIAGNOSTIC_LABEL_COLORS.len()]
+}
+
+fn label_span_for_context(span: Span, context: &ErrorContext) -> Option<Span> {
+    if span == Span::default() {
+        None
+    } else if span.file_id().is_unknown() {
+        Some(span.with_file_id(context.span().file_id()))
+    } else {
+        Some(span)
+    }
+}
+
 #[derive(Error, Debug)]
 pub enum WalrusError {
     #[error("Unknown error '{message}'. Please report this bug with the following information: Walrus Version = '{}', Git Revision = '{}'", env!("CARGO_PKG_VERSION"), git_version!(fallback = "flamegraph"))]
@@ -504,20 +750,32 @@ pub enum WalrusError {
     )]
     FileNotFound { filename: String },
 
-    #[error("Unexpected EOF in source '{filename}'.")]
-    UnexpectedEndOfInput { filename: String },
+    #[error("Unexpected EOF in source")]
+    UnexpectedEndOfInput { context: ErrorContext },
 
-    #[error("Unexpected token '{token}' at {line}")]
-    UnexpectedToken { token: String, line: String },
+    #[error("Unexpected token '{token}'")]
+    UnexpectedToken {
+        token: String,
+        context: ErrorContext,
+    },
 
-    #[error("Invalid token '{token}' at {line}")]
-    InvalidToken { token: String, line: String },
+    #[error("Invalid token '{token}'")]
+    InvalidToken {
+        token: String,
+        context: ErrorContext,
+    },
 
-    #[error("Extra token '{token}' at {line}")]
-    ExtraToken { token: String, line: String },
+    #[error("Extra token '{token}'")]
+    ExtraToken {
+        token: String,
+        context: ErrorContext,
+    },
 
-    #[error("Number '{number}' is too large at {line}")]
-    NumberTooLarge { number: String, line: String },
+    #[error("Number '{number}' is too large")]
+    NumberTooLarge {
+        number: String,
+        context: ErrorContext,
+    },
 
     #[error("Circular import detected: module '{module}' is already being imported")]
     CircularImport { module: String },
@@ -528,333 +786,198 @@ pub enum WalrusError {
         second_arg: String,
     },
 
-    #[error(
-        "Invalid operation '{op}' on operands '{left}' and '{right}' at {}",
-        get_line(src, filename, *span)
-    )]
+    #[error("Invalid operation '{op}' on operands '{left}' and '{right}'")]
     InvalidOperation {
         op: Opcode,
         left: String,
         right: String,
-        span: Span,
-        src: String,
-        filename: String,
+        left_span: Option<Span>,
+        right_span: Option<Span>,
+        context: ErrorContext,
     },
 
-    #[error(
-        "Invalid unary operation '{op}' on operand {operand} at {}",
-        get_line(src, filename, *span)
-    )]
+    #[error("Invalid unary operation '{op}' on operand {operand}")]
     InvalidUnaryOperation {
         op: Opcode,
         operand: String,
-        span: Span,
-        src: String,
-        filename: String,
+        operand_span: Option<Span>,
+        context: ErrorContext,
     },
 
-    #[error("Undefined variable '{name}' at {}",
-        get_line(src, filename, *span)
-    )]
-    UndefinedVariable {
-        name: String,
-        span: Span,
-        src: String,
-        filename: String,
-    },
+    #[error("Undefined variable '{name}'")]
+    UndefinedVariable { name: String, context: ErrorContext },
 
-    #[error("Return statement outside of function at {}",
-        get_line(src, filename, *span)
-    )]
-    ReturnOutsideFunction {
-        span: Span,
-        src: String,
-        filename: String,
-    },
+    #[error("Return statement outside of function")]
+    ReturnOutsideFunction { context: ErrorContext },
 
-    #[error("Break statement outside of loop at {}",
-        get_line(src, filename, *span)
-    )]
-    BreakOutsideLoop {
-        span: Span,
-        src: String,
-        filename: String,
-    },
+    #[error("Break statement outside of loop")]
+    BreakOutsideLoop { context: ErrorContext },
 
-    #[error("Continue statement outside of loop at {}",
-        get_line(src, filename, *span)
-    )]
-    ContinueOutsideLoop {
-        span: Span,
-        src: String,
-        filename: String,
-    },
+    #[error("Continue statement outside of loop")]
+    ContinueOutsideLoop { context: ErrorContext },
 
-    #[error("Expected type '{expected}', but found type '{found}' at {}",
-        get_line(src, filename, *span)
-    )]
+    #[error("Expected type '{expected}', but found type '{found}'")]
     TypeMismatch {
         expected: String,
         found: String,
-        span: Span,
-        src: String,
-        filename: String,
+        context: ErrorContext,
     },
 
-    #[error("Exception '{message}' thrown at {}",
-        get_line(src, filename, *span)
-    )]
+    #[error("Exception '{message}' thrown")]
     Exception {
         message: String,
-        span: Span,
-        src: String,
-        filename: String,
+        context: ErrorContext,
     },
 
-    #[error("Invalid escape sequence '{sequence}' at {line}")]
-    InvalidEscapeSequence { sequence: String, line: String },
+    #[error("{message}")]
+    RuntimeError {
+        message: String,
+        context: ErrorContext,
+    },
 
-    #[error("Invalid unicode escape sequence at {line}")]
-    InvalidUnicodeEscapeSequence { line: String },
+    #[error("Invalid escape sequence '{sequence}'")]
+    InvalidEscapeSequence {
+        sequence: String,
+        context: ErrorContext,
+    },
 
-    #[error("Failed to parse f-string expression '{expr}': {error} at {}",
-        get_line(src, filename, *span)
-    )]
+    #[error("Invalid unicode escape sequence")]
+    InvalidUnicodeEscapeSequence { context: ErrorContext },
+
+    #[error("Failed to parse f-string expression '{expr}': {error}")]
     FStringParseError {
         expr: String,
         error: String,
-        span: Span,
-        src: String,
-        filename: String,
+        context: ErrorContext,
     },
 
-    #[error("Cannot free memory not in the heap at {}",
-        get_line(src, filename, *span)
-    )]
-    FailedFree {
-        span: Span,
-        src: String,
-        filename: String,
-    },
+    #[error("Cannot free memory not in the heap")]
+    FailedFree { context: ErrorContext },
 
-    #[error("Cannot call non-function '{value}' at {}",
-        get_line(src, filename, *span)
-    )]
+    #[error("Cannot call non-function '{value}'")]
     NotCallable {
         value: String,
-        span: Span,
-        src: String,
-        filename: String,
+        context: ErrorContext,
     },
 
-    #[error("Function '{name}' expected {expected} arg(s) but got {got} arg(s) at {}",
-        get_line(src, filename, *span)
-    )]
+    #[error("Function '{name}' expected {expected} arg(s) but got {got} arg(s)")]
     InvalidArgCount {
         name: String,
         expected: usize,
         got: usize,
-        span: Span,
-        src: String,
-        filename: String,
+        context: ErrorContext,
     },
 
-    #[error("Index {index} out of bounds for object with len {len} at {}",
-        get_line(src, filename, *span)
-    )]
+    #[error("Index {index} out of bounds for object with len {len}")]
     IndexOutOfBounds {
         index: i64,
         len: usize,
-        span: Span,
-        src: String,
-        filename: String,
+        index_span: Option<Span>,
+        context: ErrorContext,
     },
 
-    #[error("Cannot index non-indexable type '{value}' at {}",
-        get_line(src, filename, *span)
-    )]
+    #[error("Cannot index non-indexable type '{value}'")]
     NotIndexable {
         value: String,
-        span: Span,
-        src: String,
-        filename: String,
+        context: ErrorContext,
     },
 
-    #[error("Cannot index type '{non_indexable}' with type '{index_type}' at {}",
-        get_line(src, filename, *span)
-    )]
+    #[error("Cannot index type '{non_indexable}' with type '{index_type}'")]
     InvalidIndexType {
         non_indexable: String,
         index_type: String,
-        span: Span,
-        src: String,
-        filename: String,
+        target_span: Option<Span>,
+        index_span: Option<Span>,
+        context: ErrorContext,
     },
 
-    #[error("Attempted to access released memory at {}. This is either a bug in the interpreter or you freed memory allocated by the interpreter.",
-        get_line(src, filename, *span)
+    #[error(
+        "Attempted to access released memory. This is either a bug in the interpreter or you freed memory allocated by the interpreter."
     )]
-    AccessReleasedMemory {
-        span: Span,
-        src: String,
-        filename: String,
-    },
+    AccessReleasedMemory { context: ErrorContext },
 
     #[error("Failed to gather PWD. This may be due to a permissions error.")]
     FailedGatherPWD,
 
-    #[error("Type '{type_name}' is not iterable at {}",
-        get_line(src, filename, *span)
-    )]
+    #[error("Type '{type_name}' is not iterable")]
     NotIterable {
         type_name: String,
-        span: Span,
-        src: String,
-        filename: String,
+        context: ErrorContext,
     },
 
-    #[error("Division by zero at {}",
-        get_line(src, filename, *span)
-    )]
-    DivisionByZero {
-        span: Span,
-        src: String,
-        filename: String,
-    },
+    #[error("Division by zero")]
+    DivisionByZero { context: ErrorContext },
 
-    #[error("Cannot get length of non-indexable type '{type_name}' at {}",
-        get_line(src, filename, *span)
-    )]
+    #[error("Cannot get length of non-indexable type '{type_name}'")]
     NoLength {
         type_name: String,
-        span: Span,
-        src: String,
-        filename: String,
+        context: ErrorContext,
     },
 
-    #[error("Stack underflow while executing opcode '{op:?}' at {}",
-        get_line(src, filename, *span)
-    )]
-    StackUnderflow {
-        op: Opcode,
-        span: Span,
-        src: String,
-        filename: String,
-    },
+    #[error("Stack underflow while executing opcode '{op:?}'")]
+    StackUnderflow { op: Opcode, context: ErrorContext },
 
-    #[error("Invalid instruction '{op:?}' at {}",
-        get_line(src, filename, *span)
-    )]
-    InvalidInstruction {
-        op: Opcode,
-        span: Span,
-        src: String,
-        filename: String,
-    },
+    #[error("Invalid instruction '{op:?}'")]
+    InvalidInstruction { op: Opcode, context: ErrorContext },
 
-    #[error("Cannot redefine local variable with name '{name}' at {}",
-        get_line(src, filename, *span)
-    )]
-    RedefinedLocal {
-        name: String,
-        span: Span,
-        src: String,
-        filename: String,
-    },
+    #[error("Cannot redefine local variable with name '{name}'")]
+    RedefinedLocal { name: String, context: ErrorContext },
 
-    #[error("Key '{key}' not found at {}",
-        get_line(src, filename, *span)
-    )]
-    KeyNotFound {
-        key: String,
-        span: Span,
-        src: String,
-        filename: String,
-    },
+    #[error("Key '{key}' not found")]
+    KeyNotFound { key: String, context: ErrorContext },
 
-    #[error("Range start '{start}' must be less than or equal to range end '{end}' at {}",
-        get_line(src, filename, *span)
-    )]
+    #[error("Range start '{start}' must be less than or equal to range end '{end}'")]
     InvalidRange {
         start: i64,
         end: i64,
-        span: Span,
-        src: String,
-        filename: String,
+        start_span: Option<Span>,
+        end_span: Option<Span>,
+        context: ErrorContext,
     },
 
-    #[error("Type '{type_name}' has no method '{method}' at {}",
-        get_line(src, filename, *span)
-    )]
+    #[error("Type '{type_name}' has no method '{method}'")]
     MethodNotFound {
         type_name: String,
         method: String,
-        span: Span,
-        src: String,
-        filename: String,
+        context: ErrorContext,
     },
 
-    #[error("Type '{type_name}' has no member '{member}' at {}",
-        get_line(src, filename, *span)
-    )]
+    #[error("Type '{type_name}' has no member '{member}'")]
     MemberNotFound {
         type_name: String,
         member: String,
-        span: Span,
-        src: String,
-        filename: String,
+        context: ErrorContext,
     },
 
     #[error(
-        "Member access requires object type 'struct', 'struct instance', or 'dict' and member name type 'string', found object '{object_type}' and member '{member_type}' at {}",
-        get_line(src, filename, *span)
+        "Member access requires object type 'struct', 'struct instance', or 'dict' and member name type 'string', found object '{object_type}' and member '{member_type}'"
     )]
     InvalidMemberAccessTarget {
         object_type: String,
         member_type: String,
-        span: Span,
-        src: String,
-        filename: String,
+        context: ErrorContext,
     },
 
-    #[error("Struct methods must compile to VM bytecode functions at {}",
-        get_line(src, filename, *span)
-    )]
-    StructMethodMustBeVmFunction {
-        span: Span,
-        src: String,
-        filename: String,
-    },
+    #[error("Struct methods must compile to VM bytecode functions")]
+    StructMethodMustBeVmFunction { context: ErrorContext },
 
-    #[error("Cannot call method '{method}' on value of type '{type_name}' at {}",
-        get_line(src, filename, *span)
-    )]
+    #[error("Cannot call method '{method}' on value of type '{type_name}'")]
     InvalidMethodReceiver {
         method: String,
         type_name: String,
-        span: Span,
-        src: String,
-        filename: String,
+        context: ErrorContext,
     },
 
-    #[error("Module '{module}' not found at {}",
-        get_line(src, filename, *span)
-    )]
+    #[error("Module '{module}' not found")]
     ModuleNotFound {
         module: String,
-        span: Span,
-        src: String,
-        filename: String,
+        context: ErrorContext,
     },
 
-    #[error("Thrown value: {message} at {}",
-        get_line(src, filename, *span)
-    )]
+    #[error("Thrown value: {message}")]
     ThrownValue {
         message: String,
-        span: Span,
-        src: String,
-        filename: String,
+        context: ErrorContext,
     },
 
     #[error("Invalid file mode '{mode}'. Supported modes: r, w, a, rw")]
@@ -881,132 +1004,429 @@ pub enum WalrusError {
     #[error("Failed to write '{path}': {reason}")]
     WriteFileFailed { path: String, reason: String },
 
-    #[error("Cannot pop from an empty list at {}",
-        get_line(src, filename, *span)
-    )]
-    EmptyListPop {
-        span: Span,
-        src: String,
-        filename: String,
-    },
+    #[error("Cannot pop from an empty list")]
+    EmptyListPop { context: ErrorContext },
 
-    #[error("core.gc_threshold requires a positive integer argument at {}",
-        get_line(src, filename, *span)
-    )]
-    InvalidGcThresholdArg {
-        span: Span,
-        src: String,
-        filename: String,
-    },
+    #[error("core.gc_threshold requires a positive integer argument")]
+    InvalidGcThresholdArg { context: ErrorContext },
 
-    #[error("Package imports (@package) are not yet implemented at {}",
-        get_line(src, filename, *span)
-    )]
-    PackageImportNotImplemented {
-        span: Span,
-        src: String,
-        filename: String,
-    },
+    #[error("Package imports (@package) are not yet implemented")]
+    PackageImportNotImplemented { context: ErrorContext },
 
-    #[error("{error}{stack_trace}")]
-    RuntimeErrorWithStackTrace { error: String, stack_trace: String },
+    #[error("{error}")]
+    RuntimeErrorWithStackTrace {
+        error: Box<WalrusError>,
+        stack_trace: String,
+    },
+}
+
+impl WalrusError {
+    pub fn diagnostic(&self) -> Option<WalrusDiagnostic> {
+        match self {
+            WalrusError::RuntimeErrorWithStackTrace { error, stack_trace } => {
+                let mut diagnostic = error
+                    .diagnostic()
+                    .unwrap_or_else(|| WalrusDiagnostic::plain(error.to_string()));
+                let trimmed = stack_trace.trim();
+                if !trimmed.is_empty() {
+                    diagnostic.notes.push(trimmed.to_string());
+                }
+                Some(diagnostic)
+            }
+            WalrusError::InvalidOperation {
+                op,
+                left,
+                right,
+                left_span,
+                right_span,
+                context,
+            } => {
+                let mut labels = Vec::new();
+                let (left_label, right_label) = match op {
+                    Opcode::Index => (
+                        format!("indexed value is {left}"),
+                        format!("index is {right}"),
+                    ),
+                    Opcode::Range => (
+                        format!("range start is {left}"),
+                        format!("range end is {right}"),
+                    ),
+                    _ => (
+                        format!("left operand is {left}"),
+                        format!("right operand is {right}"),
+                    ),
+                };
+                if let Some(span) = left_span.and_then(|span| label_span_for_context(span, context))
+                {
+                    labels.push(DiagnosticLabel {
+                        span,
+                        message: Some(left_label),
+                    });
+                }
+                if let Some(span) =
+                    right_span.and_then(|span| label_span_for_context(span, context))
+                {
+                    labels.push(DiagnosticLabel {
+                        span,
+                        message: Some(right_label),
+                    });
+                }
+                if labels.is_empty() {
+                    labels.push(DiagnosticLabel {
+                        span: context.span(),
+                        message: Some(format!("{left} cannot be combined with {right}")),
+                    });
+                }
+                Some(WalrusDiagnostic::source_error_with_labels(
+                    self.to_string(),
+                    context.clone(),
+                    labels,
+                ))
+            }
+            WalrusError::InvalidUnaryOperation {
+                operand,
+                operand_span,
+                context,
+                ..
+            } => {
+                let span = operand_span
+                    .and_then(|span| label_span_for_context(span, context))
+                    .unwrap_or_else(|| context.span());
+                Some(WalrusDiagnostic::source_error_with_labels(
+                    self.to_string(),
+                    context.clone(),
+                    vec![DiagnosticLabel {
+                        span,
+                        message: Some(format!("operand is {operand}")),
+                    }],
+                ))
+            }
+            _ => self.source_context().cloned().map(|context| {
+                WalrusDiagnostic::source_error_with_labels(
+                    self.to_string(),
+                    context.clone(),
+                    self.diagnostic_labels(&context),
+                )
+            }),
+        }
+    }
+
+    pub fn write_cli<W: Write>(&self, mut writer: W) -> io::Result<()> {
+        if let Some(diagnostic) = self.diagnostic() {
+            diagnostic.write(&mut writer)
+        } else {
+            writeln!(writer, "[ERROR] Fatal exception during execution -> {self}")
+        }
+    }
+
+    pub fn with_call_site(self, context: ErrorContext) -> Self {
+        if self.source_context().is_some() {
+            return self;
+        }
+
+        WalrusError::RuntimeError {
+            message: self.to_string(),
+            context,
+        }
+    }
+
+    fn diagnostic_labels(&self, context: &ErrorContext) -> Vec<DiagnosticLabel> {
+        let message = match self {
+            WalrusError::UnexpectedEndOfInput { .. } => {
+                "input ends before this construct is complete"
+            }
+            WalrusError::UnexpectedToken { .. } => "unexpected token",
+            WalrusError::InvalidToken { .. } => "invalid token",
+            WalrusError::ExtraToken { .. } => "extra token",
+            WalrusError::NumberTooLarge { .. } => "number is too large",
+            WalrusError::UndefinedVariable { .. } => "name is not defined in this scope",
+            WalrusError::ReturnOutsideFunction { .. } => "return is only valid inside a function",
+            WalrusError::BreakOutsideLoop { .. } => "break is only valid inside a loop",
+            WalrusError::ContinueOutsideLoop { .. } => "continue is only valid inside a loop",
+            WalrusError::TypeMismatch {
+                expected, found, ..
+            } => {
+                return vec![DiagnosticLabel {
+                    span: context.span(),
+                    message: Some(format!("expected {expected}, found {found}")),
+                }];
+            }
+            WalrusError::Exception { .. } => "exception thrown here",
+            WalrusError::RuntimeError { .. } => "runtime error occurs here",
+            WalrusError::InvalidEscapeSequence { .. } => "invalid escape sequence",
+            WalrusError::InvalidUnicodeEscapeSequence { .. } => "invalid unicode escape",
+            WalrusError::FStringParseError { .. } => "invalid expression inside f-string",
+            WalrusError::FailedFree { .. } => "value is not heap allocated",
+            WalrusError::NotCallable { value, .. } => {
+                return vec![DiagnosticLabel {
+                    span: context.span(),
+                    message: Some(format!("{value} values cannot be called")),
+                }];
+            }
+            WalrusError::InvalidArgCount { expected, got, .. } => {
+                return vec![DiagnosticLabel {
+                    span: context.span(),
+                    message: Some(format!("expected {expected} argument(s), got {got}")),
+                }];
+            }
+            WalrusError::IndexOutOfBounds {
+                index,
+                len,
+                index_span,
+                ..
+            } => {
+                return vec![DiagnosticLabel {
+                    span: index_span
+                        .and_then(|span| label_span_for_context(span, context))
+                        .unwrap_or_else(|| context.span()),
+                    message: Some(format!("index {index} is outside length {len}")),
+                }];
+            }
+            WalrusError::NotIndexable { value, .. } => {
+                return vec![DiagnosticLabel {
+                    span: context.span(),
+                    message: Some(format!("{value} values cannot be indexed")),
+                }];
+            }
+            WalrusError::InvalidIndexType {
+                non_indexable,
+                index_type,
+                target_span,
+                index_span,
+                ..
+            } => {
+                let mut labels = Vec::new();
+                if let Some(span) =
+                    target_span.and_then(|span| label_span_for_context(span, context))
+                {
+                    labels.push(DiagnosticLabel {
+                        span,
+                        message: Some(format!("indexed value is {non_indexable}")),
+                    });
+                }
+                if let Some(span) =
+                    index_span.and_then(|span| label_span_for_context(span, context))
+                {
+                    labels.push(DiagnosticLabel {
+                        span,
+                        message: Some(format!("index is {index_type}")),
+                    });
+                }
+                if labels.is_empty() {
+                    labels.push(DiagnosticLabel {
+                        span: context.span(),
+                        message: Some(format!("cannot index {non_indexable} with {index_type}")),
+                    });
+                }
+                return labels;
+            }
+            WalrusError::AccessReleasedMemory { .. } => "released memory accessed here",
+            WalrusError::NotIterable { type_name, .. } => {
+                return vec![DiagnosticLabel {
+                    span: context.span(),
+                    message: Some(format!("{type_name} values are not iterable")),
+                }];
+            }
+            WalrusError::DivisionByZero { .. } => "division by zero",
+            WalrusError::NoLength { type_name, .. } => {
+                return vec![DiagnosticLabel {
+                    span: context.span(),
+                    message: Some(format!("{type_name} values do not have length")),
+                }];
+            }
+            WalrusError::StackUnderflow { .. } => "the VM stack did not contain enough values",
+            WalrusError::InvalidInstruction { .. } => "invalid bytecode instruction",
+            WalrusError::RedefinedLocal { .. } => "local was already defined",
+            WalrusError::KeyNotFound { .. } => "key lookup failed here",
+            WalrusError::InvalidRange {
+                start,
+                end,
+                start_span,
+                end_span,
+                ..
+            } => {
+                let mut labels = Vec::new();
+                if let Some(span) =
+                    start_span.and_then(|span| label_span_for_context(span, context))
+                {
+                    labels.push(DiagnosticLabel {
+                        span,
+                        message: Some(format!("range starts at {start}")),
+                    });
+                }
+                if let Some(span) = end_span.and_then(|span| label_span_for_context(span, context))
+                {
+                    labels.push(DiagnosticLabel {
+                        span,
+                        message: Some(format!("range ends at {end}")),
+                    });
+                }
+                if labels.is_empty() {
+                    labels.push(DiagnosticLabel {
+                        span: context.span(),
+                        message: Some("range bounds are invalid".to_string()),
+                    });
+                }
+                return labels;
+            }
+            WalrusError::MethodNotFound {
+                method, type_name, ..
+            } => {
+                return vec![DiagnosticLabel {
+                    span: context.span(),
+                    message: Some(format!("{type_name} has no method named {method}")),
+                }];
+            }
+            WalrusError::MemberNotFound {
+                member, type_name, ..
+            } => {
+                return vec![DiagnosticLabel {
+                    span: context.span(),
+                    message: Some(format!("{type_name} has no member named {member}")),
+                }];
+            }
+            WalrusError::InvalidMemberAccessTarget { .. } => "member access target is invalid",
+            WalrusError::StructMethodMustBeVmFunction { .. } => "struct method is not VM bytecode",
+            WalrusError::InvalidMethodReceiver {
+                method, type_name, ..
+            } => {
+                return vec![DiagnosticLabel {
+                    span: context.span(),
+                    message: Some(format!("cannot call {method} on {type_name}")),
+                }];
+            }
+            WalrusError::ModuleNotFound { .. } => "module lookup failed here",
+            WalrusError::ThrownValue { .. } => "value thrown here",
+            WalrusError::EmptyListPop { .. } => "list is empty here",
+            WalrusError::InvalidGcThresholdArg { .. } => "argument must be a positive integer",
+            WalrusError::PackageImportNotImplemented { .. } => "package import starts here",
+            _ => "error occurs here",
+        };
+
+        vec![DiagnosticLabel {
+            span: context.span(),
+            message: Some(message.to_string()),
+        }]
+    }
+
+    fn source_context(&self) -> Option<&ErrorContext> {
+        macro_rules! source_context_match {
+            ($error:expr, $($variant:ident),+ $(,)?) => {
+                match $error {
+                    $(
+                        WalrusError::$variant { context, .. } => Some(context),
+                    )+
+                    WalrusError::RuntimeErrorWithStackTrace { error, .. } => error.source_context(),
+                    _ => None,
+                }
+            };
+        }
+
+        source_context_match!(
+            self,
+            UnexpectedEndOfInput,
+            UnexpectedToken,
+            InvalidToken,
+            ExtraToken,
+            NumberTooLarge,
+            InvalidOperation,
+            InvalidUnaryOperation,
+            UndefinedVariable,
+            ReturnOutsideFunction,
+            BreakOutsideLoop,
+            ContinueOutsideLoop,
+            TypeMismatch,
+            Exception,
+            RuntimeError,
+            InvalidEscapeSequence,
+            InvalidUnicodeEscapeSequence,
+            FStringParseError,
+            FailedFree,
+            NotCallable,
+            InvalidArgCount,
+            IndexOutOfBounds,
+            NotIndexable,
+            InvalidIndexType,
+            AccessReleasedMemory,
+            NotIterable,
+            DivisionByZero,
+            NoLength,
+            StackUnderflow,
+            InvalidInstruction,
+            RedefinedLocal,
+            KeyNotFound,
+            InvalidRange,
+            MethodNotFound,
+            MemberNotFound,
+            InvalidMemberAccessTarget,
+            StructMethodMustBeVmFunction,
+            InvalidMethodReceiver,
+            ModuleNotFound,
+            ThrownValue,
+            EmptyListPop,
+            InvalidGcThresholdArg,
+            PackageImportNotImplemented,
+        )
+    }
 }
 
 pub fn parser_err_mapper(
     err: ParseError<usize, Token<'_>, RecoveredParseError>,
-    source: &str,
-    filename: &str,
+    source_ref: &crate::source_ref::SourceRef<'_>,
 ) -> WalrusError {
+    let context = |span| source_ref.error_context(span);
+
     match err {
         ParseError::UnrecognizedEOF {
             expected: _,
-            location: _,
+            location,
         } => WalrusError::UnexpectedEndOfInput {
-            filename: filename.into(),
+            context: context(Span::new(source_ref.file_id(), location, location)),
         },
         ParseError::UnrecognizedToken {
             token: (start, token, end),
             expected: _,
         } => WalrusError::UnexpectedToken {
             token: token.to_string(),
-            line: get_line(source, filename, Span(start, end)),
+            context: context(Span::new(source_ref.file_id(), start, end)),
         },
         ParseError::InvalidToken { location } => WalrusError::InvalidToken {
-            token: source
+            token: source_ref
+                .source()
                 .get(location..location.saturating_add(1))
                 .unwrap_or("<eof>")
                 .to_string(),
-            line: get_line(source, filename, Span(location, location + 1)),
+            context: context(Span::new(source_ref.file_id(), location, location + 1)),
         },
         ParseError::ExtraToken {
             token: (start, token, end),
         } => WalrusError::ExtraToken {
             token: token.to_string(),
-            line: get_line(source, filename, Span(start, end)),
+            context: context(Span::new(source_ref.file_id(), start, end)),
         },
         ParseError::User { error } => match error {
             RecoveredParseError::NumberTooLarge(number, span) => WalrusError::NumberTooLarge {
                 number,
-                line: get_line(source, filename, span),
+                context: context(span),
             },
             RecoveredParseError::InvalidEscapeSequence(sequence, span) => {
                 WalrusError::InvalidEscapeSequence {
                     sequence,
-                    line: get_line(source, filename, span),
+                    context: context(span),
                 }
             }
             RecoveredParseError::InvalidUnicodeEscapeSequence(span) => {
                 WalrusError::InvalidUnicodeEscapeSequence {
-                    line: get_line(source, filename, span),
+                    context: context(span),
                 }
             }
             RecoveredParseError::InvalidFStringExpression(expr, span) => {
                 WalrusError::FStringParseError {
                     expr,
                     error: "invalid expression syntax".to_string(),
-                    span,
-                    src: source.to_string(),
-                    filename: filename.to_string(),
+                    context: context(span),
                 }
             }
         },
     }
-}
-
-// i dont know if this is the best place to put this comment but:
-// fixme: if the error span starts on a different line than where the error is, the wrong line will be printed.
-// should probably fix this by printing all of the lines contained in the spans
-// todo: use codespan_reporting? https://github.com/brendanzab/codespan
-fn get_line<'a>(src: &'a str, filename: &'a str, span: Span) -> String {
-    if src.is_empty() {
-        return format!("\n\n\t<empty source>\n\t^\n[{filename}:1:1]");
-    }
-
-    let src_len = src.len();
-    let start_offset = span.0.min(src_len.saturating_sub(1));
-    let mut end_offset = span.1.min(src_len);
-    if end_offset <= start_offset {
-        end_offset = (start_offset + 1).min(src_len);
-    }
-
-    let line_start = find_line_start(src, start_offset);
-    let line_end = find_line_end(src, start_offset).min(src_len);
-    let line = &src[line_start..line_end];
-    let mut trimmed = line.trim_start();
-    let trim_left = line.len() - trimmed.len();
-    trimmed = trimmed.trim_end();
-
-    let line_num = src[..start_offset].lines().count() + 1;
-    let col_num = start_offset - line_start + 1;
-
-    let caret_start = start_offset.saturating_sub(line_start + trim_left);
-    let max_caret = trimmed.len().saturating_sub(caret_start);
-    let desired_len = end_offset.saturating_sub(start_offset).max(1);
-    let caret_len = min(desired_len, max_caret.max(1));
-
-    format!(
-        "\n\n\t{trimmed}\n\t{}{}\n[{filename}:{line_num}:{col_num}]",
-        " ".repeat(caret_start),
-        "^".repeat(caret_len),
-    )
 }

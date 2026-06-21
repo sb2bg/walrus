@@ -193,9 +193,7 @@ fn pair_sequence_to_strings(
             return Err(WalrusError::TypeMismatch {
                 expected: "list or tuple".to_string(),
                 found: other.get_type().to_string(),
-                span,
-                src: vm.source_ref().source().into(),
-                filename: vm.source_ref().filename().into(),
+                context: vm.source_ref().error_context(span),
             });
         }
     };
@@ -209,9 +207,7 @@ fn pair_sequence_to_strings(
                 return Err(WalrusError::TypeMismatch {
                     expected: "tuple or list".to_string(),
                     found: other.get_type().to_string(),
-                    span,
-                    src: vm.source_ref().source().into(),
-                    filename: vm.source_ref().filename().into(),
+                    context: vm.source_ref().error_context(span),
                 });
             }
         };

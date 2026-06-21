@@ -9,7 +9,7 @@
 //! Example: Adding a `clear` method to lists:
 //! ```rust
 //! "clear" => {
-//!     check_arity("clear", 0, args.len(), span, src, filename)?;
+//!     check_arity("clear", 0, args.len(), span, source_ref)?;
 //!     list.clear();
 //!     Ok(Value::Void)
 //! }
@@ -18,6 +18,7 @@
 use crate::WalrusResult;
 use crate::arenas::{DictKey, HeapValue, ListKey, StringKey, ValueHolder};
 use crate::error::WalrusError;
+use crate::source_ref::SourceRef;
 use crate::span::Span;
 use crate::value::Value;
 
@@ -27,17 +28,14 @@ fn check_arity(
     expected: usize,
     got: usize,
     span: Span,
-    src: &str,
-    filename: &str,
+    source_ref: &SourceRef<'_>,
 ) -> WalrusResult<()> {
     if got != expected {
         Err(WalrusError::InvalidArgCount {
             name: method.to_string(),
             expected,
             got,
-            span,
-            src: src.into(),
-            filename: filename.into(),
+            context: source_ref.error_context(span),
         })
     } else {
         Ok(())
@@ -51,61 +49,56 @@ pub fn dispatch_list_method(
     method_sym: StringKey,
     args: Vec<Value>,
     span: Span,
-    src: &str,
-    filename: &str,
+    source_ref: &SourceRef<'_>,
 ) -> WalrusResult<Value> {
     let method = heap.get_string(method_sym)?;
 
     match method {
         "push" => {
-            check_arity("push", 1, args.len(), span, src, filename)?;
+            check_arity("push", 1, args.len(), span, source_ref)?;
             let list = heap.get_mut_list(key)?;
             list.push(args[0]);
             Ok(Value::Void)
         }
         "pop" => {
-            check_arity("pop", 0, args.len(), span, src, filename)?;
+            check_arity("pop", 0, args.len(), span, source_ref)?;
             let list = heap.get_mut_list(key)?;
             list.pop().ok_or_else(|| WalrusError::EmptyListPop {
-                span,
-                src: src.to_string(),
-                filename: filename.to_string(),
+                context: source_ref.error_context(span),
             })
         }
         "len" => {
-            check_arity("len", 0, args.len(), span, src, filename)?;
+            check_arity("len", 0, args.len(), span, source_ref)?;
             let list = heap.get_list(key)?;
             Ok(Value::Int(list.len() as i64))
         }
         "clear" => {
-            check_arity("clear", 0, args.len(), span, src, filename)?;
+            check_arity("clear", 0, args.len(), span, source_ref)?;
             let list = heap.get_mut_list(key)?;
             list.clear();
             Ok(Value::Void)
         }
         "reverse" => {
-            check_arity("reverse", 0, args.len(), span, src, filename)?;
+            check_arity("reverse", 0, args.len(), span, source_ref)?;
             let list = heap.get_mut_list(key)?;
             list.reverse();
             Ok(Value::Void)
         }
         "contains" => {
-            check_arity("contains", 1, args.len(), span, src, filename)?;
+            check_arity("contains", 1, args.len(), span, source_ref)?;
             let list = heap.get_list(key)?;
             let found = list.contains(&args[0]);
             Ok(Value::Bool(found))
         }
         "insert" => {
-            check_arity("insert", 2, args.len(), span, src, filename)?;
+            check_arity("insert", 2, args.len(), span, source_ref)?;
             let index = match args[0] {
                 Value::Int(i) => i,
                 _ => {
                     return Err(WalrusError::TypeMismatch {
                         expected: "int".to_string(),
                         found: args[0].get_type().to_string(),
-                        span,
-                        src: src.into(),
-                        filename: filename.into(),
+                        context: source_ref.error_context(span),
                     });
                 }
             };
@@ -116,25 +109,22 @@ pub fn dispatch_list_method(
                 return Err(WalrusError::IndexOutOfBounds {
                     index,
                     len: len as usize,
-                    span,
-                    src: src.into(),
-                    filename: filename.into(),
+                    index_span: None,
+                    context: source_ref.error_context(span),
                 });
             }
             list.insert(index as usize, args[1]);
             Ok(Value::Void)
         }
         "remove" => {
-            check_arity("remove", 1, args.len(), span, src, filename)?;
+            check_arity("remove", 1, args.len(), span, source_ref)?;
             let index = match args[0] {
                 Value::Int(i) => i,
                 _ => {
                     return Err(WalrusError::TypeMismatch {
                         expected: "int".to_string(),
                         found: args[0].get_type().to_string(),
-                        span,
-                        src: src.into(),
-                        filename: filename.into(),
+                        context: source_ref.error_context(span),
                     });
                 }
             };
@@ -145,9 +135,8 @@ pub fn dispatch_list_method(
                 return Err(WalrusError::IndexOutOfBounds {
                     index,
                     len: len as usize,
-                    span,
-                    src: src.into(),
-                    filename: filename.into(),
+                    index_span: None,
+                    context: source_ref.error_context(span),
                 });
             }
             let removed = list.remove(index as usize);
@@ -156,9 +145,7 @@ pub fn dispatch_list_method(
         _ => Err(WalrusError::MethodNotFound {
             type_name: "list".to_string(),
             method: method.to_string(),
-            span,
-            src: src.into(),
-            filename: filename.into(),
+            context: source_ref.error_context(span),
         }),
     }
 }
@@ -170,46 +157,43 @@ pub fn dispatch_string_method(
     method_sym: StringKey,
     args: Vec<Value>,
     span: Span,
-    src: &str,
-    filename: &str,
+    source_ref: &SourceRef<'_>,
 ) -> WalrusResult<Value> {
     let method = heap.get_string(method_sym)?;
 
     match method {
         "len" => {
-            check_arity("len", 0, args.len(), span, src, filename)?;
+            check_arity("len", 0, args.len(), span, source_ref)?;
             let s = heap.get_string(key)?;
             Ok(Value::Int(s.len() as i64))
         }
         "upper" => {
-            check_arity("upper", 0, args.len(), span, src, filename)?;
+            check_arity("upper", 0, args.len(), span, source_ref)?;
             let s = heap.get_string(key)?;
             let upper = s.to_uppercase();
             Ok(heap.push(HeapValue::String(&upper)))
         }
         "lower" => {
-            check_arity("lower", 0, args.len(), span, src, filename)?;
+            check_arity("lower", 0, args.len(), span, source_ref)?;
             let s = heap.get_string(key)?;
             let lower = s.to_lowercase();
             Ok(heap.push(HeapValue::String(&lower)))
         }
         "trim" => {
-            check_arity("trim", 0, args.len(), span, src, filename)?;
+            check_arity("trim", 0, args.len(), span, source_ref)?;
             let s = heap.get_string(key)?;
             let trimmed = s.trim().to_string();
             Ok(heap.push(HeapValue::String(&trimmed)))
         }
         "split" => {
-            check_arity("split", 1, args.len(), span, src, filename)?;
+            check_arity("split", 1, args.len(), span, source_ref)?;
             let delimiter = match args[0] {
                 Value::String(sym) => heap.get_string(sym)?.to_string(),
                 _ => {
                     return Err(WalrusError::TypeMismatch {
                         expected: "string".to_string(),
                         found: args[0].get_type().to_string(),
-                        span,
-                        src: src.into(),
-                        filename: filename.into(),
+                        context: source_ref.error_context(span),
                     });
                 }
             };
@@ -222,16 +206,14 @@ pub fn dispatch_string_method(
             Ok(heap.push(HeapValue::List(part_values)))
         }
         "starts_with" => {
-            check_arity("starts_with", 1, args.len(), span, src, filename)?;
+            check_arity("starts_with", 1, args.len(), span, source_ref)?;
             let prefix = match args[0] {
                 Value::String(sym) => heap.get_string(sym)?.to_string(),
                 _ => {
                     return Err(WalrusError::TypeMismatch {
                         expected: "string".to_string(),
                         found: args[0].get_type().to_string(),
-                        span,
-                        src: src.into(),
-                        filename: filename.into(),
+                        context: source_ref.error_context(span),
                     });
                 }
             };
@@ -239,16 +221,14 @@ pub fn dispatch_string_method(
             Ok(Value::Bool(s.starts_with(&prefix)))
         }
         "ends_with" => {
-            check_arity("ends_with", 1, args.len(), span, src, filename)?;
+            check_arity("ends_with", 1, args.len(), span, source_ref)?;
             let suffix = match args[0] {
                 Value::String(sym) => heap.get_string(sym)?.to_string(),
                 _ => {
                     return Err(WalrusError::TypeMismatch {
                         expected: "string".to_string(),
                         found: args[0].get_type().to_string(),
-                        span,
-                        src: src.into(),
-                        filename: filename.into(),
+                        context: source_ref.error_context(span),
                     });
                 }
             };
@@ -256,16 +236,14 @@ pub fn dispatch_string_method(
             Ok(Value::Bool(s.ends_with(&suffix)))
         }
         "contains" => {
-            check_arity("contains", 1, args.len(), span, src, filename)?;
+            check_arity("contains", 1, args.len(), span, source_ref)?;
             let needle = match args[0] {
                 Value::String(sym) => heap.get_string(sym)?.to_string(),
                 _ => {
                     return Err(WalrusError::TypeMismatch {
                         expected: "string".to_string(),
                         found: args[0].get_type().to_string(),
-                        span,
-                        src: src.into(),
-                        filename: filename.into(),
+                        context: source_ref.error_context(span),
                     });
                 }
             };
@@ -273,16 +251,14 @@ pub fn dispatch_string_method(
             Ok(Value::Bool(s.contains(&needle)))
         }
         "replace" => {
-            check_arity("replace", 2, args.len(), span, src, filename)?;
+            check_arity("replace", 2, args.len(), span, source_ref)?;
             let from = match args[0] {
                 Value::String(sym) => heap.get_string(sym)?.to_string(),
                 _ => {
                     return Err(WalrusError::TypeMismatch {
                         expected: "string".to_string(),
                         found: args[0].get_type().to_string(),
-                        span,
-                        src: src.into(),
-                        filename: filename.into(),
+                        context: source_ref.error_context(span),
                     });
                 }
             };
@@ -292,9 +268,7 @@ pub fn dispatch_string_method(
                     return Err(WalrusError::TypeMismatch {
                         expected: "string".to_string(),
                         found: args[1].get_type().to_string(),
-                        span,
-                        src: src.into(),
-                        filename: filename.into(),
+                        context: source_ref.error_context(span),
                     });
                 }
             };
@@ -305,9 +279,7 @@ pub fn dispatch_string_method(
         _ => Err(WalrusError::MethodNotFound {
             type_name: "string".to_string(),
             method: method.to_string(),
-            span,
-            src: src.into(),
-            filename: filename.into(),
+            context: source_ref.error_context(span),
         }),
     }
 }
@@ -319,37 +291,36 @@ pub fn dispatch_dict_method(
     method_sym: StringKey,
     args: Vec<Value>,
     span: Span,
-    src: &str,
-    filename: &str,
+    source_ref: &SourceRef<'_>,
 ) -> WalrusResult<Value> {
     let method = heap.get_string(method_sym)?;
 
     match method {
         "len" => {
-            check_arity("len", 0, args.len(), span, src, filename)?;
+            check_arity("len", 0, args.len(), span, source_ref)?;
             let dict = heap.get_dict(key)?;
             Ok(Value::Int(dict.len() as i64))
         }
         "keys" => {
-            check_arity("keys", 0, args.len(), span, src, filename)?;
+            check_arity("keys", 0, args.len(), span, source_ref)?;
             let dict = heap.get_dict(key)?;
             let keys: Vec<Value> = dict.keys().copied().collect();
             Ok(heap.push(HeapValue::List(keys)))
         }
         "values" => {
-            check_arity("values", 0, args.len(), span, src, filename)?;
+            check_arity("values", 0, args.len(), span, source_ref)?;
             let dict = heap.get_dict(key)?;
             let values: Vec<Value> = dict.values().copied().collect();
             Ok(heap.push(HeapValue::List(values)))
         }
         "contains" => {
-            check_arity("contains", 1, args.len(), span, src, filename)?;
+            check_arity("contains", 1, args.len(), span, source_ref)?;
             let dict = heap.get_dict(key)?;
             let found = dict.contains_key(&args[0]);
             Ok(Value::Bool(found))
         }
         "get" => {
-            check_arity("get", 2, args.len(), span, src, filename)?;
+            check_arity("get", 2, args.len(), span, source_ref)?;
             let dict = heap.get_dict(key)?;
             match dict.get(&args[0]) {
                 Some(value) => Ok(*value),
@@ -357,13 +328,13 @@ pub fn dispatch_dict_method(
             }
         }
         "clear" => {
-            check_arity("clear", 0, args.len(), span, src, filename)?;
+            check_arity("clear", 0, args.len(), span, source_ref)?;
             let dict = heap.get_mut_dict(key)?;
             dict.clear();
             Ok(Value::Void)
         }
         "remove" => {
-            check_arity("remove", 1, args.len(), span, src, filename)?;
+            check_arity("remove", 1, args.len(), span, source_ref)?;
             let dict = heap.get_mut_dict(key)?;
             match dict.remove(&args[0]) {
                 Some(value) => Ok(value),
@@ -373,9 +344,7 @@ pub fn dispatch_dict_method(
         _ => Err(WalrusError::MethodNotFound {
             type_name: "dict".to_string(),
             method: method.to_string(),
-            span,
-            src: src.into(),
-            filename: filename.into(),
+            context: source_ref.error_context(span),
         }),
     }
 }

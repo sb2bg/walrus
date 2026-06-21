@@ -232,9 +232,7 @@ fn native_net_tcp_set_nodelay(vm: &mut VM<'_>, args: &[Value], span: Span) -> Wa
             return Err(WalrusError::TypeMismatch {
                 expected: "bool".to_string(),
                 found: other.get_type().to_string(),
-                span,
-                src: vm.source_ref().source().into(),
-                filename: vm.source_ref().filename().into(),
+                context: vm.source_ref().error_context(span),
             });
         }
     };

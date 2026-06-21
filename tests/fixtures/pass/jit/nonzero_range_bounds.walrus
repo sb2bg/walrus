@@ -1,0 +1,8 @@
+fn nonzero_range_bounds : {
+    let sum = 0;
+    for i in 5..1010 {
+        sum += i;
+    }
+    return sum;
+}
+println(nonzero_range_bounds());

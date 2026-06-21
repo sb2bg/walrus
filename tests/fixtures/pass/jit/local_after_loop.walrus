@@ -1,0 +1,9 @@
+fn local_after_loop : {
+    let sum = 0;
+    for i in 0..1005 {
+        sum += i;
+    }
+    let after = sum + 1;
+    return after;
+}
+println(local_after_loop());

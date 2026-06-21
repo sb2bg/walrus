@@ -15,9 +15,7 @@ pub(crate) fn value_sequence(vm: &VM<'_>, value: Value, span: Span) -> WalrusRes
         other => Err(WalrusError::TypeMismatch {
             expected: "list or tuple".to_string(),
             found: other.get_type().to_string(),
-            span,
-            src: vm.source_ref().source().into(),
-            filename: vm.source_ref().filename().into(),
+            context: vm.source_ref().error_context(span),
         }),
     }
 }
@@ -58,9 +56,7 @@ pub(crate) fn task_key_from_value(
         other => Err(WalrusError::TypeMismatch {
             expected: "task".to_string(),
             found: other.get_type().to_string(),
-            span,
-            src: vm.source_ref().source().into(),
-            filename: vm.source_ref().filename().into(),
+            context: vm.source_ref().error_context(span),
         }),
     }
 }
@@ -88,9 +84,7 @@ pub(crate) fn type_mismatch_error(
     WalrusError::TypeMismatch {
         expected: expected.to_string(),
         found: found.get_type().to_string(),
-        span,
-        src: vm.source_ref().source().to_string(),
-        filename: vm.source_ref().filename().to_string(),
+        context: vm.source_ref().error_context(span),
     }
 }
 

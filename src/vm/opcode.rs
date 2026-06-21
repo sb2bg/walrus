@@ -98,10 +98,10 @@ pub enum Opcode {
 impl Display for Opcode {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
+            Opcode::Add | Opcode::AddInt => write!(f, "+"),
+            Opcode::Subtract | Opcode::SubtractInt => write!(f, "-"),
             Opcode::Multiply => write!(f, "*"),
             Opcode::Divide => write!(f, "/"),
-            Opcode::Add => write!(f, "+"),
-            Opcode::Subtract => write!(f, "-"),
             Opcode::Modulo => write!(f, "%"),
             Opcode::Power => write!(f, "**"),
             Opcode::Not => write!(f, "not"),
@@ -109,10 +109,12 @@ impl Display for Opcode {
             Opcode::NotEqual => write!(f, "!="),
             Opcode::Greater => write!(f, ">"),
             Opcode::GreaterEqual => write!(f, ">="),
-            Opcode::Less => write!(f, "<"),
+            Opcode::Less | Opcode::LessInt => write!(f, "<"),
             Opcode::LessEqual => write!(f, "<="),
             Opcode::And => write!(f, "and"),
             Opcode::Or => write!(f, "or"),
+            Opcode::Index => write!(f, "[]"),
+            Opcode::Range => write!(f, ".."),
             _ => write!(f, "{:?}", self),
         }
     }

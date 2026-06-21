@@ -11,10 +11,10 @@ use log::debug;
 use crate::WalrusResult;
 use crate::arenas::{DictKey, HeapValue, with_arena, with_arena_mut};
 use crate::ast::{Node, NodeKind};
-use crate::error::{WalrusError, parser_err_mapper, preprocess_fstrings_for_lexer};
+use crate::error::{ErrorContext, WalrusError, parser_err_mapper, preprocess_fstrings_for_lexer};
 use crate::grammar::ProgramParser;
 use crate::package;
-use crate::source_ref::{OwnedSourceRef, SourceRef};
+use crate::source_ref::{OwnedSourceRef, SourceMap, SourceRef};
 use crate::span::Span;
 use crate::value::Value;
 use crate::vm::VM;
@@ -46,6 +46,7 @@ pub struct JitOpts {
 }
 
 pub struct Program {
+    source_map: SourceMap,
     source_ref: Option<OwnedSourceRef>,
     parser: ProgramParser,
     opts: Opts,
@@ -85,12 +86,23 @@ impl Program {
         opts: Opts,
         jit_opts: JitOpts,
     ) -> Result<Self, WalrusError> {
+        Self::new_with_source_map(file, parser, opts, jit_opts, SourceMap::new())
+    }
+
+    fn new_with_source_map(
+        file: Option<PathBuf>,
+        parser: Option<ProgramParser>,
+        opts: Opts,
+        jit_opts: JitOpts,
+        source_map: SourceMap,
+    ) -> Result<Self, WalrusError> {
         let source_ref = match file {
-            Some(file) => Some(get_source(file)?),
+            Some(file) => Some(get_source(file, source_map.clone())?),
             None => None,
         };
 
         Ok(Self {
+            source_map,
             source_ref,
             parser: parser.unwrap_or_else(ProgramParser::new),
             opts,
@@ -113,8 +125,8 @@ impl Program {
         let parse_source = preprocess_fstrings_for_lexer(source_ref.source());
         let ast = self
             .parser
-            .parse(&parse_source)
-            .map_err(|err| parser_err_mapper(err, source_ref.source(), source_ref.filename()))?;
+            .parse(source_ref.file_id(), &parse_source)
+            .map_err(|err| parser_err_mapper(err, &source_ref))?;
         let PreludeInjection { ast, .. } = inject_core_prelude(ast);
 
         let result = match self.opts {
@@ -138,8 +150,8 @@ impl Program {
         let parse_source = preprocess_fstrings_for_lexer(source_ref.source());
         let ast = self
             .parser
-            .parse(&parse_source)
-            .map_err(|err| parser_err_mapper(err, source_ref.source(), source_ref.filename()))?;
+            .parse(source_ref.file_id(), &parse_source)
+            .map_err(|err| parser_err_mapper(err, &source_ref))?;
         let PreludeInjection { ast, inserted_core } = inject_core_prelude(ast);
 
         self.compile_module(ast, source_ref, inserted_core)
@@ -147,7 +159,7 @@ impl Program {
 
     fn compile(&self, ast: Node, source_ref: SourceRef) -> ProgramResult {
         let span = *ast.span();
-        let mut emitter = BytecodeEmitter::new(source_ref);
+        let mut emitter = BytecodeEmitter::new(source_ref.clone());
         emitter.emit(ast)?;
 
         // Add implicit return at the end of the program
@@ -211,7 +223,8 @@ impl Program {
     ) -> ProgramResult {
         let (ast, echo_result) = prepare_repl_ast(ast);
         let span = *ast.span();
-        let mut emitter = BytecodeEmitter::new_with_globals(source_ref, &repl_state.global_names);
+        let mut emitter =
+            BytecodeEmitter::new_with_globals(source_ref.clone(), &repl_state.global_names);
         emitter.emit(ast)?;
 
         if echo_result {
@@ -305,7 +318,7 @@ impl Program {
         strip_implicit_core_export: bool,
     ) -> ProgramResult {
         let span = *ast.span();
-        let mut emitter = BytecodeEmitter::new(source_ref);
+        let mut emitter = BytecodeEmitter::new(source_ref.clone());
         emitter.emit(ast)?;
         emitter.emit_void(span);
         emitter.emit_return(span);
@@ -337,12 +350,15 @@ impl Program {
 
             if read == 0 {
                 if !buffer.trim().is_empty() {
-                    eprintln!(
-                        "{}",
-                        WalrusError::UnexpectedEndOfInput {
-                            filename: REPL_FILENAME.to_string(),
-                        }
-                    );
+                    let err = WalrusError::UnexpectedEndOfInput {
+                        context: ErrorContext::new(
+                            Span::unknown(buffer.len(), buffer.len()),
+                            buffer.as_str(),
+                            REPL_FILENAME,
+                        ),
+                    };
+                    err.write_cli(std::io::stderr().lock())
+                        .unwrap_or_else(|_| eprintln!("{err}"));
                 }
                 return Ok(Value::Void);
             }
@@ -371,7 +387,8 @@ impl Program {
             };
 
             let PreludeInjection { ast, .. } = inject_core_prelude(ast);
-            let source_ref = SourceRef::new(&buffer, REPL_FILENAME);
+            let source_ref =
+                SourceRef::new_in(self.source_map.clone(), buffer.as_str(), REPL_FILENAME);
             let result = match self.opts {
                 Opts::Compile => self.compile_repl(ast, source_ref, &mut repl_state),
                 Opts::Disassemble => self.disassemble_repl(ast, source_ref, &repl_state),
@@ -391,23 +408,38 @@ impl Program {
 
     fn parse_repl_input(&self, input: &str) -> Result<ReplParseOutcome, WalrusError> {
         let parse_source = preprocess_fstrings_for_lexer(input);
-        match self.parser.parse(&parse_source) {
+        let source_ref = SourceRef::new_in(self.source_map.clone(), input, REPL_FILENAME);
+        match self.parser.parse(source_ref.file_id(), &parse_source) {
             Ok(ast) => Ok(ReplParseOutcome::Complete(ast)),
             Err(err) if parser_err_is_incomplete(&err) => Ok(ReplParseOutcome::Incomplete),
-            Err(err) => Err(parser_err_mapper(err, input, REPL_FILENAME)),
+            Err(err) => Err(parser_err_mapper(err, &source_ref)),
         }
     }
 }
 
-pub fn load_module_for_vm(module_name: &str, importer_filename: &str) -> ProgramResult {
-    load_module(module_name, importer_filename, JitOpts::default())
+pub fn load_module_for_vm(
+    module_name: &str,
+    importer_filename: &str,
+    source_map: SourceMap,
+) -> ProgramResult {
+    load_module(
+        module_name,
+        importer_filename,
+        JitOpts::default(),
+        source_map,
+    )
 }
 
 pub fn cached_module_roots() -> Vec<Value> {
     MODULE_CACHE.with(|cache| cache.borrow().values().copied().collect())
 }
 
-fn load_module(module_name: &str, importer_filename: &str, jit_opts: JitOpts) -> ProgramResult {
+fn load_module(
+    module_name: &str,
+    importer_filename: &str,
+    jit_opts: JitOpts,
+    source_map: SourceMap,
+) -> ProgramResult {
     let resolved = resolve_import(module_name, importer_filename)?;
     let cache_key = module_cache_name(&resolved);
 
@@ -431,8 +463,13 @@ fn load_module(module_name: &str, importer_filename: &str, jit_opts: JitOpts) ->
             message: format!("Module '{module}' is native stdlib and only available in VM mode"),
         }),
         ResolvedImport::File(path) => {
-            let mut program =
-                Program::new_with_jit_opts(Some(path), None, Opts::Compile, jit_opts)?;
+            let mut program = Program::new_with_source_map(
+                Some(path),
+                None,
+                Opts::Compile,
+                jit_opts,
+                source_map,
+            )?;
             program.execute_as_module()
         }
     };
@@ -593,14 +630,18 @@ fn inject_core_prelude(ast: Node) -> PreludeInjection {
     }
 }
 
-fn get_source(file: PathBuf) -> Result<OwnedSourceRef, WalrusError> {
+fn get_source(file: PathBuf, source_map: SourceMap) -> Result<OwnedSourceRef, WalrusError> {
     let filename = file.to_string_lossy();
 
     let src = fs::read_to_string(&file).map_err(|_| WalrusError::FileNotFound {
         filename: filename.to_string(),
     })?;
 
-    Ok(OwnedSourceRef::new(src, filename.to_string()))
+    Ok(OwnedSourceRef::new_in(
+        source_map,
+        src,
+        filename.to_string(),
+    ))
 }
 
 impl ReplState {

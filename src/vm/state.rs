@@ -33,10 +33,12 @@ impl<'a> VM<'a> {
 
         Self {
             stack: Vec::new(),
+            stack_origins: Vec::new(),
             locals: Vec::new(),
             call_stack: vec![main_frame],
             exception_handlers: Vec::new(),
             ip: 0,
+            current_span: Span::default(),
             gc_poll_counter: 0,
             globals: vec![Value::Void; global_names.len()],
             global_names,
@@ -124,6 +126,7 @@ impl<'a> VM<'a> {
     pub(super) fn take_context(&mut self) -> ExecutionContext {
         ExecutionContext {
             stack: std::mem::take(&mut self.stack),
+            stack_origins: std::mem::take(&mut self.stack_origins),
             locals: std::mem::take(&mut self.locals),
             call_stack: std::mem::take(&mut self.call_stack),
             exception_handlers: std::mem::take(&mut self.exception_handlers),
@@ -133,6 +136,7 @@ impl<'a> VM<'a> {
 
     pub(super) fn restore_context(&mut self, context: ExecutionContext) {
         self.stack = context.stack;
+        self.stack_origins = context.stack_origins;
         self.locals = context.locals;
         self.call_stack = context.call_stack;
         self.exception_handlers = context.exception_handlers;
@@ -151,7 +155,7 @@ impl<'a> VM<'a> {
 
     #[inline(always)]
     pub(crate) fn source_ref(&self) -> SourceRef<'a> {
-        self.source_ref
+        self.source_ref.clone()
     }
 
     /// Collect all root values that the GC needs to trace from
@@ -249,9 +253,7 @@ impl<'a> VM<'a> {
             _ => Err(WalrusError::TypeMismatch {
                 expected: "string".to_string(),
                 found: value.get_type().to_string(),
-                span,
-                src: self.source_ref.source().into(),
-                filename: self.source_ref.filename().into(),
+                context: self.source_ref.error_context(span),
             }),
         }
     }
@@ -263,9 +265,7 @@ impl<'a> VM<'a> {
             _ => Err(WalrusError::TypeMismatch {
                 expected: "int".to_string(),
                 found: value.get_type().to_string(),
-                span,
-                src: self.source_ref.source().into(),
-                filename: self.source_ref.filename().into(),
+                context: self.source_ref.error_context(span),
             }),
         }
     }
@@ -278,9 +278,7 @@ impl<'a> VM<'a> {
             _ => Err(WalrusError::TypeMismatch {
                 expected: "number".to_string(),
                 found: value.get_type().to_string(),
-                span,
-                src: self.source_ref.source().into(),
-                filename: self.source_ref.filename().into(),
+                context: self.source_ref.error_context(span),
             }),
         }
     }
@@ -356,10 +354,12 @@ impl<'a> VM<'a> {
                     .expect("Call stack should never be empty while unwinding");
                 self.locals.truncate(frame.frame_pointer);
                 self.stack.truncate(frame.stack_pointer);
+                self.stack_origins.truncate(frame.stack_pointer);
             }
 
             self.locals.truncate(handler.locals_len);
             self.stack.truncate(handler.stack_len);
+            self.stack_origins.truncate(handler.stack_len);
             self.ip = handler.catch_ip;
             self.push(value);
             return Ok(());
@@ -368,44 +368,69 @@ impl<'a> VM<'a> {
         let message = self.stringify_value(value)?;
         Err(WalrusError::ThrownValue {
             message,
-            span,
-            src: self.source_ref.source().into(),
-            filename: self.source_ref.filename().into(),
+            context: self.source_ref.error_context(span),
         })
     }
 
     #[inline(always)]
     pub(super) fn push(&mut self, value: Value) {
         self.stack.push(value);
+        self.stack_origins.push(self.current_span);
+    }
+
+    #[inline(always)]
+    pub(super) fn push_with_origin(&mut self, value: Value, origin: Span) {
+        self.stack.push(value);
+        self.stack_origins.push(origin);
     }
 
     #[inline]
     pub(super) fn pop(&mut self, op: Opcode, span: Span) -> WalrusResult<Value> {
-        self.stack.pop().ok_or_else(|| WalrusError::StackUnderflow {
+        self.pop_with_origin(op, span).map(|(value, _)| value)
+    }
+
+    #[inline]
+    pub(super) fn pop_with_origin(
+        &mut self,
+        op: Opcode,
+        span: Span,
+    ) -> WalrusResult<(Value, Span)> {
+        let Some(value) = self.stack.pop() else {
+            return Err(self.stack_underflow(op, span));
+        };
+        let origin = self.stack_origins.pop().unwrap_or_default();
+        Ok((value, origin))
+    }
+
+    #[inline]
+    pub(super) fn stack_underflow(&self, op: Opcode, span: Span) -> WalrusError {
+        WalrusError::StackUnderflow {
             op,
-            span,
-            src: self.source_ref.source().to_string(),
-            filename: self.source_ref.filename().to_string(),
-        })
+            context: self.source_ref.error_context(span),
+        }
     }
 
     /// Fast path pop - only use when stack is guaranteed to have values
     #[inline(always)]
     pub(super) fn pop_unchecked(&mut self) -> Value {
+        self.stack_origins.pop();
         unsafe { self.stack.pop().unwrap_unchecked() }
+    }
+
+    #[inline(always)]
+    pub(super) fn pop_unchecked_with_origin(&mut self) -> (Value, Span) {
+        let origin = self.stack_origins.pop().unwrap_or_default();
+        let value = unsafe { self.stack.pop().unwrap_unchecked() };
+        (value, origin)
     }
 
     pub(super) fn pop_n(&mut self, n: usize, op: Opcode, span: Span) -> WalrusResult<Vec<Value>> {
         if self.stack.len() < n {
-            return Err(WalrusError::StackUnderflow {
-                op,
-                span,
-                src: self.source_ref.source().to_string(),
-                filename: self.source_ref.filename().to_string(),
-            });
+            return Err(self.stack_underflow(op, span));
         }
 
         let split_at = self.stack.len() - n;
+        self.stack_origins.truncate(split_at);
         Ok(self.stack.split_off(split_at))
     }
 }

@@ -862,7 +862,7 @@ fn identifier_at_offset(text: &str, offset: usize) -> Option<(String, Span)> {
 
     Some((
         String::from_utf8_lossy(&bytes[start..end]).to_string(),
-        Span(start, end),
+        Span::unknown(start, end),
     ))
 }
 
