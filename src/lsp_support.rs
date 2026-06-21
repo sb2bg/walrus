@@ -6,7 +6,7 @@ use lalrpop_util::lexer::Token;
 use crate::ast::{FStringPart, Node, NodeKind};
 use crate::error::{RecoveredParseError, preprocess_fstrings_for_lexer};
 use crate::grammar::ProgramParser;
-use crate::span::Span;
+use crate::span::{FileId, Span};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiagnosticSeverity {
@@ -80,7 +80,7 @@ impl Analysis {
             scopes: vec![ScopeInfo {
                 id: 0,
                 parent: None,
-                span: Span(0, source_len),
+                span: Span::unknown(0, source_len),
             }],
             definitions_by_scope: HashMap::new(),
         }
@@ -191,7 +191,7 @@ impl Analysis {
 pub fn analyze(source: &str) -> Analysis {
     let parser = ProgramParser::new();
     let parse_source = preprocess_fstrings_for_lexer(source);
-    match parser.parse(&parse_source) {
+    match parser.parse(FileId::UNKNOWN, &parse_source) {
         Ok(ast) => {
             let mut analyzer = Analyzer::new(source);
             analyzer.walk(&ast);
@@ -285,7 +285,7 @@ impl<'a> Analyzer<'a> {
             scopes: vec![ScopeInfo {
                 id: 0,
                 parent: None,
-                span: Span(0, source.len()),
+                span: Span::unknown(0, source.len()),
             }],
             definitions: Vec::new(),
             references: Vec::new(),
@@ -478,7 +478,8 @@ impl<'a> Analyzer<'a> {
                 let function_scope = self.push_scope(*body.span());
                 self.with_scope(function_scope, |analyzer| {
                     analyzer.with_container(definition_id, |analyzer| {
-                        let header_span = Span(node.span().0, body.span().0.min(node.span().1));
+                        let header_span =
+                            Span::unknown(node.span().0, body.span().0.min(node.span().1));
                         let parameter_spans =
                             find_parameter_spans(analyzer.source, header_span, args);
 
@@ -517,7 +518,8 @@ impl<'a> Analyzer<'a> {
                 let function_scope = self.push_scope(*body.span());
                 self.with_scope(function_scope, |analyzer| {
                     analyzer.with_container(definition_id, |analyzer| {
-                        let header_span = Span(node.span().0, body.span().0.min(node.span().1));
+                        let header_span =
+                            Span::unknown(node.span().0, body.span().0.min(node.span().1));
                         let parameter_spans =
                             find_parameter_spans(analyzer.source, header_span, args);
 
@@ -576,7 +578,8 @@ impl<'a> Analyzer<'a> {
                 let method_scope = self.push_scope(*body.span());
                 self.with_scope(method_scope, |analyzer| {
                     analyzer.with_container(definition_id, |analyzer| {
-                        let header_span = Span(node.span().0, body.span().0.min(node.span().1));
+                        let header_span =
+                            Span::unknown(node.span().0, body.span().0.min(node.span().1));
                         let parameter_spans =
                             find_parameter_spans(analyzer.source, header_span, args);
 
@@ -766,7 +769,8 @@ impl<'a> Analyzer<'a> {
             | NodeKind::AsyncAnonFunctionDefinition(args, body) => {
                 let function_scope = self.push_scope(*body.span());
                 self.with_scope(function_scope, |analyzer| {
-                    let header_span = Span(node.span().0, body.span().0.min(node.span().1));
+                    let header_span =
+                        Span::unknown(node.span().0, body.span().0.min(node.span().1));
                     let parameter_spans = find_parameter_spans(analyzer.source, header_span, args);
 
                     for (index, parameter) in args.iter().enumerate() {
@@ -886,7 +890,7 @@ fn find_identifier_occurrence(source: &str, start: usize, end: usize, name: &str
         let right_ok = absolute_end == source.len() || !is_ident_byte(bytes[absolute_end]);
 
         if left_ok && right_ok {
-            return Some(Span(absolute_start, absolute_end));
+            return Some(Span::unknown(absolute_start, absolute_end));
         }
     }
 
@@ -896,7 +900,7 @@ fn find_identifier_occurrence(source: &str, start: usize, end: usize, name: &str
 fn fallback_span(source: &str, start: usize, len: usize) -> Span {
     let normalized_start = start.min(source.len());
     let normalized_end = normalized_start.saturating_add(len).min(source.len());
-    Span(normalized_start, normalized_end.max(normalized_start))
+    Span::unknown(normalized_start, normalized_end.max(normalized_start))
 }
 
 fn line_starts(source: &str) -> Vec<usize> {
@@ -926,7 +930,7 @@ fn normalize_span(source: &str, span: Span) -> Span {
         end += 1;
     }
 
-    Span(start, end)
+    Span::unknown(start, end)
 }
 
 fn span_contains(span: Span, offset: usize) -> bool {
@@ -940,7 +944,7 @@ fn parse_error_to_diagnostic(
     match err {
         ParseError::UnrecognizedEOF { expected, location } => ParseDiagnostic {
             message: format!("Unexpected end of input{}", expected_hint(&expected)),
-            span: normalize_span(source, Span(location, location)),
+            span: normalize_span(source, Span::unknown(location, location)),
             severity: DiagnosticSeverity::Error,
         },
         ParseError::UnrecognizedToken {
@@ -948,19 +952,19 @@ fn parse_error_to_diagnostic(
             expected,
         } => ParseDiagnostic {
             message: format!("Unexpected token `{token}`{}", expected_hint(&expected)),
-            span: normalize_span(source, Span(start, end)),
+            span: normalize_span(source, Span::unknown(start, end)),
             severity: DiagnosticSeverity::Error,
         },
         ParseError::InvalidToken { location } => ParseDiagnostic {
             message: "Invalid token".to_string(),
-            span: normalize_span(source, Span(location, location.saturating_add(1))),
+            span: normalize_span(source, Span::unknown(location, location.saturating_add(1))),
             severity: DiagnosticSeverity::Error,
         },
         ParseError::ExtraToken {
             token: (start, token, end),
         } => ParseDiagnostic {
             message: format!("Extra token `{token}`"),
-            span: normalize_span(source, Span(start, end)),
+            span: normalize_span(source, Span::unknown(start, end)),
             severity: DiagnosticSeverity::Error,
         },
         ParseError::User { error } => user_error_to_diagnostic(error, source),

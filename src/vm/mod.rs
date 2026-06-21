@@ -1831,6 +1831,7 @@ impl<'a> VM<'a> {
                                 let module = crate::program::load_module_for_vm(
                                     name_str,
                                     self.source_ref.filename(),
+                                    self.source_ref.source_map(),
                                 )?;
                                 self.push(module);
                             }

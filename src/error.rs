@@ -12,10 +12,17 @@ use snailquote::{UnescapeError, unescape};
 use thiserror::Error;
 
 use crate::ast::NodeKind;
+use crate::source_ref::SourceMap;
 use crate::span::{Span, Spanned};
 use crate::vm::opcode::Opcode;
 
 const FSTRING_INTERP_QUOTE_SENTINEL: char = '\u{001F}';
+
+#[derive(Clone, Copy)]
+enum FStringInterpStringMode {
+    Raw,
+    Escaped,
+}
 
 #[derive(Debug)]
 pub enum RecoveredParseError {
@@ -32,24 +39,27 @@ fn is_ident_char(ch: char) -> bool {
 /// Rewrites raw `"` inside f-string interpolations to a sentinel byte so the
 /// lexer can still tokenize the full `f"..."` literal.
 pub fn preprocess_fstrings_for_lexer(source: &str) -> String {
-    fn has_matching_quote_before_interp_end(
+    fn has_matching_interp_string_quote(
         chars: std::iter::Peekable<std::str::Chars<'_>>,
-        mut interp_depth: usize,
+        mode: FStringInterpStringMode,
     ) -> bool {
+        let mut escaped = false;
+
         for ch in chars {
-            if ch == '"' {
-                return true;
-            }
-
-            if ch == '{' {
-                interp_depth += 1;
-                continue;
-            }
-
-            if ch == '}' {
-                interp_depth = interp_depth.saturating_sub(1);
-                if interp_depth == 0 {
-                    return false;
+            match mode {
+                FStringInterpStringMode::Raw => {
+                    if escaped {
+                        escaped = false;
+                    } else if ch == '\\' {
+                        escaped = true;
+                    } else if ch == '"' {
+                        return true;
+                    }
+                }
+                FStringInterpStringMode::Escaped => {
+                    if ch == '"' {
+                        return true;
+                    }
                 }
             }
         }
@@ -70,7 +80,7 @@ pub fn preprocess_fstrings_for_lexer(source: &str) -> String {
         FString {
             interp_depth: usize,
             literal_escape: bool,
-            in_interp_string: bool,
+            interp_string_mode: Option<FStringInterpStringMode>,
         },
     }
 
@@ -120,7 +130,7 @@ pub fn preprocess_fstrings_for_lexer(source: &str) -> String {
                     state = ScannerState::FString {
                         interp_depth: 0,
                         literal_escape: false,
-                        in_interp_string: false,
+                        interp_string_mode: None,
                     };
                     continue;
                 }
@@ -166,7 +176,7 @@ pub fn preprocess_fstrings_for_lexer(source: &str) -> String {
             ScannerState::FString {
                 mut interp_depth,
                 mut literal_escape,
-                mut in_interp_string,
+                mut interp_string_mode,
             } => {
                 if interp_depth == 0 {
                     out.push(ch);
@@ -178,13 +188,13 @@ pub fn preprocess_fstrings_for_lexer(source: &str) -> String {
                         literal_escape = true;
                     } else if ch == '{' {
                         interp_depth = 1;
-                        in_interp_string = false;
+                        interp_string_mode = None;
                     } else if ch == '"' {
                         state = ScannerState::Normal;
                         continue;
                     }
                 } else {
-                    if in_interp_string {
+                    if let Some(mode) = interp_string_mode {
                         let emitted = if ch == '"' {
                             FSTRING_INTERP_QUOTE_SENTINEL
                         } else {
@@ -193,15 +203,35 @@ pub fn preprocess_fstrings_for_lexer(source: &str) -> String {
                         out.push(emitted);
                         prev_char = Some(ch);
 
-                        if ch == '"' {
-                            in_interp_string = false;
+                        match mode {
+                            FStringInterpStringMode::Raw => {
+                                if ch == '\\' {
+                                    literal_escape = !literal_escape;
+                                } else {
+                                    if ch == '"' && !literal_escape {
+                                        interp_string_mode = None;
+                                    }
+                                    literal_escape = false;
+                                }
+                            }
+                            FStringInterpStringMode::Escaped => {
+                                if ch == '"' {
+                                    interp_string_mode = None;
+                                }
+                            }
                         }
                     } else {
                         if ch == '"' {
-                            if has_matching_quote_before_interp_end(chars.clone(), interp_depth) {
+                            let mode = if prev_char == Some('\\') {
+                                FStringInterpStringMode::Escaped
+                            } else {
+                                FStringInterpStringMode::Raw
+                            };
+                            if has_matching_interp_string_quote(chars.clone(), mode) {
                                 out.push(FSTRING_INTERP_QUOTE_SENTINEL);
                                 prev_char = Some(ch);
-                                in_interp_string = true;
+                                interp_string_mode = Some(mode);
+                                literal_escape = false;
                             } else {
                                 out.push(ch);
                                 prev_char = Some(ch);
@@ -224,7 +254,7 @@ pub fn preprocess_fstrings_for_lexer(source: &str) -> String {
                 state = ScannerState::FString {
                     interp_depth,
                     literal_escape,
-                    in_interp_string,
+                    interp_string_mode,
                 };
             }
         }
@@ -307,7 +337,8 @@ pub fn parse_fstring<T>(
     } else {
         raw
     };
-    let base_offset = spanned.span().0; // Start position of the f-string
+    let base_span = spanned.span();
+    let base_offset = base_span.0; // Start position of the f-string
 
     // Remove f" and trailing " -> f" is 2 chars, so content starts at base_offset + 2
     let content = &raw[2..raw.len() - 1];
@@ -338,24 +369,32 @@ pub fn parse_fstring<T>(
         }
     }
 
+    fn decode_next_fstring_escape<T>(
+        char_indices: &mut std::iter::Peekable<std::str::CharIndices<'_>>,
+        base_span: Span,
+        content_offset: usize,
+        slash_pos: usize,
+    ) -> Result<(char, char), ParseError<usize, T, RecoveredParseError>> {
+        if let Some((_, next_ch)) = char_indices.next() {
+            let escape_span = base_span.in_same_file(
+                content_offset + slash_pos,
+                content_offset + slash_pos + 1 + next_ch.len_utf8(),
+            );
+            Ok((decode_fstring_escape(next_ch, escape_span)?, next_ch))
+        } else {
+            let escape_span =
+                base_span.in_same_file(content_offset + slash_pos, content_offset + slash_pos + 1);
+            Err(ParseError::User {
+                error: RecoveredParseError::InvalidEscapeSequence("\\".to_string(), escape_span),
+            })
+        }
+    }
+
     while let Some((byte_pos, ch)) = char_indices.next() {
         if ch == '\\' {
-            if let Some((_, next_ch)) = char_indices.next() {
-                let escape_span = Span(
-                    content_offset + byte_pos,
-                    content_offset + byte_pos + 1 + next_ch.len_utf8(),
-                );
-                let decoded = decode_fstring_escape(next_ch, escape_span)?;
-                current_literal.push(decoded);
-            } else {
-                let escape_span = Span(content_offset + byte_pos, content_offset + byte_pos + 1);
-                return Err(ParseError::User {
-                    error: RecoveredParseError::InvalidEscapeSequence(
-                        "\\".to_string(),
-                        escape_span,
-                    ),
-                });
-            }
+            let (decoded, _) =
+                decode_next_fstring_escape(&mut char_indices, base_span, content_offset, byte_pos)?;
+            current_literal.push(decoded);
         } else if ch == '{' {
             // Start of an interpolation
             if !current_literal.is_empty() {
@@ -368,46 +407,70 @@ pub fn parse_fstring<T>(
             let mut expr_str = String::new();
             let mut brace_depth = 1;
             let mut interpolation_closed = false;
-            let mut in_string_literal = false;
+            let mut string_mode = None;
             let mut string_escape = false;
 
             while let Some((expr_pos, expr_ch)) = char_indices.next() {
-                let emitted = if expr_ch == '\\' {
-                    if let Some((_, next_ch)) = char_indices.next() {
-                        let escape_span = Span(
-                            content_offset + expr_pos,
-                            content_offset + expr_pos + 1 + next_ch.len_utf8(),
-                        );
-                        decode_fstring_escape(next_ch, escape_span)?
-                    } else {
-                        let escape_span =
-                            Span(content_offset + expr_pos, content_offset + expr_pos + 1);
-                        return Err(ParseError::User {
-                            error: RecoveredParseError::InvalidEscapeSequence(
-                                "\\".to_string(),
-                                escape_span,
-                            ),
-                        });
-                    }
-                } else {
-                    expr_ch
-                };
+                if let Some(mode) = string_mode {
+                    match mode {
+                        FStringInterpStringMode::Raw => {
+                            expr_str.push(expr_ch);
 
-                if in_string_literal {
-                    if string_escape {
-                        string_escape = false;
-                    } else if emitted == '\\' {
-                        string_escape = true;
-                    } else if emitted == '"' {
-                        in_string_literal = false;
+                            if string_escape {
+                                string_escape = false;
+                            } else if expr_ch == '\\' {
+                                string_escape = true;
+                            } else if expr_ch == '"' {
+                                string_mode = None;
+                            }
+                        }
+                        FStringInterpStringMode::Escaped => {
+                            let emitted = if expr_ch == '\\' {
+                                let (decoded, _) = decode_next_fstring_escape(
+                                    &mut char_indices,
+                                    base_span,
+                                    content_offset,
+                                    expr_pos,
+                                )?;
+                                decoded
+                            } else {
+                                expr_ch
+                            };
+
+                            if string_escape {
+                                string_escape = false;
+                            } else if emitted == '\\' {
+                                string_escape = true;
+                            } else if emitted == '"' {
+                                string_mode = None;
+                            }
+
+                            expr_str.push(emitted);
+                        }
                     }
 
-                    expr_str.push(emitted);
                     continue;
                 }
 
+                let (emitted, escaped_quote) = if expr_ch == '\\' {
+                    let (decoded, next_ch) = decode_next_fstring_escape(
+                        &mut char_indices,
+                        base_span,
+                        content_offset,
+                        expr_pos,
+                    )?;
+                    (decoded, next_ch == '"')
+                } else {
+                    (expr_ch, false)
+                };
+
                 if emitted == '"' {
-                    in_string_literal = true;
+                    string_mode = Some(if escaped_quote {
+                        FStringInterpStringMode::Escaped
+                    } else {
+                        FStringInterpStringMode::Raw
+                    });
+                    string_escape = false;
                     expr_str.push(emitted);
                     continue;
                 }
@@ -432,7 +495,8 @@ pub fn parse_fstring<T>(
             }
 
             if !interpolation_closed {
-                let expr_span = Span(content_offset + expr_start, content_offset + content.len());
+                let expr_span = base_span
+                    .in_same_file(content_offset + expr_start, content_offset + content.len());
                 return Err(ParseError::User {
                     error: RecoveredParseError::InvalidFStringExpression(expr_str, expr_span),
                 });
@@ -440,17 +504,18 @@ pub fn parse_fstring<T>(
 
             // Parse the expression with proper span
             if expr_str.trim().is_empty() {
-                let expr_span = Span(content_offset + expr_start, content_offset + expr_start);
+                let expr_span = base_span
+                    .in_same_file(content_offset + expr_start, content_offset + expr_start);
                 return Err(ParseError::User {
                     error: RecoveredParseError::InvalidFStringExpression(expr_str, expr_span),
                 });
             }
 
-            match parser.parse(&expr_str) {
+            match parser.parse(base_span.file_id(), &expr_str) {
                 Ok(node) => {
                     // Adjust the span to reflect the actual position in the source file
                     let expr_span = node.span();
-                    let adjusted_span = Span(
+                    let adjusted_span = base_span.in_same_file(
                         content_offset + expr_start + expr_span.0,
                         content_offset + expr_start + expr_span.1,
                     );
@@ -460,7 +525,7 @@ pub fn parse_fstring<T>(
                 }
                 Err(_) => {
                     // If parsing fails, return an error
-                    let expr_span = Span(
+                    let expr_span = base_span.in_same_file(
                         content_offset + expr_start,
                         content_offset + expr_start + expr_str.len(),
                     );
@@ -484,44 +549,41 @@ pub fn parse_fstring<T>(
 #[derive(Debug, Clone)]
 pub struct ErrorContext {
     span: Span,
-    src: Rc<str>,
-    filename: Rc<str>,
+    source_map: SourceMap,
 }
 
 impl ErrorContext {
     pub fn new(span: Span, src: impl Into<Rc<str>>, filename: impl Into<Rc<str>>) -> Self {
-        Self {
-            span,
-            src: src.into(),
-            filename: filename.into(),
-        }
+        let source_map = SourceMap::new();
+        let (file_id, _) = source_map.add_source(src, filename);
+        let span = if span.file_id().is_unknown() {
+            span.with_file_id(file_id)
+        } else {
+            span
+        };
+        Self { span, source_map }
     }
 
-    pub fn from_shared(span: Span, src: Rc<str>, filename: Rc<str>) -> Self {
-        Self {
-            span,
-            src,
-            filename,
-        }
+    pub fn from_source_map(span: Span, source_map: SourceMap) -> Self {
+        Self { span, source_map }
     }
 
     pub fn span(&self) -> Span {
         self.span
     }
 
-    pub fn source(&self) -> &str {
-        &self.src
+    pub fn source_map(&self) -> SourceMap {
+        self.source_map.clone()
     }
 
-    pub fn filename(&self) -> &str {
-        &self.filename
+    fn source_file(&self, span: Span) -> Option<crate::source_ref::SourceFileRef> {
+        self.source_map.get(span.file_id())
     }
 
     pub fn with_span(&self, span: Span) -> Self {
         Self {
             span,
-            src: Rc::clone(&self.src),
-            filename: Rc::clone(&self.filename),
+            source_map: self.source_map(),
         }
     }
 }
@@ -577,21 +639,35 @@ impl WalrusDiagnostic {
             .first()
             .map(|label| label.span)
             .unwrap_or_default();
-        let primary_range = diagnostic_range(source.source(), primary_span);
-        let filename = source.filename().to_string();
-        let mut builder =
-            Report::build(ReportKind::Error, (filename.clone(), primary_range.clone()))
-                .with_config(
-                    Config::default()
-                        .with_color(true)
-                        .with_index_type(IndexType::Byte),
-                )
-                .with_message(&self.message);
+        let Some(primary_file) = source.source_file(primary_span) else {
+            writeln!(writer, "Error: {}", self.message)?;
+            for note in &self.notes {
+                writeln!(writer, "Note: {note}")?;
+            }
+            return Ok(());
+        };
+
+        let primary_source = primary_file.source;
+        let primary_filename = primary_file.filename.to_string();
+        let primary_range = diagnostic_range(&primary_source, primary_span);
+        let mut builder = Report::build(
+            ReportKind::Error,
+            (primary_filename.clone(), primary_range.clone()),
+        )
+        .with_config(
+            Config::default()
+                .with_color(true)
+                .with_index_type(IndexType::Byte),
+        )
+        .with_message(&self.message);
 
         for label in &self.labels {
+            let Some(label_file) = source.source_file(label.span) else {
+                continue;
+            };
             let mut ariadne_label = Label::new((
-                filename.clone(),
-                diagnostic_range(source.source(), label.span),
+                label_file.filename.to_string(),
+                diagnostic_range(&label_file.source, label.span),
             ));
             if let Some(message) = &label.message {
                 ariadne_label = ariadne_label.with_message(message);
@@ -603,10 +679,21 @@ impl WalrusDiagnostic {
             builder = builder.with_note(note);
         }
 
-        builder.finish().write(
-            sources(vec![(filename, source.source().to_string())]),
-            &mut writer,
-        )
+        let mut source_entries = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for label in &self.labels {
+            if let Some(file) = source.source_file(label.span) {
+                let filename = file.filename.to_string();
+                if seen.insert(filename.clone()) {
+                    source_entries.push((filename, file.source.to_string()));
+                }
+            }
+        }
+        if seen.insert(primary_filename.clone()) {
+            source_entries.push((primary_filename, primary_source.to_string()));
+        }
+
+        builder.finish().write(sources(source_entries), &mut writer)
     }
 }
 
@@ -1004,37 +1091,37 @@ impl WalrusError {
 
 pub fn parser_err_mapper(
     err: ParseError<usize, Token<'_>, RecoveredParseError>,
-    source: Rc<str>,
-    filename: Rc<str>,
+    source_ref: &crate::source_ref::SourceRef<'_>,
 ) -> WalrusError {
-    let context = |span| ErrorContext::from_shared(span, Rc::clone(&source), Rc::clone(&filename));
+    let context = |span| source_ref.error_context(span);
 
     match err {
         ParseError::UnrecognizedEOF {
             expected: _,
             location,
         } => WalrusError::UnexpectedEndOfInput {
-            context: context(Span(location, location)),
+            context: context(Span::new(source_ref.file_id(), location, location)),
         },
         ParseError::UnrecognizedToken {
             token: (start, token, end),
             expected: _,
         } => WalrusError::UnexpectedToken {
             token: token.to_string(),
-            context: context(Span(start, end)),
+            context: context(Span::new(source_ref.file_id(), start, end)),
         },
         ParseError::InvalidToken { location } => WalrusError::InvalidToken {
-            token: source
+            token: source_ref
+                .source()
                 .get(location..location.saturating_add(1))
                 .unwrap_or("<eof>")
                 .to_string(),
-            context: context(Span(location, location + 1)),
+            context: context(Span::new(source_ref.file_id(), location, location + 1)),
         },
         ParseError::ExtraToken {
             token: (start, token, end),
         } => WalrusError::ExtraToken {
             token: token.to_string(),
-            context: context(Span(start, end)),
+            context: context(Span::new(source_ref.file_id(), start, end)),
         },
         ParseError::User { error } => match error {
             RecoveredParseError::NumberTooLarge(number, span) => WalrusError::NumberTooLarge {
