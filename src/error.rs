@@ -1,7 +1,7 @@
 use std::io::{self, Write};
 use std::ops::Range;
+use std::rc::Rc;
 use std::str::FromStr;
-use std::sync::Arc;
 
 use ariadne::{Config, IndexType, Label, Report, ReportKind, sources};
 use float_ord::FloatOrd;
@@ -484,12 +484,12 @@ pub fn parse_fstring<T>(
 #[derive(Debug, Clone)]
 pub struct ErrorContext {
     span: Span,
-    src: Arc<str>,
-    filename: Arc<str>,
+    src: Rc<str>,
+    filename: Rc<str>,
 }
 
 impl ErrorContext {
-    pub fn new(span: Span, src: impl Into<Arc<str>>, filename: impl Into<Arc<str>>) -> Self {
+    pub fn new(span: Span, src: impl Into<Rc<str>>, filename: impl Into<Rc<str>>) -> Self {
         Self {
             span,
             src: src.into(),
@@ -497,7 +497,7 @@ impl ErrorContext {
         }
     }
 
-    pub fn from_shared(span: Span, src: Arc<str>, filename: Arc<str>) -> Self {
+    pub fn from_shared(span: Span, src: Rc<str>, filename: Rc<str>) -> Self {
         Self {
             span,
             src,
@@ -520,8 +520,8 @@ impl ErrorContext {
     pub fn with_span(&self, span: Span) -> Self {
         Self {
             span,
-            src: Arc::clone(&self.src),
-            filename: Arc::clone(&self.filename),
+            src: Rc::clone(&self.src),
+            filename: Rc::clone(&self.filename),
         }
     }
 }
@@ -583,7 +583,7 @@ impl WalrusDiagnostic {
             Report::build(ReportKind::Error, (filename.clone(), primary_range.clone()))
                 .with_config(
                     Config::default()
-                        .with_color(false)
+                        .with_color(true)
                         .with_index_type(IndexType::Byte),
                 )
                 .with_message(&self.message);
@@ -1004,11 +1004,10 @@ impl WalrusError {
 
 pub fn parser_err_mapper(
     err: ParseError<usize, Token<'_>, RecoveredParseError>,
-    source: Arc<str>,
-    filename: Arc<str>,
+    source: Rc<str>,
+    filename: Rc<str>,
 ) -> WalrusError {
-    let context =
-        |span| ErrorContext::from_shared(span, Arc::clone(&source), Arc::clone(&filename));
+    let context = |span| ErrorContext::from_shared(span, Rc::clone(&source), Rc::clone(&filename));
 
     match err {
         ParseError::UnrecognizedEOF {

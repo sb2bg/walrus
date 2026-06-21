@@ -1,21 +1,21 @@
 use std::marker::PhantomData;
-use std::sync::Arc;
+use std::rc::Rc;
 
 use crate::error::ErrorContext;
 use crate::span::Span;
 
 #[derive(Debug, Clone)]
 pub struct SourceRef<'a> {
-    source: Arc<str>,
-    filename: Arc<str>,
+    source: Rc<str>,
+    filename: Rc<str>,
     _lifetime: PhantomData<&'a str>,
 }
 
 impl<'a> SourceRef<'a> {
     pub fn new(source: &'a str, filename: &'a str) -> Self {
         Self {
-            source: Arc::from(source),
-            filename: Arc::from(filename),
+            source: Rc::from(source),
+            filename: Rc::from(filename),
             _lifetime: PhantomData,
         }
     }
@@ -28,12 +28,12 @@ impl<'a> SourceRef<'a> {
         &self.filename
     }
 
-    pub fn source_handle(&self) -> Arc<str> {
-        Arc::clone(&self.source)
+    pub fn source_handle(&self) -> Rc<str> {
+        Rc::clone(&self.source)
     }
 
-    pub fn filename_handle(&self) -> Arc<str> {
-        Arc::clone(&self.filename)
+    pub fn filename_handle(&self) -> Rc<str> {
+        Rc::clone(&self.filename)
     }
 
     pub fn error_context(&self, span: Span) -> ErrorContext {
@@ -42,15 +42,15 @@ impl<'a> SourceRef<'a> {
 }
 
 pub struct OwnedSourceRef {
-    pub src: Arc<str>,
-    pub filename: Arc<str>,
+    pub src: Rc<str>,
+    pub filename: Rc<str>,
 }
 
 impl OwnedSourceRef {
     pub fn new(src: String, filename: String) -> Self {
         Self {
-            src: Arc::from(src),
-            filename: Arc::from(filename),
+            src: Rc::from(src),
+            filename: Rc::from(filename),
         }
     }
 }
@@ -58,8 +58,8 @@ impl OwnedSourceRef {
 impl<'a> From<&'a OwnedSourceRef> for SourceRef<'a> {
     fn from(src: &'a OwnedSourceRef) -> Self {
         Self {
-            source: Arc::clone(&src.src),
-            filename: Arc::clone(&src.filename),
+            source: Rc::clone(&src.src),
+            filename: Rc::clone(&src.filename),
             _lifetime: PhantomData,
         }
     }

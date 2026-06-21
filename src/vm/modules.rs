@@ -64,8 +64,8 @@ impl<'a> VM<'a> {
         let context = if let Some(ctx) = binding {
             crate::error::ErrorContext::from_shared(
                 span,
-                std::sync::Arc::clone(&ctx.source),
-                std::sync::Arc::clone(&ctx.filename),
+                std::rc::Rc::clone(&ctx.source),
+                std::rc::Rc::clone(&ctx.filename),
             )
         } else {
             self.source_ref.error_context(span)

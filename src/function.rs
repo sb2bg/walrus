@@ -3,15 +3,14 @@ use crate::value::Value;
 use crate::vm::instruction_set::InstructionSet;
 use std::fmt::Display;
 use std::rc::Rc;
-use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub struct VmModuleBinding {
     pub module_key: DictKey,
     pub global_names: Rc<Vec<String>>,
     pub global_values: Rc<Vec<Value>>,
-    pub source: Arc<str>,
-    pub filename: Arc<str>,
+    pub source: Rc<str>,
+    pub filename: Rc<str>,
 }
 
 #[derive(Debug, Clone)]
