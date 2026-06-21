@@ -11,7 +11,7 @@ use log::debug;
 use crate::WalrusResult;
 use crate::arenas::{DictKey, HeapValue, with_arena, with_arena_mut};
 use crate::ast::{Node, NodeKind};
-use crate::error::{WalrusError, parser_err_mapper, preprocess_fstrings_for_lexer};
+use crate::error::{ErrorContext, WalrusError, parser_err_mapper, preprocess_fstrings_for_lexer};
 use crate::grammar::ProgramParser;
 use crate::package;
 use crate::source_ref::{OwnedSourceRef, SourceRef};
@@ -111,10 +111,13 @@ impl Program {
         );
 
         let parse_source = preprocess_fstrings_for_lexer(source_ref.source());
-        let ast = self
-            .parser
-            .parse(&parse_source)
-            .map_err(|err| parser_err_mapper(err, source_ref.source(), source_ref.filename()))?;
+        let ast = self.parser.parse(&parse_source).map_err(|err| {
+            parser_err_mapper(
+                err,
+                source_ref.source_handle(),
+                source_ref.filename_handle(),
+            )
+        })?;
         let PreludeInjection { ast, .. } = inject_core_prelude(ast);
 
         let result = match self.opts {
@@ -136,10 +139,13 @@ impl Program {
         };
 
         let parse_source = preprocess_fstrings_for_lexer(source_ref.source());
-        let ast = self
-            .parser
-            .parse(&parse_source)
-            .map_err(|err| parser_err_mapper(err, source_ref.source(), source_ref.filename()))?;
+        let ast = self.parser.parse(&parse_source).map_err(|err| {
+            parser_err_mapper(
+                err,
+                source_ref.source_handle(),
+                source_ref.filename_handle(),
+            )
+        })?;
         let PreludeInjection { ast, inserted_core } = inject_core_prelude(ast);
 
         self.compile_module(ast, source_ref, inserted_core)
@@ -147,7 +153,7 @@ impl Program {
 
     fn compile(&self, ast: Node, source_ref: SourceRef) -> ProgramResult {
         let span = *ast.span();
-        let mut emitter = BytecodeEmitter::new(source_ref);
+        let mut emitter = BytecodeEmitter::new(source_ref.clone());
         emitter.emit(ast)?;
 
         // Add implicit return at the end of the program
@@ -211,7 +217,8 @@ impl Program {
     ) -> ProgramResult {
         let (ast, echo_result) = prepare_repl_ast(ast);
         let span = *ast.span();
-        let mut emitter = BytecodeEmitter::new_with_globals(source_ref, &repl_state.global_names);
+        let mut emitter =
+            BytecodeEmitter::new_with_globals(source_ref.clone(), &repl_state.global_names);
         emitter.emit(ast)?;
 
         if echo_result {
@@ -305,7 +312,7 @@ impl Program {
         strip_implicit_core_export: bool,
     ) -> ProgramResult {
         let span = *ast.span();
-        let mut emitter = BytecodeEmitter::new(source_ref);
+        let mut emitter = BytecodeEmitter::new(source_ref.clone());
         emitter.emit(ast)?;
         emitter.emit_void(span);
         emitter.emit_return(span);
@@ -337,12 +344,15 @@ impl Program {
 
             if read == 0 {
                 if !buffer.trim().is_empty() {
-                    eprintln!(
-                        "{}",
-                        WalrusError::UnexpectedEndOfInput {
-                            filename: REPL_FILENAME.to_string(),
-                        }
-                    );
+                    let err = WalrusError::UnexpectedEndOfInput {
+                        context: ErrorContext::new(
+                            Span(buffer.len(), buffer.len()),
+                            buffer.as_str(),
+                            REPL_FILENAME,
+                        ),
+                    };
+                    err.write_cli(std::io::stderr().lock())
+                        .unwrap_or_else(|_| eprintln!("{err}"));
                 }
                 return Ok(Value::Void);
             }
@@ -394,7 +404,14 @@ impl Program {
         match self.parser.parse(&parse_source) {
             Ok(ast) => Ok(ReplParseOutcome::Complete(ast)),
             Err(err) if parser_err_is_incomplete(&err) => Ok(ReplParseOutcome::Incomplete),
-            Err(err) => Err(parser_err_mapper(err, input, REPL_FILENAME)),
+            Err(err) => {
+                let source_ref = SourceRef::new(input, REPL_FILENAME);
+                Err(parser_err_mapper(
+                    err,
+                    source_ref.source_handle(),
+                    source_ref.filename_handle(),
+                ))
+            }
         }
     }
 }

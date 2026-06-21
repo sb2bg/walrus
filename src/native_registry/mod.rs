@@ -96,13 +96,13 @@ pub fn dispatch_native(
             name: spec.name.to_string(),
             expected: spec.arity,
             got: args.len(),
-            span,
-            src: vm.source_ref().source().into(),
-            filename: vm.source_ref().filename().into(),
+            context: vm.source_ref().error_context(span),
         });
     }
 
+    let source_ref = vm.source_ref();
     (spec.handler)(vm, &args, span)
+        .map_err(|err| err.with_call_site(source_ref.error_context(span)))
 }
 
 #[cfg(test)]

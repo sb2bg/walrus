@@ -1,11 +1,13 @@
-use std::cmp::min;
+use std::io::{self, Write};
+use std::ops::Range;
 use std::str::FromStr;
+use std::sync::Arc;
 
+use ariadne::{Config, IndexType, Label, Report, ReportKind, sources};
 use float_ord::FloatOrd;
 use git_version::git_version;
 use lalrpop_util::ParseError;
 use lalrpop_util::lexer::Token;
-use line_span::{find_line_end, find_line_start};
 use snailquote::{UnescapeError, unescape};
 use thiserror::Error;
 
@@ -479,8 +481,142 @@ pub fn parse_fstring<T>(
     Ok(NodeKind::FString(parts))
 }
 
-// todo: accept &str instead of String, and source_refs when possible
-// fixme: lower error size
+#[derive(Debug, Clone)]
+pub struct ErrorContext {
+    span: Span,
+    src: Arc<str>,
+    filename: Arc<str>,
+}
+
+impl ErrorContext {
+    pub fn new(span: Span, src: impl Into<Arc<str>>, filename: impl Into<Arc<str>>) -> Self {
+        Self {
+            span,
+            src: src.into(),
+            filename: filename.into(),
+        }
+    }
+
+    pub fn from_shared(span: Span, src: Arc<str>, filename: Arc<str>) -> Self {
+        Self {
+            span,
+            src,
+            filename,
+        }
+    }
+
+    pub fn span(&self) -> Span {
+        self.span
+    }
+
+    pub fn source(&self) -> &str {
+        &self.src
+    }
+
+    pub fn filename(&self) -> &str {
+        &self.filename
+    }
+
+    pub fn with_span(&self, span: Span) -> Self {
+        Self {
+            span,
+            src: Arc::clone(&self.src),
+            filename: Arc::clone(&self.filename),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct WalrusDiagnostic {
+    message: String,
+    source: Option<ErrorContext>,
+    labels: Vec<DiagnosticLabel>,
+    notes: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+struct DiagnosticLabel {
+    span: Span,
+    message: Option<String>,
+}
+
+impl WalrusDiagnostic {
+    fn plain(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            source: None,
+            labels: Vec::new(),
+            notes: Vec::new(),
+        }
+    }
+
+    fn source_error(message: impl Into<String>, context: ErrorContext) -> Self {
+        let span = context.span();
+        Self {
+            message: message.into(),
+            source: Some(context),
+            labels: vec![DiagnosticLabel {
+                span,
+                message: Some("here".to_string()),
+            }],
+            notes: Vec::new(),
+        }
+    }
+
+    pub fn write<W: Write>(&self, mut writer: W) -> io::Result<()> {
+        let Some(source) = &self.source else {
+            writeln!(writer, "Error: {}", self.message)?;
+            for note in &self.notes {
+                writeln!(writer, "Note: {note}")?;
+            }
+            return Ok(());
+        };
+
+        let primary_span = self
+            .labels
+            .first()
+            .map(|label| label.span)
+            .unwrap_or_default();
+        let primary_range = diagnostic_range(source.source(), primary_span);
+        let filename = source.filename().to_string();
+        let mut builder =
+            Report::build(ReportKind::Error, (filename.clone(), primary_range.clone()))
+                .with_config(
+                    Config::default()
+                        .with_color(false)
+                        .with_index_type(IndexType::Byte),
+                )
+                .with_message(&self.message);
+
+        for label in &self.labels {
+            let mut ariadne_label = Label::new((
+                filename.clone(),
+                diagnostic_range(source.source(), label.span),
+            ));
+            if let Some(message) = &label.message {
+                ariadne_label = ariadne_label.with_message(message);
+            }
+            builder = builder.with_label(ariadne_label);
+        }
+
+        for note in &self.notes {
+            builder = builder.with_note(note);
+        }
+
+        builder.finish().write(
+            sources(vec![(filename, source.source().to_string())]),
+            &mut writer,
+        )
+    }
+}
+
+fn diagnostic_range(src: &str, span: Span) -> Range<usize> {
+    let len = src.len();
+    let start = span.0.min(len);
+    let end = span.1.min(len).max(start);
+    start..end
+}
+
 #[derive(Error, Debug)]
 pub enum WalrusError {
     #[error("Unknown error '{message}'. Please report this bug with the following information: Walrus Version = '{}', Git Revision = '{}'", env!("CARGO_PKG_VERSION"), git_version!(fallback = "flamegraph"))]
@@ -504,20 +640,32 @@ pub enum WalrusError {
     )]
     FileNotFound { filename: String },
 
-    #[error("Unexpected EOF in source '{filename}'.")]
-    UnexpectedEndOfInput { filename: String },
+    #[error("Unexpected EOF in source")]
+    UnexpectedEndOfInput { context: ErrorContext },
 
-    #[error("Unexpected token '{token}' at {line}")]
-    UnexpectedToken { token: String, line: String },
+    #[error("Unexpected token '{token}'")]
+    UnexpectedToken {
+        token: String,
+        context: ErrorContext,
+    },
 
-    #[error("Invalid token '{token}' at {line}")]
-    InvalidToken { token: String, line: String },
+    #[error("Invalid token '{token}'")]
+    InvalidToken {
+        token: String,
+        context: ErrorContext,
+    },
 
-    #[error("Extra token '{token}' at {line}")]
-    ExtraToken { token: String, line: String },
+    #[error("Extra token '{token}'")]
+    ExtraToken {
+        token: String,
+        context: ErrorContext,
+    },
 
-    #[error("Number '{number}' is too large at {line}")]
-    NumberTooLarge { number: String, line: String },
+    #[error("Number '{number}' is too large")]
+    NumberTooLarge {
+        number: String,
+        context: ErrorContext,
+    },
 
     #[error("Circular import detected: module '{module}' is already being imported")]
     CircularImport { module: String },
@@ -528,333 +676,190 @@ pub enum WalrusError {
         second_arg: String,
     },
 
-    #[error(
-        "Invalid operation '{op}' on operands '{left}' and '{right}' at {}",
-        get_line(src, filename, *span)
-    )]
+    #[error("Invalid operation '{op}' on operands '{left}' and '{right}'")]
     InvalidOperation {
         op: Opcode,
         left: String,
         right: String,
-        span: Span,
-        src: String,
-        filename: String,
+        context: ErrorContext,
     },
 
-    #[error(
-        "Invalid unary operation '{op}' on operand {operand} at {}",
-        get_line(src, filename, *span)
-    )]
+    #[error("Invalid unary operation '{op}' on operand {operand}")]
     InvalidUnaryOperation {
         op: Opcode,
         operand: String,
-        span: Span,
-        src: String,
-        filename: String,
+        context: ErrorContext,
     },
 
-    #[error("Undefined variable '{name}' at {}",
-        get_line(src, filename, *span)
-    )]
-    UndefinedVariable {
-        name: String,
-        span: Span,
-        src: String,
-        filename: String,
-    },
+    #[error("Undefined variable '{name}'")]
+    UndefinedVariable { name: String, context: ErrorContext },
 
-    #[error("Return statement outside of function at {}",
-        get_line(src, filename, *span)
-    )]
-    ReturnOutsideFunction {
-        span: Span,
-        src: String,
-        filename: String,
-    },
+    #[error("Return statement outside of function")]
+    ReturnOutsideFunction { context: ErrorContext },
 
-    #[error("Break statement outside of loop at {}",
-        get_line(src, filename, *span)
-    )]
-    BreakOutsideLoop {
-        span: Span,
-        src: String,
-        filename: String,
-    },
+    #[error("Break statement outside of loop")]
+    BreakOutsideLoop { context: ErrorContext },
 
-    #[error("Continue statement outside of loop at {}",
-        get_line(src, filename, *span)
-    )]
-    ContinueOutsideLoop {
-        span: Span,
-        src: String,
-        filename: String,
-    },
+    #[error("Continue statement outside of loop")]
+    ContinueOutsideLoop { context: ErrorContext },
 
-    #[error("Expected type '{expected}', but found type '{found}' at {}",
-        get_line(src, filename, *span)
-    )]
+    #[error("Expected type '{expected}', but found type '{found}'")]
     TypeMismatch {
         expected: String,
         found: String,
-        span: Span,
-        src: String,
-        filename: String,
+        context: ErrorContext,
     },
 
-    #[error("Exception '{message}' thrown at {}",
-        get_line(src, filename, *span)
-    )]
+    #[error("Exception '{message}' thrown")]
     Exception {
         message: String,
-        span: Span,
-        src: String,
-        filename: String,
+        context: ErrorContext,
     },
 
-    #[error("Invalid escape sequence '{sequence}' at {line}")]
-    InvalidEscapeSequence { sequence: String, line: String },
+    #[error("{message}")]
+    RuntimeError {
+        message: String,
+        context: ErrorContext,
+    },
 
-    #[error("Invalid unicode escape sequence at {line}")]
-    InvalidUnicodeEscapeSequence { line: String },
+    #[error("Invalid escape sequence '{sequence}'")]
+    InvalidEscapeSequence {
+        sequence: String,
+        context: ErrorContext,
+    },
 
-    #[error("Failed to parse f-string expression '{expr}': {error} at {}",
-        get_line(src, filename, *span)
-    )]
+    #[error("Invalid unicode escape sequence")]
+    InvalidUnicodeEscapeSequence { context: ErrorContext },
+
+    #[error("Failed to parse f-string expression '{expr}': {error}")]
     FStringParseError {
         expr: String,
         error: String,
-        span: Span,
-        src: String,
-        filename: String,
+        context: ErrorContext,
     },
 
-    #[error("Cannot free memory not in the heap at {}",
-        get_line(src, filename, *span)
-    )]
-    FailedFree {
-        span: Span,
-        src: String,
-        filename: String,
-    },
+    #[error("Cannot free memory not in the heap")]
+    FailedFree { context: ErrorContext },
 
-    #[error("Cannot call non-function '{value}' at {}",
-        get_line(src, filename, *span)
-    )]
+    #[error("Cannot call non-function '{value}'")]
     NotCallable {
         value: String,
-        span: Span,
-        src: String,
-        filename: String,
+        context: ErrorContext,
     },
 
-    #[error("Function '{name}' expected {expected} arg(s) but got {got} arg(s) at {}",
-        get_line(src, filename, *span)
-    )]
+    #[error("Function '{name}' expected {expected} arg(s) but got {got} arg(s)")]
     InvalidArgCount {
         name: String,
         expected: usize,
         got: usize,
-        span: Span,
-        src: String,
-        filename: String,
+        context: ErrorContext,
     },
 
-    #[error("Index {index} out of bounds for object with len {len} at {}",
-        get_line(src, filename, *span)
-    )]
+    #[error("Index {index} out of bounds for object with len {len}")]
     IndexOutOfBounds {
         index: i64,
         len: usize,
-        span: Span,
-        src: String,
-        filename: String,
+        context: ErrorContext,
     },
 
-    #[error("Cannot index non-indexable type '{value}' at {}",
-        get_line(src, filename, *span)
-    )]
+    #[error("Cannot index non-indexable type '{value}'")]
     NotIndexable {
         value: String,
-        span: Span,
-        src: String,
-        filename: String,
+        context: ErrorContext,
     },
 
-    #[error("Cannot index type '{non_indexable}' with type '{index_type}' at {}",
-        get_line(src, filename, *span)
-    )]
+    #[error("Cannot index type '{non_indexable}' with type '{index_type}'")]
     InvalidIndexType {
         non_indexable: String,
         index_type: String,
-        span: Span,
-        src: String,
-        filename: String,
+        context: ErrorContext,
     },
 
-    #[error("Attempted to access released memory at {}. This is either a bug in the interpreter or you freed memory allocated by the interpreter.",
-        get_line(src, filename, *span)
+    #[error(
+        "Attempted to access released memory. This is either a bug in the interpreter or you freed memory allocated by the interpreter."
     )]
-    AccessReleasedMemory {
-        span: Span,
-        src: String,
-        filename: String,
-    },
+    AccessReleasedMemory { context: ErrorContext },
 
     #[error("Failed to gather PWD. This may be due to a permissions error.")]
     FailedGatherPWD,
 
-    #[error("Type '{type_name}' is not iterable at {}",
-        get_line(src, filename, *span)
-    )]
+    #[error("Type '{type_name}' is not iterable")]
     NotIterable {
         type_name: String,
-        span: Span,
-        src: String,
-        filename: String,
+        context: ErrorContext,
     },
 
-    #[error("Division by zero at {}",
-        get_line(src, filename, *span)
-    )]
-    DivisionByZero {
-        span: Span,
-        src: String,
-        filename: String,
-    },
+    #[error("Division by zero")]
+    DivisionByZero { context: ErrorContext },
 
-    #[error("Cannot get length of non-indexable type '{type_name}' at {}",
-        get_line(src, filename, *span)
-    )]
+    #[error("Cannot get length of non-indexable type '{type_name}'")]
     NoLength {
         type_name: String,
-        span: Span,
-        src: String,
-        filename: String,
+        context: ErrorContext,
     },
 
-    #[error("Stack underflow while executing opcode '{op:?}' at {}",
-        get_line(src, filename, *span)
-    )]
-    StackUnderflow {
-        op: Opcode,
-        span: Span,
-        src: String,
-        filename: String,
-    },
+    #[error("Stack underflow while executing opcode '{op:?}'")]
+    StackUnderflow { op: Opcode, context: ErrorContext },
 
-    #[error("Invalid instruction '{op:?}' at {}",
-        get_line(src, filename, *span)
-    )]
-    InvalidInstruction {
-        op: Opcode,
-        span: Span,
-        src: String,
-        filename: String,
-    },
+    #[error("Invalid instruction '{op:?}'")]
+    InvalidInstruction { op: Opcode, context: ErrorContext },
 
-    #[error("Cannot redefine local variable with name '{name}' at {}",
-        get_line(src, filename, *span)
-    )]
-    RedefinedLocal {
-        name: String,
-        span: Span,
-        src: String,
-        filename: String,
-    },
+    #[error("Cannot redefine local variable with name '{name}'")]
+    RedefinedLocal { name: String, context: ErrorContext },
 
-    #[error("Key '{key}' not found at {}",
-        get_line(src, filename, *span)
-    )]
-    KeyNotFound {
-        key: String,
-        span: Span,
-        src: String,
-        filename: String,
-    },
+    #[error("Key '{key}' not found")]
+    KeyNotFound { key: String, context: ErrorContext },
 
-    #[error("Range start '{start}' must be less than or equal to range end '{end}' at {}",
-        get_line(src, filename, *span)
-    )]
+    #[error("Range start '{start}' must be less than or equal to range end '{end}'")]
     InvalidRange {
         start: i64,
         end: i64,
-        span: Span,
-        src: String,
-        filename: String,
+        context: ErrorContext,
     },
 
-    #[error("Type '{type_name}' has no method '{method}' at {}",
-        get_line(src, filename, *span)
-    )]
+    #[error("Type '{type_name}' has no method '{method}'")]
     MethodNotFound {
         type_name: String,
         method: String,
-        span: Span,
-        src: String,
-        filename: String,
+        context: ErrorContext,
     },
 
-    #[error("Type '{type_name}' has no member '{member}' at {}",
-        get_line(src, filename, *span)
-    )]
+    #[error("Type '{type_name}' has no member '{member}'")]
     MemberNotFound {
         type_name: String,
         member: String,
-        span: Span,
-        src: String,
-        filename: String,
+        context: ErrorContext,
     },
 
     #[error(
-        "Member access requires object type 'struct', 'struct instance', or 'dict' and member name type 'string', found object '{object_type}' and member '{member_type}' at {}",
-        get_line(src, filename, *span)
+        "Member access requires object type 'struct', 'struct instance', or 'dict' and member name type 'string', found object '{object_type}' and member '{member_type}'"
     )]
     InvalidMemberAccessTarget {
         object_type: String,
         member_type: String,
-        span: Span,
-        src: String,
-        filename: String,
+        context: ErrorContext,
     },
 
-    #[error("Struct methods must compile to VM bytecode functions at {}",
-        get_line(src, filename, *span)
-    )]
-    StructMethodMustBeVmFunction {
-        span: Span,
-        src: String,
-        filename: String,
-    },
+    #[error("Struct methods must compile to VM bytecode functions")]
+    StructMethodMustBeVmFunction { context: ErrorContext },
 
-    #[error("Cannot call method '{method}' on value of type '{type_name}' at {}",
-        get_line(src, filename, *span)
-    )]
+    #[error("Cannot call method '{method}' on value of type '{type_name}'")]
     InvalidMethodReceiver {
         method: String,
         type_name: String,
-        span: Span,
-        src: String,
-        filename: String,
+        context: ErrorContext,
     },
 
-    #[error("Module '{module}' not found at {}",
-        get_line(src, filename, *span)
-    )]
+    #[error("Module '{module}' not found")]
     ModuleNotFound {
         module: String,
-        span: Span,
-        src: String,
-        filename: String,
+        context: ErrorContext,
     },
 
-    #[error("Thrown value: {message} at {}",
-        get_line(src, filename, *span)
-    )]
+    #[error("Thrown value: {message}")]
     ThrownValue {
         message: String,
-        span: Span,
-        src: String,
-        filename: String,
+        context: ErrorContext,
     },
 
     #[error("Invalid file mode '{mode}'. Supported modes: r, w, a, rw")]
@@ -881,132 +886,180 @@ pub enum WalrusError {
     #[error("Failed to write '{path}': {reason}")]
     WriteFileFailed { path: String, reason: String },
 
-    #[error("Cannot pop from an empty list at {}",
-        get_line(src, filename, *span)
-    )]
-    EmptyListPop {
-        span: Span,
-        src: String,
-        filename: String,
-    },
+    #[error("Cannot pop from an empty list")]
+    EmptyListPop { context: ErrorContext },
 
-    #[error("core.gc_threshold requires a positive integer argument at {}",
-        get_line(src, filename, *span)
-    )]
-    InvalidGcThresholdArg {
-        span: Span,
-        src: String,
-        filename: String,
-    },
+    #[error("core.gc_threshold requires a positive integer argument")]
+    InvalidGcThresholdArg { context: ErrorContext },
 
-    #[error("Package imports (@package) are not yet implemented at {}",
-        get_line(src, filename, *span)
-    )]
-    PackageImportNotImplemented {
-        span: Span,
-        src: String,
-        filename: String,
-    },
+    #[error("Package imports (@package) are not yet implemented")]
+    PackageImportNotImplemented { context: ErrorContext },
 
-    #[error("{error}{stack_trace}")]
-    RuntimeErrorWithStackTrace { error: String, stack_trace: String },
+    #[error("{error}")]
+    RuntimeErrorWithStackTrace {
+        error: Box<WalrusError>,
+        stack_trace: String,
+    },
+}
+
+impl WalrusError {
+    pub fn diagnostic(&self) -> Option<WalrusDiagnostic> {
+        match self {
+            WalrusError::RuntimeErrorWithStackTrace { error, stack_trace } => {
+                let mut diagnostic = error
+                    .diagnostic()
+                    .unwrap_or_else(|| WalrusDiagnostic::plain(error.to_string()));
+                let trimmed = stack_trace.trim();
+                if !trimmed.is_empty() {
+                    diagnostic.notes.push(trimmed.to_string());
+                }
+                Some(diagnostic)
+            }
+            _ => self
+                .source_context()
+                .cloned()
+                .map(|context| WalrusDiagnostic::source_error(self.to_string(), context)),
+        }
+    }
+
+    pub fn write_cli<W: Write>(&self, mut writer: W) -> io::Result<()> {
+        if let Some(diagnostic) = self.diagnostic() {
+            diagnostic.write(&mut writer)
+        } else {
+            writeln!(writer, "[ERROR] Fatal exception during execution -> {self}")
+        }
+    }
+
+    pub fn with_call_site(self, context: ErrorContext) -> Self {
+        if self.source_context().is_some() {
+            return self;
+        }
+
+        WalrusError::RuntimeError {
+            message: self.to_string(),
+            context,
+        }
+    }
+
+    fn source_context(&self) -> Option<&ErrorContext> {
+        macro_rules! source_context_match {
+            ($error:expr, $($variant:ident),+ $(,)?) => {
+                match $error {
+                    $(
+                        WalrusError::$variant { context, .. } => Some(context),
+                    )+
+                    WalrusError::RuntimeErrorWithStackTrace { error, .. } => error.source_context(),
+                    _ => None,
+                }
+            };
+        }
+
+        source_context_match!(
+            self,
+            UnexpectedEndOfInput,
+            UnexpectedToken,
+            InvalidToken,
+            ExtraToken,
+            NumberTooLarge,
+            InvalidOperation,
+            InvalidUnaryOperation,
+            UndefinedVariable,
+            ReturnOutsideFunction,
+            BreakOutsideLoop,
+            ContinueOutsideLoop,
+            TypeMismatch,
+            Exception,
+            RuntimeError,
+            InvalidEscapeSequence,
+            InvalidUnicodeEscapeSequence,
+            FStringParseError,
+            FailedFree,
+            NotCallable,
+            InvalidArgCount,
+            IndexOutOfBounds,
+            NotIndexable,
+            InvalidIndexType,
+            AccessReleasedMemory,
+            NotIterable,
+            DivisionByZero,
+            NoLength,
+            StackUnderflow,
+            InvalidInstruction,
+            RedefinedLocal,
+            KeyNotFound,
+            InvalidRange,
+            MethodNotFound,
+            MemberNotFound,
+            InvalidMemberAccessTarget,
+            StructMethodMustBeVmFunction,
+            InvalidMethodReceiver,
+            ModuleNotFound,
+            ThrownValue,
+            EmptyListPop,
+            InvalidGcThresholdArg,
+            PackageImportNotImplemented,
+        )
+    }
 }
 
 pub fn parser_err_mapper(
     err: ParseError<usize, Token<'_>, RecoveredParseError>,
-    source: &str,
-    filename: &str,
+    source: Arc<str>,
+    filename: Arc<str>,
 ) -> WalrusError {
+    let context =
+        |span| ErrorContext::from_shared(span, Arc::clone(&source), Arc::clone(&filename));
+
     match err {
         ParseError::UnrecognizedEOF {
             expected: _,
-            location: _,
+            location,
         } => WalrusError::UnexpectedEndOfInput {
-            filename: filename.into(),
+            context: context(Span(location, location)),
         },
         ParseError::UnrecognizedToken {
             token: (start, token, end),
             expected: _,
         } => WalrusError::UnexpectedToken {
             token: token.to_string(),
-            line: get_line(source, filename, Span(start, end)),
+            context: context(Span(start, end)),
         },
         ParseError::InvalidToken { location } => WalrusError::InvalidToken {
             token: source
                 .get(location..location.saturating_add(1))
                 .unwrap_or("<eof>")
                 .to_string(),
-            line: get_line(source, filename, Span(location, location + 1)),
+            context: context(Span(location, location + 1)),
         },
         ParseError::ExtraToken {
             token: (start, token, end),
         } => WalrusError::ExtraToken {
             token: token.to_string(),
-            line: get_line(source, filename, Span(start, end)),
+            context: context(Span(start, end)),
         },
         ParseError::User { error } => match error {
             RecoveredParseError::NumberTooLarge(number, span) => WalrusError::NumberTooLarge {
                 number,
-                line: get_line(source, filename, span),
+                context: context(span),
             },
             RecoveredParseError::InvalidEscapeSequence(sequence, span) => {
                 WalrusError::InvalidEscapeSequence {
                     sequence,
-                    line: get_line(source, filename, span),
+                    context: context(span),
                 }
             }
             RecoveredParseError::InvalidUnicodeEscapeSequence(span) => {
                 WalrusError::InvalidUnicodeEscapeSequence {
-                    line: get_line(source, filename, span),
+                    context: context(span),
                 }
             }
             RecoveredParseError::InvalidFStringExpression(expr, span) => {
                 WalrusError::FStringParseError {
                     expr,
                     error: "invalid expression syntax".to_string(),
-                    span,
-                    src: source.to_string(),
-                    filename: filename.to_string(),
+                    context: context(span),
                 }
             }
         },
     }
-}
-
-// i dont know if this is the best place to put this comment but:
-// fixme: if the error span starts on a different line than where the error is, the wrong line will be printed.
-// should probably fix this by printing all of the lines contained in the spans
-// todo: use codespan_reporting? https://github.com/brendanzab/codespan
-fn get_line<'a>(src: &'a str, filename: &'a str, span: Span) -> String {
-    if src.is_empty() {
-        return format!("\n\n\t<empty source>\n\t^\n[{filename}:1:1]");
-    }
-
-    let src_len = src.len();
-    let start_offset = span.0.min(src_len.saturating_sub(1));
-    let mut end_offset = span.1.min(src_len);
-    if end_offset <= start_offset {
-        end_offset = (start_offset + 1).min(src_len);
-    }
-
-    let line_start = find_line_start(src, start_offset);
-    let line_end = find_line_end(src, start_offset).min(src_len);
-    let line = &src[line_start..line_end];
-    let mut trimmed = line.trim_start();
-    let trim_left = line.len() - trimmed.len();
-    trimmed = trimmed.trim_end();
-
-    let line_num = src[..start_offset].lines().count() + 1;
-    let col_num = start_offset - line_start + 1;
-
-    let caret_start = start_offset.saturating_sub(line_start + trim_left);
-    let max_caret = trimmed.len().saturating_sub(caret_start);
-    let desired_len = end_offset.saturating_sub(start_offset).max(1);
-    let caret_len = min(desired_len, max_caret.max(1));
-
-    format!(
-        "\n\n\t{trimmed}\n\t{}{}\n[{filename}:{line_num}:{col_num}]",
-        " ".repeat(caret_start),
-        "^".repeat(caret_len),
-    )
 }

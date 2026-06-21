@@ -221,7 +221,7 @@ impl<'a> VM<'a> {
                         Err(err)
                     } else {
                         Err(WalrusError::RuntimeErrorWithStackTrace {
-                            error: err.to_string(),
+                            error: Box::new(err),
                             stack_trace,
                         })
                     };
@@ -336,9 +336,7 @@ impl<'a> VM<'a> {
                         return Err(WalrusError::TypeMismatch {
                             expected: "int".to_string(),
                             found: local.get_type().to_string(),
-                            span,
-                            src: self.source_ref.source().into(),
-                            filename: self.source_ref.filename().into(),
+                            context: self.source_ref.error_context(span),
                         });
                     }
                 }
@@ -353,9 +351,7 @@ impl<'a> VM<'a> {
                         return Err(WalrusError::TypeMismatch {
                             expected: "int".to_string(),
                             found: local.get_type().to_string(),
-                            span,
-                            src: self.source_ref.source().into(),
-                            filename: self.source_ref.filename().into(),
+                            context: self.source_ref.error_context(span),
                         });
                     }
                 }
@@ -420,9 +416,7 @@ impl<'a> VM<'a> {
                                 current_value.get_type(),
                                 end_value.get_type()
                             ),
-                            span,
-                            src: self.source_ref.source().into(),
-                            filename: self.source_ref.filename().into(),
+                            context: self.source_ref.error_context(span),
                         });
                     }
                 }
@@ -493,9 +487,7 @@ impl<'a> VM<'a> {
                     if self.stack.len() < cap {
                         return Err(WalrusError::StackUnderflow {
                             op: opcode,
-                            span,
-                            src: self.source_ref.source().to_string(),
-                            filename: self.source_ref.filename().to_string(),
+                            context: self.source_ref.error_context(span),
                         });
                     }
 
@@ -544,9 +536,7 @@ impl<'a> VM<'a> {
                             return Err(WalrusError::TypeMismatch {
                                 expected: "type: todo".to_string(),
                                 found: format!("{} and {}", left.get_type(), right.get_type()),
-                                span,
-                                src: self.source_ref.source().into(),
-                                filename: self.source_ref.filename().into(),
+                                context: self.source_ref.error_context(span),
                             });
                         }
                     }
@@ -616,9 +606,7 @@ impl<'a> VM<'a> {
                                         name: format!("{}::iter", struct_name),
                                         expected: expected_without_self,
                                         got: 0,
-                                        span,
-                                        src: self.source_ref.source().into(),
-                                        filename: self.source_ref.filename().into(),
+                                        context: self.source_ref.error_context(span),
                                     });
                                 }
 
@@ -639,9 +627,7 @@ impl<'a> VM<'a> {
                                 continue;
                             } else if iter_method.is_some() {
                                 return Err(WalrusError::StructMethodMustBeVmFunction {
-                                    span,
-                                    src: self.source_ref.source().into(),
-                                    filename: self.source_ref.filename().into(),
+                                    context: self.source_ref.error_context(span),
                                 });
                             } else if has_next {
                                 // Iterator object: no separate iter() needed.
@@ -649,9 +635,7 @@ impl<'a> VM<'a> {
                             } else {
                                 return Err(WalrusError::NotIterable {
                                     type_name: struct_name,
-                                    span,
-                                    src: self.source_ref.source().into(),
-                                    filename: self.source_ref.filename().into(),
+                                    context: self.source_ref.error_context(span),
                                 });
                             }
                         }
@@ -667,9 +651,7 @@ impl<'a> VM<'a> {
                             ) {
                                 return Err(WalrusError::NotIterable {
                                     type_name: value.get_type().to_string(),
-                                    span,
-                                    src: self.source_ref.source().into(),
-                                    filename: self.source_ref.filename().into(),
+                                    context: self.source_ref.error_context(span),
                                 });
                             }
 
@@ -703,17 +685,13 @@ impl<'a> VM<'a> {
                             .copied()
                             .ok_or_else(|| WalrusError::StackUnderflow {
                                 op: opcode,
-                                span,
-                                src: self.source_ref.source().to_string(),
-                                filename: self.source_ref.filename().to_string(),
+                                context: self.source_ref.error_context(span),
                             })?;
 
                     let Value::Iter(key) = iter else {
                         return Err(WalrusError::NotIterable {
                             type_name: iter.get_type().to_string(),
-                            span,
-                            src: self.source_ref.source().into(),
-                            filename: self.source_ref.filename().into(),
+                            context: self.source_ref.error_context(span),
                         });
                     };
 
@@ -738,9 +716,7 @@ impl<'a> VM<'a> {
                     if self.stack.len() < arg_count {
                         return Err(WalrusError::StackUnderflow {
                             op: opcode,
-                            span,
-                            src: self.source_ref.source().to_string(),
-                            filename: self.source_ref.filename().to_string(),
+                            context: self.source_ref.error_context(span),
                         });
                     }
 
@@ -775,9 +751,7 @@ impl<'a> VM<'a> {
                                             name: func.name.clone(),
                                             expected: func.arity,
                                             got: arg_count,
-                                            span,
-                                            src: self.source_ref.source().into(),
-                                            filename: self.source_ref.filename().into(),
+                                            context: self.source_ref.error_context(span),
                                         });
                                     }
 
@@ -835,9 +809,7 @@ impl<'a> VM<'a> {
                                             name: format!("{}::init", struct_name),
                                             expected: expected_without_self,
                                             got: arg_count,
-                                            span,
-                                            src: self.source_ref.source().into(),
-                                            filename: self.source_ref.filename().into(),
+                                            context: self.source_ref.error_context(span),
                                         });
                                     }
 
@@ -868,9 +840,7 @@ impl<'a> VM<'a> {
                                 }
                                 Some(_) => {
                                     return Err(WalrusError::StructMethodMustBeVmFunction {
-                                        span,
-                                        src: self.source_ref.source().into(),
-                                        filename: self.source_ref.filename().into(),
+                                        context: self.source_ref.error_context(span),
                                     });
                                 }
                                 None => {
@@ -881,9 +851,7 @@ impl<'a> VM<'a> {
                                             name: struct_name,
                                             expected: 0,
                                             got: arg_count,
-                                            span,
-                                            src: self.source_ref.source().into(),
-                                            filename: self.source_ref.filename().into(),
+                                            context: self.source_ref.error_context(span),
                                         });
                                     }
 
@@ -903,9 +871,7 @@ impl<'a> VM<'a> {
                             println!("func: {:?}", func);
                             return Err(WalrusError::NotCallable {
                                 value: func.get_type().to_string(),
-                                span,
-                                src: self.source_ref.source().into(),
-                                filename: self.source_ref.filename().into(),
+                                context: self.source_ref.error_context(span),
                             });
                         }
                     }
@@ -919,9 +885,7 @@ impl<'a> VM<'a> {
                     if self.stack.len() < arg_count {
                         return Err(WalrusError::StackUnderflow {
                             op: opcode,
-                            span,
-                            src: self.source_ref.source().to_string(),
-                            filename: self.source_ref.filename().to_string(),
+                            context: self.source_ref.error_context(span),
                         });
                     }
 
@@ -960,9 +924,7 @@ impl<'a> VM<'a> {
                                             name: func.name.clone(),
                                             expected: func.arity,
                                             got: arg_count,
-                                            span,
-                                            src: self.source_ref.source().into(),
-                                            filename: self.source_ref.filename().into(),
+                                            context: self.source_ref.error_context(span),
                                         });
                                     }
 
@@ -1038,9 +1000,7 @@ impl<'a> VM<'a> {
                                             name: format!("{}::init", struct_name),
                                             expected: expected_without_self,
                                             got: arg_count,
-                                            span,
-                                            src: self.source_ref.source().into(),
-                                            filename: self.source_ref.filename().into(),
+                                            context: self.source_ref.error_context(span),
                                         });
                                     }
 
@@ -1074,9 +1034,7 @@ impl<'a> VM<'a> {
                                 }
                                 Some(_) => {
                                     return Err(WalrusError::StructMethodMustBeVmFunction {
-                                        span,
-                                        src: self.source_ref.source().into(),
-                                        filename: self.source_ref.filename().into(),
+                                        context: self.source_ref.error_context(span),
                                     });
                                 }
                                 None => {
@@ -1087,9 +1045,7 @@ impl<'a> VM<'a> {
                                             name: struct_name,
                                             expected: 0,
                                             got: arg_count,
-                                            span,
-                                            src: self.source_ref.source().into(),
-                                            filename: self.source_ref.filename().into(),
+                                            context: self.source_ref.error_context(span),
                                         });
                                     }
 
@@ -1125,9 +1081,7 @@ impl<'a> VM<'a> {
                             self.pop_n(arg_count, opcode, span)?;
                             return Err(WalrusError::NotCallable {
                                 value: func.get_type().to_string(),
-                                span,
-                                src: self.source_ref.source().into(),
-                                filename: self.source_ref.filename().into(),
+                                context: self.source_ref.error_context(span),
                             });
                         }
                     }
@@ -1167,9 +1121,7 @@ impl<'a> VM<'a> {
                         return Err(WalrusError::TypeMismatch {
                             expected: "int and int".to_string(),
                             found: format!("{} and {}", a.get_type(), b.get_type()),
-                            span,
-                            src: self.source_ref.source().into(),
-                            filename: self.source_ref.filename().into(),
+                            context: self.source_ref.error_context(span),
                         });
                     }
                 }
@@ -1182,9 +1134,7 @@ impl<'a> VM<'a> {
                         return Err(WalrusError::TypeMismatch {
                             expected: "int and int".to_string(),
                             found: format!("{} and {}", a.get_type(), b.get_type()),
-                            span,
-                            src: self.source_ref.source().into(),
-                            filename: self.source_ref.filename().into(),
+                            context: self.source_ref.error_context(span),
                         });
                     }
                 }
@@ -1197,9 +1147,7 @@ impl<'a> VM<'a> {
                         return Err(WalrusError::TypeMismatch {
                             expected: "int and int".to_string(),
                             found: format!("{} and {}", a.get_type(), b.get_type()),
-                            span,
-                            src: self.source_ref.source().into(),
-                            filename: self.source_ref.filename().into(),
+                            context: self.source_ref.error_context(span),
                         });
                     }
                 }
@@ -1329,9 +1277,7 @@ impl<'a> VM<'a> {
                         (Value::Int(a), Value::Int(b)) => {
                             if b == 0 {
                                 return Err(WalrusError::DivisionByZero {
-                                    span,
-                                    src: self.source_ref.source().to_string(),
-                                    filename: self.source_ref.filename().to_string(),
+                                    context: self.source_ref.error_context(span),
                                 });
                             }
                             self.push(Value::Int(a / b));
@@ -1382,9 +1328,7 @@ impl<'a> VM<'a> {
                         (Value::Int(a), Value::Int(b)) => {
                             if b == 0 {
                                 return Err(WalrusError::DivisionByZero {
-                                    span,
-                                    src: self.source_ref.source().to_string(),
-                                    filename: self.source_ref.filename().to_string(),
+                                    context: self.source_ref.error_context(span),
                                 });
                             }
                             self.push(Value::Int(a % b));
@@ -1614,9 +1558,7 @@ impl<'a> VM<'a> {
                             return Err(WalrusError::IndexOutOfBounds {
                                 index: original,
                                 len: list.len(),
-                                span,
-                                src: self.source_ref.source().to_string(),
-                                filename: self.source_ref.filename().to_string(),
+                                context: self.source_ref.error_context(span),
                             });
                         }
 
@@ -1635,9 +1577,7 @@ impl<'a> VM<'a> {
                                 return Err(WalrusError::IndexOutOfBounds {
                                     index: original,
                                     len: char_len,
-                                    span,
-                                    src: self.source_ref.source().to_string(),
-                                    filename: self.source_ref.filename().to_string(),
+                                    context: self.source_ref.error_context(span),
                                 });
                             };
 
@@ -1648,9 +1588,7 @@ impl<'a> VM<'a> {
                                 .ok_or_else(|| WalrusError::IndexOutOfBounds {
                                     index: original,
                                     len: char_len,
-                                    span,
-                                    src: self.source_ref.source().to_string(),
-                                    filename: self.source_ref.filename().to_string(),
+                                    context: self.source_ref.error_context(span),
                                 })?;
                             let value = self.get_heap_mut().push(HeapValue::String(&res));
 
@@ -1670,9 +1608,7 @@ impl<'a> VM<'a> {
 
                                 return Err(WalrusError::KeyNotFound {
                                     key: b_str,
-                                    span,
-                                    src: self.source_ref.source().to_string(),
-                                    filename: self.source_ref.filename().to_string(),
+                                    context: self.source_ref.error_context(span),
                                 });
                             }
                         }
@@ -1686,9 +1622,7 @@ impl<'a> VM<'a> {
 
                                 return Err(WalrusError::KeyNotFound {
                                     key: b_str,
-                                    span,
-                                    src: self.source_ref.source().to_string(),
-                                    filename: self.source_ref.filename().to_string(),
+                                    context: self.source_ref.error_context(span),
                                 });
                             }
                         }
@@ -1716,9 +1650,7 @@ impl<'a> VM<'a> {
                                 return Err(WalrusError::IndexOutOfBounds {
                                     index: range.start,
                                     len: a_len,
-                                    span,
-                                    src: self.source_ref.source().to_string(),
-                                    filename: self.source_ref.filename().to_string(),
+                                    context: self.source_ref.error_context(span),
                                 });
                             }
 
@@ -1726,9 +1658,7 @@ impl<'a> VM<'a> {
                                 return Err(WalrusError::InvalidRange {
                                     start: range.start,
                                     end: range.end,
-                                    span,
-                                    src: self.source_ref.source().to_string(),
-                                    filename: self.source_ref.filename().to_string(),
+                                    context: self.source_ref.error_context(span),
                                 });
                             }
 
@@ -1740,18 +1670,14 @@ impl<'a> VM<'a> {
                                     WalrusError::IndexOutOfBounds {
                                         index: range.start,
                                         len: a_len,
-                                        span,
-                                        src: self.source_ref.source().to_string(),
-                                        filename: self.source_ref.filename().to_string(),
+                                        context: self.source_ref.error_context(span),
                                     }
                                 })?;
                             let end_byte = Self::char_to_byte_offset(a, end).ok_or_else(|| {
                                 WalrusError::IndexOutOfBounds {
                                     index: range.end,
                                     len: a_len,
-                                    span,
-                                    src: self.source_ref.source().to_string(),
-                                    filename: self.source_ref.filename().to_string(),
+                                    context: self.source_ref.error_context(span),
                                 }
                             })?;
 
@@ -1784,9 +1710,7 @@ impl<'a> VM<'a> {
                                 return Err(WalrusError::IndexOutOfBounds {
                                     index: range.start,
                                     len: a.len(),
-                                    span,
-                                    src: self.source_ref.source().to_string(),
-                                    filename: self.source_ref.filename().to_string(),
+                                    context: self.source_ref.error_context(span),
                                 });
                             }
 
@@ -1794,9 +1718,7 @@ impl<'a> VM<'a> {
                                 return Err(WalrusError::InvalidRange {
                                     start: range.start,
                                     end: range.end,
-                                    span,
-                                    src: self.source_ref.source().to_string(),
-                                    filename: self.source_ref.filename().to_string(),
+                                    context: self.source_ref.error_context(span),
                                 });
                             }
 
@@ -1840,9 +1762,7 @@ impl<'a> VM<'a> {
                             return Err(WalrusError::IndexOutOfBounds {
                                 index: original,
                                 len: list.len(),
-                                span,
-                                src: self.source_ref.source().to_string(),
-                                filename: self.source_ref.filename().to_string(),
+                                context: self.source_ref.error_context(span),
                             });
                         }
 
@@ -1868,9 +1788,7 @@ impl<'a> VM<'a> {
                             return Err(WalrusError::InvalidIndexType {
                                 non_indexable: object.get_type().to_string(),
                                 index_type: index.get_type().to_string(),
-                                span,
-                                src: self.source_ref.source().to_string(),
-                                filename: self.source_ref.filename().to_string(),
+                                context: self.source_ref.error_context(span),
                             });
                         }
                     }
@@ -1921,9 +1839,7 @@ impl<'a> VM<'a> {
                             return Err(WalrusError::TypeMismatch {
                                 expected: "string".to_string(),
                                 found: module_name.get_type().to_string(),
-                                span,
-                                src: self.source_ref.source().into(),
-                                filename: self.source_ref.filename().into(),
+                                context: self.source_ref.error_context(span),
                             });
                         }
                     }
@@ -1936,9 +1852,7 @@ impl<'a> VM<'a> {
                             return Err(WalrusError::TypeMismatch {
                                 expected: "task".to_string(),
                                 found: other.get_type().to_string(),
-                                span,
-                                src: self.source_ref.source().into(),
-                                filename: self.source_ref.filename().into(),
+                                context: self.source_ref.error_context(span),
                             });
                         }
                     };
@@ -2036,9 +1950,7 @@ impl<'a> VM<'a> {
                         return Err(WalrusError::TypeMismatch {
                             expected: "struct definition".to_string(),
                             found: struct_def_value.get_type().to_string(),
-                            span,
-                            src: self.source_ref.source().into(),
-                            filename: self.source_ref.filename().into(),
+                            context: self.source_ref.error_context(span),
                         });
                     }
                 }
@@ -2059,9 +1971,7 @@ impl<'a> VM<'a> {
                                     return Err(WalrusError::MethodNotFound {
                                         type_name: struct_def.name().to_string(),
                                         method: method_name.to_string(),
-                                        span,
-                                        src: self.source_ref.source().into(),
-                                        filename: self.source_ref.filename().into(),
+                                        context: self.source_ref.error_context(span),
                                     });
                                 }
                             };
@@ -2094,9 +2004,7 @@ impl<'a> VM<'a> {
                                         return Err(WalrusError::MemberNotFound {
                                             type_name: inst.struct_name().to_string(),
                                             member: member_name,
-                                            span,
-                                            src: self.source_ref.source().into(),
-                                            filename: self.source_ref.filename().into(),
+                                            context: self.source_ref.error_context(span),
                                         });
                                     }
                                 }
@@ -2120,9 +2028,7 @@ impl<'a> VM<'a> {
                                 return Err(WalrusError::MemberNotFound {
                                     type_name: "module".to_string(),
                                     member: member_name.to_string(),
-                                    span,
-                                    src: self.source_ref.source().into(),
-                                    filename: self.source_ref.filename().into(),
+                                    context: self.source_ref.error_context(span),
                                 });
                             }
                         }
@@ -2135,9 +2041,7 @@ impl<'a> VM<'a> {
                                 return Err(WalrusError::MemberNotFound {
                                     type_name: "dict".to_string(),
                                     member: member_name.to_string(),
-                                    span,
-                                    src: self.source_ref.source().into(),
-                                    filename: self.source_ref.filename().into(),
+                                    context: self.source_ref.error_context(span),
                                 });
                             }
                         }
@@ -2145,9 +2049,7 @@ impl<'a> VM<'a> {
                             return Err(WalrusError::InvalidMemberAccessTarget {
                                 object_type: object.get_type().to_string(),
                                 member_type: member.get_type().to_string(),
-                                span,
-                                src: self.source_ref.source().into(),
-                                filename: self.source_ref.filename().into(),
+                                context: self.source_ref.error_context(span),
                             });
                         }
                     }
@@ -2162,9 +2064,7 @@ impl<'a> VM<'a> {
                             return Err(WalrusError::TypeMismatch {
                                 expected: "string".to_string(),
                                 found: other.get_type().to_string(),
-                                span,
-                                src: self.source_ref.source().into(),
-                                filename: self.source_ref.filename().into(),
+                                context: self.source_ref.error_context(span),
                             });
                         }
                     };
@@ -2190,9 +2090,7 @@ impl<'a> VM<'a> {
                                         Some(_) => {
                                             return Err(
                                                 WalrusError::StructMethodMustBeVmFunction {
-                                                    span,
-                                                    src: self.source_ref.source().into(),
-                                                    filename: self.source_ref.filename().into(),
+                                                    context: self.source_ref.error_context(span),
                                                 },
                                             );
                                         }
@@ -2200,9 +2098,7 @@ impl<'a> VM<'a> {
                                             return Err(WalrusError::MethodNotFound {
                                                 type_name: struct_def.name().to_string(),
                                                 method: method_name,
-                                                span,
-                                                src: self.source_ref.source().into(),
-                                                filename: self.source_ref.filename().into(),
+                                                context: self.source_ref.error_context(span),
                                             });
                                         }
                                     }
@@ -2213,9 +2109,7 @@ impl<'a> VM<'a> {
                                         name: method_name,
                                         expected: method_arity,
                                         got: arg_count,
-                                        span,
-                                        src: self.source_ref.source().into(),
-                                        filename: self.source_ref.filename().into(),
+                                        context: self.source_ref.error_context(span),
                                     });
                                 }
 
@@ -2260,9 +2154,7 @@ impl<'a> VM<'a> {
                                     ),
                                     Some(_) => {
                                         return Err(WalrusError::StructMethodMustBeVmFunction {
-                                            span,
-                                            src: self.source_ref.source().into(),
-                                            filename: self.source_ref.filename().into(),
+                                            context: self.source_ref.error_context(span),
                                         });
                                     }
                                     None => {
@@ -2290,9 +2182,7 @@ impl<'a> VM<'a> {
                                         return Err(WalrusError::MemberNotFound {
                                             type_name,
                                             member: method_name,
-                                            span,
-                                            src: self.source_ref.source().into(),
-                                            filename: self.source_ref.filename().into(),
+                                            context: self.source_ref.error_context(span),
                                         });
                                     }
                                 };
@@ -2303,9 +2193,7 @@ impl<'a> VM<'a> {
                                         name: format!("{}::{}", type_name, method_name),
                                         expected: expected_without_self,
                                         got: arg_count,
-                                        span,
-                                        src: self.source_ref.source().into(),
-                                        filename: self.source_ref.filename().into(),
+                                        context: self.source_ref.error_context(span),
                                     });
                                 }
 
@@ -2340,9 +2228,7 @@ impl<'a> VM<'a> {
                     // Pop the object
                     let object = self.pop(opcode, span)?;
 
-                    // Borrow source info for errors (allocate only when constructing errors)
-                    let src = self.source_ref.source();
-                    let filename = self.source_ref.filename();
+                    let source_ref = self.source_ref.clone();
 
                     // Dispatch based on object type
                     let result = match object {
@@ -2352,8 +2238,7 @@ impl<'a> VM<'a> {
                             method_name_sym,
                             args,
                             span,
-                            src,
-                            filename,
+                            &source_ref,
                         )?,
                         Value::String(key) => methods::dispatch_string_method(
                             self.get_heap_mut(),
@@ -2361,8 +2246,7 @@ impl<'a> VM<'a> {
                             method_name_sym,
                             args,
                             span,
-                            src,
-                            filename,
+                            &source_ref,
                         )?,
                         Value::Dict(key) => {
                             let method_key = Value::String(method_name_sym);
@@ -2372,9 +2256,7 @@ impl<'a> VM<'a> {
                                 let Value::Function(func_key) = func_val else {
                                     return Err(WalrusError::NotCallable {
                                         value: func_val.get_type().to_string(),
-                                        span,
-                                        src: self.source_ref.source().into(),
-                                        filename: self.source_ref.filename().into(),
+                                        context: self.source_ref.error_context(span),
                                     });
                                 };
 
@@ -2393,8 +2275,7 @@ impl<'a> VM<'a> {
                                 method_name_sym,
                                 args,
                                 span,
-                                src,
-                                filename,
+                                &source_ref,
                             )?
                         }
                         Value::Module(key) => {
@@ -2405,18 +2286,14 @@ impl<'a> VM<'a> {
                                 return Err(WalrusError::MemberNotFound {
                                     type_name: "module".to_string(),
                                     member: method_name.to_string(),
-                                    span,
-                                    src: self.source_ref.source().into(),
-                                    filename: self.source_ref.filename().into(),
+                                    context: self.source_ref.error_context(span),
                                 });
                             };
 
                             let Value::Function(func_key) = func_val else {
                                 return Err(WalrusError::NotCallable {
                                     value: func_val.get_type().to_string(),
-                                    span,
-                                    src: self.source_ref.source().into(),
-                                    filename: self.source_ref.filename().into(),
+                                    context: self.source_ref.error_context(span),
                                 });
                             };
 
@@ -2438,9 +2315,7 @@ impl<'a> VM<'a> {
                                             name: "next".to_string(),
                                             expected: 0,
                                             got: args.len(),
-                                            span,
-                                            src: self.source_ref.source().into(),
-                                            filename: self.source_ref.filename().into(),
+                                            context: self.source_ref.error_context(span),
                                         });
                                     }
 
@@ -2454,9 +2329,7 @@ impl<'a> VM<'a> {
                                     return Err(WalrusError::MethodNotFound {
                                         type_name: "iter".to_string(),
                                         method: method_name,
-                                        span,
-                                        src: self.source_ref.source().into(),
-                                        filename: self.source_ref.filename().into(),
+                                        context: self.source_ref.error_context(span),
                                     });
                                 }
                             }
@@ -2472,9 +2345,7 @@ impl<'a> VM<'a> {
                                     return Err(WalrusError::MethodNotFound {
                                         type_name: struct_def.name().to_string(),
                                         method: method_name.to_string(),
-                                        span,
-                                        src: self.source_ref.source().into(),
-                                        filename: self.source_ref.filename().into(),
+                                        context: self.source_ref.error_context(span),
                                     });
                                 }
                             };
@@ -2486,9 +2357,7 @@ impl<'a> VM<'a> {
                                         name: func.name.clone(),
                                         expected: func.arity,
                                         got: args.len(),
-                                        span,
-                                        src: self.source_ref.source().into(),
-                                        filename: self.source_ref.filename().into(),
+                                        context: self.source_ref.error_context(span),
                                     });
                                 }
 
@@ -2513,9 +2382,7 @@ impl<'a> VM<'a> {
                                 continue; // Skip pushing result, function handles its own return
                             } else {
                                 return Err(WalrusError::StructMethodMustBeVmFunction {
-                                    span,
-                                    src: self.source_ref.source().into(),
-                                    filename: self.source_ref.filename().into(),
+                                    context: self.source_ref.error_context(span),
                                 });
                             }
                         }
@@ -2541,9 +2408,7 @@ impl<'a> VM<'a> {
                                         name: format!("{}::{}", type_name, method_name),
                                         expected: expected_without_self,
                                         got: args.len(),
-                                        span,
-                                        src: self.source_ref.source().into(),
-                                        filename: self.source_ref.filename().into(),
+                                        context: self.source_ref.error_context(span),
                                     });
                                 }
 
@@ -2568,17 +2433,13 @@ impl<'a> VM<'a> {
                                 continue; // Skip pushing result, function handles its own return
                             } else if method.is_some() {
                                 return Err(WalrusError::StructMethodMustBeVmFunction {
-                                    span,
-                                    src: self.source_ref.source().into(),
-                                    filename: self.source_ref.filename().into(),
+                                    context: self.source_ref.error_context(span),
                                 });
                             } else {
                                 return Err(WalrusError::MethodNotFound {
                                     type_name,
                                     method: method_name,
-                                    span,
-                                    src: self.source_ref.source().into(),
-                                    filename: self.source_ref.filename().into(),
+                                    context: self.source_ref.error_context(span),
                                 });
                             }
                         }
@@ -2586,9 +2447,7 @@ impl<'a> VM<'a> {
                             return Err(WalrusError::InvalidMethodReceiver {
                                 method: self.get_heap().get_string(method_name_sym)?.to_string(),
                                 type_name: object.get_type().to_string(),
-                                span,
-                                src: self.source_ref.source().into(),
-                                filename: self.source_ref.filename().into(),
+                                context: self.source_ref.error_context(span),
                             });
                         }
                     };
@@ -2610,17 +2469,13 @@ impl<'a> VM<'a> {
                 op,
                 left: a.get_type().to_string(),
                 right: b.get_type().to_string(),
-                span,
-                src: self.source_ref.source().to_string(),
-                filename: self.source_ref.filename().to_string(),
+                context: self.source_ref.error_context(span),
             }
         } else {
             WalrusError::InvalidUnaryOperation {
                 op,
                 operand: a.get_type().to_string(),
-                span,
-                src: self.source_ref.source().to_string(),
-                filename: self.source_ref.filename().to_string(),
+                context: self.source_ref.error_context(span),
             }
         }
     }

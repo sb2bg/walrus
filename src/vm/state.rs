@@ -151,7 +151,7 @@ impl<'a> VM<'a> {
 
     #[inline(always)]
     pub(crate) fn source_ref(&self) -> SourceRef<'a> {
-        self.source_ref
+        self.source_ref.clone()
     }
 
     /// Collect all root values that the GC needs to trace from
@@ -249,9 +249,7 @@ impl<'a> VM<'a> {
             _ => Err(WalrusError::TypeMismatch {
                 expected: "string".to_string(),
                 found: value.get_type().to_string(),
-                span,
-                src: self.source_ref.source().into(),
-                filename: self.source_ref.filename().into(),
+                context: self.source_ref.error_context(span),
             }),
         }
     }
@@ -263,9 +261,7 @@ impl<'a> VM<'a> {
             _ => Err(WalrusError::TypeMismatch {
                 expected: "int".to_string(),
                 found: value.get_type().to_string(),
-                span,
-                src: self.source_ref.source().into(),
-                filename: self.source_ref.filename().into(),
+                context: self.source_ref.error_context(span),
             }),
         }
     }
@@ -278,9 +274,7 @@ impl<'a> VM<'a> {
             _ => Err(WalrusError::TypeMismatch {
                 expected: "number".to_string(),
                 found: value.get_type().to_string(),
-                span,
-                src: self.source_ref.source().into(),
-                filename: self.source_ref.filename().into(),
+                context: self.source_ref.error_context(span),
             }),
         }
     }
@@ -368,9 +362,7 @@ impl<'a> VM<'a> {
         let message = self.stringify_value(value)?;
         Err(WalrusError::ThrownValue {
             message,
-            span,
-            src: self.source_ref.source().into(),
-            filename: self.source_ref.filename().into(),
+            context: self.source_ref.error_context(span),
         })
     }
 
@@ -383,9 +375,7 @@ impl<'a> VM<'a> {
     pub(super) fn pop(&mut self, op: Opcode, span: Span) -> WalrusResult<Value> {
         self.stack.pop().ok_or_else(|| WalrusError::StackUnderflow {
             op,
-            span,
-            src: self.source_ref.source().to_string(),
-            filename: self.source_ref.filename().to_string(),
+            context: self.source_ref.error_context(span),
         })
     }
 
@@ -399,9 +389,7 @@ impl<'a> VM<'a> {
         if self.stack.len() < n {
             return Err(WalrusError::StackUnderflow {
                 op,
-                span,
-                src: self.source_ref.source().to_string(),
-                filename: self.source_ref.filename().to_string(),
+                context: self.source_ref.error_context(span),
             });
         }
 

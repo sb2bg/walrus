@@ -78,7 +78,7 @@ impl<'a> BytecodeEmitter<'a> {
     fn new_child(&self) -> Self {
         Self {
             instructions: InstructionSet::new_child_with_globals(self.instructions.globals.clone()),
-            source_ref: self.source_ref,
+            source_ref: self.source_ref.clone(),
             depth: 1,               // Functions start at local scope depth 1
             loop_stack: Vec::new(), // Functions get their own loop stack
             current_struct: self.current_struct.clone(),
@@ -647,9 +647,7 @@ impl<'a> BytecodeEmitter<'a> {
                     if !is_known_method {
                         return Err(WalrusError::UndefinedVariable {
                             name,
-                            span,
-                            src: self.source_ref.source().to_string(),
-                            filename: self.source_ref.filename().to_string(),
+                            context: self.source_ref.error_context(span),
                         });
                     }
 
@@ -684,17 +682,13 @@ impl<'a> BytecodeEmitter<'a> {
                     } else {
                         return Err(WalrusError::UndefinedVariable {
                             name,
-                            span,
-                            src: self.source_ref.source().to_string(),
-                            filename: self.source_ref.filename().to_string(),
+                            context: self.source_ref.error_context(span),
                         });
                     }
                 } else {
                     return Err(WalrusError::UndefinedVariable {
                         name,
-                        span,
-                        src: self.source_ref.source().to_string(),
-                        filename: self.source_ref.filename().to_string(),
+                        context: self.source_ref.error_context(span),
                     });
                 }
             }
@@ -708,9 +702,7 @@ impl<'a> BytecodeEmitter<'a> {
                     {
                         return Err(WalrusError::RedefinedLocal {
                             name,
-                            span,
-                            src: self.source_ref.source().to_string(),
-                            filename: self.source_ref.filename().to_string(),
+                            context: self.source_ref.error_context(span),
                         });
                     }
                 }
@@ -734,9 +726,7 @@ impl<'a> BytecodeEmitter<'a> {
                 } else {
                     return Err(WalrusError::UndefinedVariable {
                         name: name.value().to_string(),
-                        span,
-                        src: self.source_ref.source().to_string(),
-                        filename: self.source_ref.filename().to_string(),
+                        context: self.source_ref.error_context(span),
                     });
                 };
 
@@ -874,9 +864,7 @@ impl<'a> BytecodeEmitter<'a> {
                     loop_ctx.breaks.push(jump_addr);
                 } else {
                     return Err(WalrusError::BreakOutsideLoop {
-                        span,
-                        src: self.source_ref.source().to_string(),
-                        filename: self.source_ref.filename().to_string(),
+                        context: self.source_ref.error_context(span),
                     });
                 }
             }
@@ -895,9 +883,7 @@ impl<'a> BytecodeEmitter<'a> {
                         .push(Instruction::new(Opcode::Jump(loop_ctx.start as u32), span));
                 } else {
                     return Err(WalrusError::ContinueOutsideLoop {
-                        span,
-                        src: self.source_ref.source().to_string(),
-                        filename: self.source_ref.filename().to_string(),
+                        context: self.source_ref.error_context(span),
                     });
                 }
             }
