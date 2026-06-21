@@ -3,7 +3,7 @@ use std::ops::Range;
 use std::rc::Rc;
 use std::str::FromStr;
 
-use ariadne::{Config, IndexType, Label, Report, ReportKind, sources};
+use ariadne::{ColorGenerator, Config, IndexType, Label, Report, ReportKind, sources};
 use float_ord::FloatOrd;
 use git_version::git_version;
 use lalrpop_util::ParseError;
@@ -612,15 +612,15 @@ impl WalrusDiagnostic {
         }
     }
 
-    fn source_error(message: impl Into<String>, context: ErrorContext) -> Self {
-        let span = context.span();
+    fn source_error_with_labels(
+        message: impl Into<String>,
+        context: ErrorContext,
+        labels: Vec<DiagnosticLabel>,
+    ) -> Self {
         Self {
             message: message.into(),
             source: Some(context),
-            labels: vec![DiagnosticLabel {
-                span,
-                message: Some("here".to_string()),
-            }],
+            labels,
             notes: Vec::new(),
         }
     }
@@ -661,6 +661,7 @@ impl WalrusDiagnostic {
         )
         .with_message(&self.message);
 
+        let mut colors = ColorGenerator::new();
         for label in &self.labels {
             let Some(label_file) = source.source_file(label.span) else {
                 continue;
@@ -668,7 +669,8 @@ impl WalrusDiagnostic {
             let mut ariadne_label = Label::new((
                 label_file.filename.to_string(),
                 diagnostic_range(&label_file.source, label.span),
-            ));
+            ))
+            .with_color(colors.next());
             if let Some(message) = &label.message {
                 ariadne_label = ariadne_label.with_message(message);
             }
@@ -702,6 +704,16 @@ fn diagnostic_range(src: &str, span: Span) -> Range<usize> {
     let start = span.0.min(len);
     let end = span.1.min(len).max(start);
     start..end
+}
+
+fn label_span_for_context(span: Span, context: &ErrorContext) -> Option<Span> {
+    if span == Span::default() {
+        None
+    } else if span.file_id().is_unknown() {
+        Some(span.with_file_id(context.span().file_id()))
+    } else {
+        Some(span)
+    }
 }
 
 #[derive(Error, Debug)]
@@ -768,6 +780,8 @@ pub enum WalrusError {
         op: Opcode,
         left: String,
         right: String,
+        left_span: Option<Span>,
+        right_span: Option<Span>,
         context: ErrorContext,
     },
 
@@ -775,6 +789,7 @@ pub enum WalrusError {
     InvalidUnaryOperation {
         op: Opcode,
         operand: String,
+        operand_span: Option<Span>,
         context: ErrorContext,
     },
 
@@ -846,6 +861,7 @@ pub enum WalrusError {
     IndexOutOfBounds {
         index: i64,
         len: usize,
+        index_span: Option<Span>,
         context: ErrorContext,
     },
 
@@ -859,6 +875,8 @@ pub enum WalrusError {
     InvalidIndexType {
         non_indexable: String,
         index_type: String,
+        target_span: Option<Span>,
+        index_span: Option<Span>,
         context: ErrorContext,
     },
 
@@ -901,6 +919,8 @@ pub enum WalrusError {
     InvalidRange {
         start: i64,
         end: i64,
+        start_span: Option<Span>,
+        end_span: Option<Span>,
         context: ErrorContext,
     },
 
@@ -1002,10 +1022,81 @@ impl WalrusError {
                 }
                 Some(diagnostic)
             }
-            _ => self
-                .source_context()
-                .cloned()
-                .map(|context| WalrusDiagnostic::source_error(self.to_string(), context)),
+            WalrusError::InvalidOperation {
+                op,
+                left,
+                right,
+                left_span,
+                right_span,
+                context,
+            } => {
+                let mut labels = Vec::new();
+                let (left_label, right_label) = match op {
+                    Opcode::Index => (
+                        format!("indexed value is {left}"),
+                        format!("index is {right}"),
+                    ),
+                    Opcode::Range => (
+                        format!("range start is {left}"),
+                        format!("range end is {right}"),
+                    ),
+                    _ => (
+                        format!("left operand is {left}"),
+                        format!("right operand is {right}"),
+                    ),
+                };
+                if let Some(span) = left_span.and_then(|span| label_span_for_context(span, context))
+                {
+                    labels.push(DiagnosticLabel {
+                        span,
+                        message: Some(left_label),
+                    });
+                }
+                if let Some(span) =
+                    right_span.and_then(|span| label_span_for_context(span, context))
+                {
+                    labels.push(DiagnosticLabel {
+                        span,
+                        message: Some(right_label),
+                    });
+                }
+                if labels.is_empty() {
+                    labels.push(DiagnosticLabel {
+                        span: context.span(),
+                        message: Some(format!("{left} cannot be combined with {right}")),
+                    });
+                }
+                Some(WalrusDiagnostic::source_error_with_labels(
+                    self.to_string(),
+                    context.clone(),
+                    labels,
+                ))
+            }
+            WalrusError::InvalidUnaryOperation {
+                operand,
+                operand_span,
+                context,
+                ..
+            } => {
+                let span = operand_span
+                    .and_then(|span| label_span_for_context(span, context))
+                    .unwrap_or_else(|| context.span());
+                Some(WalrusDiagnostic::source_error_with_labels(
+                    self.to_string(),
+                    context.clone(),
+                    vec![DiagnosticLabel {
+                        span,
+                        message: Some(format!("operand is {operand}")),
+                    }],
+                ))
+            }
+            _ => self.source_context().cloned().map(|context| {
+                WalrusDiagnostic::source_error_with_labels(
+                    self.to_string(),
+                    context.clone(),
+                    self.diagnostic_labels(&context),
+                )
+            }),
         }
     }
 
@@ -1026,6 +1117,185 @@ impl WalrusError {
             message: self.to_string(),
             context,
         }
+    }
+
+    fn diagnostic_labels(&self, context: &ErrorContext) -> Vec<DiagnosticLabel> {
+        let message = match self {
+            WalrusError::UnexpectedEndOfInput { .. } => {
+                "input ends before this construct is complete"
+            }
+            WalrusError::UnexpectedToken { .. } => "unexpected token",
+            WalrusError::InvalidToken { .. } => "invalid token",
+            WalrusError::ExtraToken { .. } => "extra token",
+            WalrusError::NumberTooLarge { .. } => "number is too large",
+            WalrusError::UndefinedVariable { .. } => "name is not defined in this scope",
+            WalrusError::ReturnOutsideFunction { .. } => "return is only valid inside a function",
+            WalrusError::BreakOutsideLoop { .. } => "break is only valid inside a loop",
+            WalrusError::ContinueOutsideLoop { .. } => "continue is only valid inside a loop",
+            WalrusError::TypeMismatch {
+                expected, found, ..
+            } => {
+                return vec![DiagnosticLabel {
+                    span: context.span(),
+                    message: Some(format!("expected {expected}, found {found}")),
+                }];
+            }
+            WalrusError::Exception { .. } => "exception thrown here",
+            WalrusError::RuntimeError { .. } => "runtime error occurs here",
+            WalrusError::InvalidEscapeSequence { .. } => "invalid escape sequence",
+            WalrusError::InvalidUnicodeEscapeSequence { .. } => "invalid unicode escape",
+            WalrusError::FStringParseError { .. } => "invalid expression inside f-string",
+            WalrusError::FailedFree { .. } => "value is not heap allocated",
+            WalrusError::NotCallable { value, .. } => {
+                return vec![DiagnosticLabel {
+                    span: context.span(),
+                    message: Some(format!("{value} values cannot be called")),
+                }];
+            }
+            WalrusError::InvalidArgCount { expected, got, .. } => {
+                return vec![DiagnosticLabel {
+                    span: context.span(),
+                    message: Some(format!("expected {expected} argument(s), got {got}")),
+                }];
+            }
+            WalrusError::IndexOutOfBounds {
+                index,
+                len,
+                index_span,
+                ..
+            } => {
+                return vec![DiagnosticLabel {
+                    span: index_span
+                        .and_then(|span| label_span_for_context(span, context))
+                        .unwrap_or_else(|| context.span()),
+                    message: Some(format!("index {index} is outside length {len}")),
+                }];
+            }
+            WalrusError::NotIndexable { value, .. } => {
+                return vec![DiagnosticLabel {
+                    span: context.span(),
+                    message: Some(format!("{value} values cannot be indexed")),
+                }];
+            }
+            WalrusError::InvalidIndexType {
+                non_indexable,
+                index_type,
+                target_span,
+                index_span,
+                ..
+            } => {
+                let mut labels = Vec::new();
+                if let Some(span) =
+                    target_span.and_then(|span| label_span_for_context(span, context))
+                {
+                    labels.push(DiagnosticLabel {
+                        span,
+                        message: Some(format!("indexed value is {non_indexable}")),
+                    });
+                }
+                if let Some(span) =
+                    index_span.and_then(|span| label_span_for_context(span, context))
+                {
+                    labels.push(DiagnosticLabel {
+                        span,
+                        message: Some(format!("index is {index_type}")),
+                    });
+                }
+                if labels.is_empty() {
+                    labels.push(DiagnosticLabel {
+                        span: context.span(),
+                        message: Some(format!("cannot index {non_indexable} with {index_type}")),
+                    });
+                }
+                return labels;
+            }
+            WalrusError::AccessReleasedMemory { .. } => "released memory accessed here",
+            WalrusError::NotIterable { type_name, .. } => {
+                return vec![DiagnosticLabel {
+                    span: context.span(),
+                    message: Some(format!("{type_name} values are not iterable")),
+                }];
+            }
+            WalrusError::DivisionByZero { .. } => "division by zero",
+            WalrusError::NoLength { type_name, .. } => {
+                return vec![DiagnosticLabel {
+                    span: context.span(),
+                    message: Some(format!("{type_name} values do not have length")),
+                }];
+            }
+            WalrusError::StackUnderflow { .. } => "the VM stack did not contain enough values",
+            WalrusError::InvalidInstruction { .. } => "invalid bytecode instruction",
+            WalrusError::RedefinedLocal { .. } => "local was already defined",
+            WalrusError::KeyNotFound { .. } => "key lookup failed here",
+            WalrusError::InvalidRange {
+                start,
+                end,
+                start_span,
+                end_span,
+                ..
+            } => {
+                let mut labels = Vec::new();
+                if let Some(span) =
+                    start_span.and_then(|span| label_span_for_context(span, context))
+                {
+                    labels.push(DiagnosticLabel {
+                        span,
+                        message: Some(format!("range starts at {start}")),
+                    });
+                }
+                if let Some(span) = end_span.and_then(|span| label_span_for_context(span, context))
+                {
+                    labels.push(DiagnosticLabel {
+                        span,
+                        message: Some(format!("range ends at {end}")),
+                    });
+                }
+                if labels.is_empty() {
+                    labels.push(DiagnosticLabel {
+                        span: context.span(),
+                        message: Some("range bounds are invalid".to_string()),
+                    });
+                }
+                return labels;
+            }
+            WalrusError::MethodNotFound {
+                method, type_name, ..
+            } => {
+                return vec![DiagnosticLabel {
+                    span: context.span(),
+                    message: Some(format!("{type_name} has no method named {method}")),
+                }];
+            }
+            WalrusError::MemberNotFound {
+                member, type_name, ..
+            } => {
+                return vec![DiagnosticLabel {
+                    span: context.span(),
+                    message: Some(format!("{type_name} has no member named {member}")),
+                }];
+            }
+            WalrusError::InvalidMemberAccessTarget { .. } => "member access target is invalid",
+            WalrusError::StructMethodMustBeVmFunction { .. } => "struct method is not VM bytecode",
+            WalrusError::InvalidMethodReceiver {
+                method, type_name, ..
+            } => {
+                return vec![DiagnosticLabel {
+                    span: context.span(),
+                    message: Some(format!("cannot call {method} on {type_name}")),
+                }];
+            }
+            WalrusError::ModuleNotFound { .. } => "module lookup failed here",
+            WalrusError::ThrownValue { .. } => "value thrown here",
+            WalrusError::EmptyListPop { .. } => "list is empty here",
+            WalrusError::InvalidGcThresholdArg { .. } => "argument must be a positive integer",
+            WalrusError::PackageImportNotImplemented { .. } => "package import starts here",
+            _ => "error occurs here",
+        };
+
+        vec![DiagnosticLabel {
+            span: context.span(),
+            message: Some(message.to_string()),
+        }]
     }
 
     fn source_context(&self) -> Option<&ErrorContext> {

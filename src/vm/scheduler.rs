@@ -878,6 +878,7 @@ impl<'a> VM<'a> {
                 } else {
                     ExecutionContext {
                         stack: Vec::new(),
+                        stack_origins: Vec::new(),
                         locals: args,
                         call_stack: vec![CallFrame {
                             return_ip: 0,

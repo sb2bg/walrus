@@ -92,6 +92,7 @@ enum TaskResolution {
 #[derive(Debug, Default, Clone)]
 struct ExecutionContext {
     stack: Vec<Value>,
+    stack_origins: Vec<Span>,
     locals: Vec<Value>,
     call_stack: Vec<CallFrame>,
     exception_handlers: Vec<ExceptionHandler>,
@@ -158,10 +159,12 @@ struct UserChannel {
 /// using Cranelift and executed directly, bypassing the interpreter.
 pub struct VM<'a> {
     stack: Vec<Value>,          // Operand stack for expression evaluation
+    stack_origins: Vec<Span>,   // Source span that produced each operand stack value
     locals: Vec<Value>,         // Shared across all call frames
     call_stack: Vec<CallFrame>, // Stack of call frames
     exception_handlers: Vec<ExceptionHandler>,
     ip: usize,            // Current instruction pointer
+    current_span: Span,   // Source span for the instruction currently executing
     gc_poll_counter: u32, // Throttle GC checks to avoid per-instruction overhead
     globals: Vec<Value>,
     global_names: Vec<String>,
@@ -285,6 +288,7 @@ impl<'a> VM<'a> {
             let instruction = self.current_frame().instructions.get(self.ip);
             let opcode = instruction.opcode();
             let span = instruction.span();
+            self.current_span = span;
 
             self.ip += 1;
 
@@ -493,7 +497,9 @@ impl<'a> VM<'a> {
 
                     // Extract items from stack without reverse
                     // split_off gives us the last cap items in correct order
-                    let list = self.stack.split_off(self.stack.len() - cap);
+                    let split_at = self.stack.len() - cap;
+                    self.stack_origins.truncate(split_at);
+                    let list = self.stack.split_off(split_at);
 
                     let value = self.get_heap_mut().push(HeapValue::List(list));
                     self.push(value);
@@ -513,31 +519,32 @@ impl<'a> VM<'a> {
                     self.push(value);
                 }
                 Opcode::Range => {
-                    let left = self.pop(opcode, span)?;
-                    let right = self.pop(opcode, span)?;
+                    let (left, left_span) = self.pop_with_origin(opcode, span)?;
+                    let (right, right_span) = self.pop_with_origin(opcode, span)?;
 
-                    // fixme: the spans are wrong here
                     match (left, right) {
                         (Value::Void, Value::Void) => {
                             self.push(Value::Range(RangeValue::new(0, span, -1, span)));
                         }
                         (Value::Void, Value::Int(right)) => {
-                            self.push(Value::Range(RangeValue::new(0, span, right, span)));
+                            self.push(Value::Range(RangeValue::new(0, span, right, right_span)));
                         }
                         (Value::Int(left), Value::Void) => {
-                            self.push(Value::Range(RangeValue::new(left, span, -1, span)));
+                            self.push(Value::Range(RangeValue::new(left, left_span, -1, span)));
                         }
                         (Value::Int(left), Value::Int(right)) => {
-                            self.push(Value::Range(RangeValue::new(left, span, right, span)));
+                            self.push(Value::Range(RangeValue::new(
+                                left, left_span, right, right_span,
+                            )));
                         }
-                        // fixme: this is a catch all for now, break it into
-                        // errors for left and right and then both
                         (left, right) => {
-                            return Err(WalrusError::TypeMismatch {
-                                expected: "type: todo".to_string(),
-                                found: format!("{} and {}", left.get_type(), right.get_type()),
-                                context: self.source_ref.error_context(span),
-                            });
+                            return Err(self.construct_err(
+                                opcode,
+                                left,
+                                left_span,
+                                Some((right, right_span)),
+                                span,
+                            ));
                         }
                     }
                 }
@@ -779,6 +786,7 @@ impl<'a> VM<'a> {
 
                                     // Move arguments directly from operand stack to locals.
                                     let args_start = self.stack.len() - arg_count;
+                                    self.stack_origins.drain(args_start..);
                                     self.locals.extend(self.stack.drain(args_start..));
 
                                     // Start execution at the beginning of the new function
@@ -835,6 +843,7 @@ impl<'a> VM<'a> {
 
                                     self.locals.push(instance_value);
                                     let args_start = self.stack.len() - arg_count;
+                                    self.stack_origins.drain(args_start..);
                                     self.locals.extend(self.stack.drain(args_start..));
                                     self.ip = 0;
                                 }
@@ -868,7 +877,6 @@ impl<'a> VM<'a> {
                         _ => {
                             // Preserve stack semantics: consume arguments for this failed call.
                             self.pop_n(arg_count, opcode, span)?;
-                            println!("func: {:?}", func);
                             return Err(WalrusError::NotCallable {
                                 value: func.get_type().to_string(),
                                 context: self.source_ref.error_context(span),
@@ -967,6 +975,7 @@ impl<'a> VM<'a> {
 
                                     // Move the new arguments from operand stack to locals.
                                     let args_start = self.stack.len() - arg_count;
+                                    self.stack_origins.drain(args_start..);
                                     self.locals.extend(self.stack.drain(args_start..));
 
                                     // Update the current frame in place (reuse it)
@@ -1019,6 +1028,7 @@ impl<'a> VM<'a> {
                                     self.locals.push(instance_value);
 
                                     let args_start = self.stack.len() - arg_count;
+                                    self.stack_origins.drain(args_start..);
                                     self.locals.extend(self.stack.drain(args_start..));
 
                                     if let Some(current_frame) = self.call_stack.last_mut() {
@@ -1112,48 +1122,36 @@ impl<'a> VM<'a> {
                 // Specialized integer arithmetic (hot path - skips type checking)
                 // SAFETY: Compiler guarantees stack has operands and both are integers
                 Opcode::AddInt => {
-                    let b = self.pop_unchecked();
-                    let a = self.pop_unchecked();
+                    let (b, b_span) = self.pop_unchecked_with_origin();
+                    let (a, a_span) = self.pop_unchecked_with_origin();
                     if let (Value::Int(a), Value::Int(b)) = (a, b) {
                         self.push(Value::Int(a + b));
                     } else {
                         // Fallback for safety (shouldn't happen with correct compilation)
-                        return Err(WalrusError::TypeMismatch {
-                            expected: "int and int".to_string(),
-                            found: format!("{} and {}", a.get_type(), b.get_type()),
-                            context: self.source_ref.error_context(span),
-                        });
+                        return Err(self.construct_err(opcode, a, a_span, Some((b, b_span)), span));
                     }
                 }
                 Opcode::SubtractInt => {
-                    let b = self.pop_unchecked();
-                    let a = self.pop_unchecked();
+                    let (b, b_span) = self.pop_unchecked_with_origin();
+                    let (a, a_span) = self.pop_unchecked_with_origin();
                     if let (Value::Int(a), Value::Int(b)) = (a, b) {
                         self.push(Value::Int(a - b));
                     } else {
-                        return Err(WalrusError::TypeMismatch {
-                            expected: "int and int".to_string(),
-                            found: format!("{} and {}", a.get_type(), b.get_type()),
-                            context: self.source_ref.error_context(span),
-                        });
+                        return Err(self.construct_err(opcode, a, a_span, Some((b, b_span)), span));
                     }
                 }
                 Opcode::LessInt => {
-                    let b = self.pop_unchecked();
-                    let a = self.pop_unchecked();
+                    let (b, b_span) = self.pop_unchecked_with_origin();
+                    let (a, a_span) = self.pop_unchecked_with_origin();
                     if let (Value::Int(a), Value::Int(b)) = (a, b) {
                         self.push(Value::Bool(a < b));
                     } else {
-                        return Err(WalrusError::TypeMismatch {
-                            expected: "int and int".to_string(),
-                            found: format!("{} and {}", a.get_type(), b.get_type()),
-                            context: self.source_ref.error_context(span),
-                        });
+                        return Err(self.construct_err(opcode, a, a_span, Some((b, b_span)), span));
                     }
                 }
                 Opcode::Add => {
-                    let b = self.pop_unchecked();
-                    let a = self.pop_unchecked();
+                    let (b, b_span) = self.pop_unchecked_with_origin();
+                    let (a, a_span) = self.pop_unchecked_with_origin();
 
                     // JIT TYPE PROFILING: Track operand types for arithmetic
                     if profiling_enabled {
@@ -1204,12 +1202,20 @@ impl<'a> VM<'a> {
                             let value = self.get_heap_mut().push(HeapValue::Dict(a));
                             self.push(value);
                         }
-                        _ => return Err(self.construct_err(opcode, a, Some(b), span)),
+                        _ => {
+                            return Err(self.construct_err(
+                                opcode,
+                                a,
+                                a_span,
+                                Some((b, b_span)),
+                                span,
+                            ));
+                        }
                     }
                 }
                 Opcode::Subtract => {
-                    let b = self.pop_unchecked();
-                    let a = self.pop_unchecked();
+                    let (b, b_span) = self.pop_unchecked_with_origin();
+                    let (a, a_span) = self.pop_unchecked_with_origin();
 
                     match (a, b) {
                         (Value::Int(a), Value::Int(b)) => {
@@ -1224,12 +1230,20 @@ impl<'a> VM<'a> {
                         (Value::Float(FloatOrd(a)), Value::Int(b)) => {
                             self.push(Value::Float(FloatOrd(a - b as f64)));
                         }
-                        _ => return Err(self.construct_err(opcode, a, Some(b), span)),
+                        _ => {
+                            return Err(self.construct_err(
+                                opcode,
+                                a,
+                                a_span,
+                                Some((b, b_span)),
+                                span,
+                            ));
+                        }
                     }
                 }
                 Opcode::Multiply => {
-                    let b = self.pop_unchecked();
-                    let a = self.pop_unchecked();
+                    let (b, b_span) = self.pop_unchecked_with_origin();
+                    let (a, a_span) = self.pop_unchecked_with_origin();
 
                     match (a, b) {
                         (Value::Int(a), Value::Int(b)) => {
@@ -1266,12 +1280,20 @@ impl<'a> VM<'a> {
                             let value = self.get_heap_mut().push(HeapValue::String(&s));
                             self.push(value);
                         }
-                        _ => return Err(self.construct_err(opcode, a, Some(b), span)),
+                        _ => {
+                            return Err(self.construct_err(
+                                opcode,
+                                a,
+                                a_span,
+                                Some((b, b_span)),
+                                span,
+                            ));
+                        }
                     }
                 }
                 Opcode::Divide => {
-                    let b = self.pop(opcode, span)?;
-                    let a = self.pop(opcode, span)?;
+                    let (b, b_span) = self.pop_with_origin(opcode, span)?;
+                    let (a, a_span) = self.pop_with_origin(opcode, span)?;
 
                     match (a, b) {
                         (Value::Int(a), Value::Int(b)) => {
@@ -1291,12 +1313,20 @@ impl<'a> VM<'a> {
                         (Value::Float(FloatOrd(a)), Value::Int(b)) => {
                             self.push(Value::Float(FloatOrd(a / b as f64)));
                         }
-                        _ => return Err(self.construct_err(opcode, a, Some(b), span)),
+                        _ => {
+                            return Err(self.construct_err(
+                                opcode,
+                                a,
+                                a_span,
+                                Some((b, b_span)),
+                                span,
+                            ));
+                        }
                     }
                 }
                 Opcode::Power => {
-                    let b = self.pop(opcode, span)?;
-                    let a = self.pop(opcode, span)?;
+                    let (b, b_span) = self.pop_with_origin(opcode, span)?;
+                    let (a, a_span) = self.pop_with_origin(opcode, span)?;
 
                     match (a, b) {
                         (Value::Int(a), Value::Int(b)) => {
@@ -1317,12 +1347,20 @@ impl<'a> VM<'a> {
                         (Value::Float(FloatOrd(a)), Value::Int(b)) => {
                             self.push(Value::Float(FloatOrd(a.powf(b as f64))));
                         }
-                        _ => return Err(self.construct_err(opcode, a, Some(b), span)),
+                        _ => {
+                            return Err(self.construct_err(
+                                opcode,
+                                a,
+                                a_span,
+                                Some((b, b_span)),
+                                span,
+                            ));
+                        }
                     }
                 }
                 Opcode::Modulo => {
-                    let b = self.pop(opcode, span)?;
-                    let a = self.pop(opcode, span)?;
+                    let (b, b_span) = self.pop_with_origin(opcode, span)?;
+                    let (a, a_span) = self.pop_with_origin(opcode, span)?;
 
                     match (a, b) {
                         (Value::Int(a), Value::Int(b)) => {
@@ -1342,11 +1380,19 @@ impl<'a> VM<'a> {
                         (Value::Float(FloatOrd(a)), Value::Int(b)) => {
                             self.push(Value::Float(FloatOrd(a % b as f64)));
                         }
-                        _ => return Err(self.construct_err(opcode, a, Some(b), span)),
+                        _ => {
+                            return Err(self.construct_err(
+                                opcode,
+                                a,
+                                a_span,
+                                Some((b, b_span)),
+                                span,
+                            ));
+                        }
                     }
                 }
                 Opcode::Negate => {
-                    let a = self.pop(opcode, span)?;
+                    let (a, a_span) = self.pop_with_origin(opcode, span)?;
 
                     match a {
                         Value::Int(a) => {
@@ -1355,7 +1401,7 @@ impl<'a> VM<'a> {
                         Value::Float(FloatOrd(a)) => {
                             self.push(Value::Float(FloatOrd(-a)));
                         }
-                        _ => return Err(self.construct_err(opcode, a, None, span)),
+                        _ => return Err(self.construct_err(opcode, a, a_span, None, span)),
                     }
                 }
                 Opcode::Not => {
@@ -1453,8 +1499,8 @@ impl<'a> VM<'a> {
                     }
                 }
                 Opcode::Greater => {
-                    let b = self.pop_unchecked();
-                    let a = self.pop_unchecked();
+                    let (b, b_span) = self.pop_unchecked_with_origin();
+                    let (a, a_span) = self.pop_unchecked_with_origin();
 
                     match (a, b) {
                         (Value::Int(a), Value::Int(b)) => {
@@ -1469,12 +1515,20 @@ impl<'a> VM<'a> {
                         (Value::Int(a), Value::Float(FloatOrd(b))) => {
                             self.push(Value::Bool((a as f64) > b));
                         }
-                        _ => return Err(self.construct_err(opcode, a, Some(b), span)),
+                        _ => {
+                            return Err(self.construct_err(
+                                opcode,
+                                a,
+                                a_span,
+                                Some((b, b_span)),
+                                span,
+                            ));
+                        }
                     }
                 }
                 Opcode::GreaterEqual => {
-                    let b = self.pop(opcode, span)?;
-                    let a = self.pop(opcode, span)?;
+                    let (b, b_span) = self.pop_with_origin(opcode, span)?;
+                    let (a, a_span) = self.pop_with_origin(opcode, span)?;
 
                     match (a, b) {
                         (Value::Int(a), Value::Int(b)) => {
@@ -1489,12 +1543,20 @@ impl<'a> VM<'a> {
                         (Value::Int(a), Value::Float(FloatOrd(b))) => {
                             self.push(Value::Bool((a as f64) >= b));
                         }
-                        _ => return Err(self.construct_err(opcode, a, Some(b), span)),
+                        _ => {
+                            return Err(self.construct_err(
+                                opcode,
+                                a,
+                                a_span,
+                                Some((b, b_span)),
+                                span,
+                            ));
+                        }
                     }
                 }
                 Opcode::Less => {
-                    let b = self.pop_unchecked();
-                    let a = self.pop_unchecked();
+                    let (b, b_span) = self.pop_unchecked_with_origin();
+                    let (a, a_span) = self.pop_unchecked_with_origin();
 
                     match (a, b) {
                         (Value::Int(a), Value::Int(b)) => {
@@ -1509,12 +1571,20 @@ impl<'a> VM<'a> {
                         (Value::Int(a), Value::Float(FloatOrd(b))) => {
                             self.push(Value::Bool((a as f64) < b));
                         }
-                        _ => return Err(self.construct_err(opcode, a, Some(b), span)),
+                        _ => {
+                            return Err(self.construct_err(
+                                opcode,
+                                a,
+                                a_span,
+                                Some((b, b_span)),
+                                span,
+                            ));
+                        }
                     }
                 }
                 Opcode::LessEqual => {
-                    let b = self.pop(opcode, span)?;
-                    let a = self.pop(opcode, span)?;
+                    let (b, b_span) = self.pop_with_origin(opcode, span)?;
+                    let (a, a_span) = self.pop_with_origin(opcode, span)?;
 
                     match (a, b) {
                         (Value::Int(a), Value::Int(b)) => {
@@ -1529,12 +1599,20 @@ impl<'a> VM<'a> {
                         (Value::Int(a), Value::Float(FloatOrd(b))) => {
                             self.push(Value::Bool((a as f64) <= b));
                         }
-                        _ => return Err(self.construct_err(opcode, a, Some(b), span)),
+                        _ => {
+                            return Err(self.construct_err(
+                                opcode,
+                                a,
+                                a_span,
+                                Some((b, b_span)),
+                                span,
+                            ));
+                        }
                     }
                 }
                 Opcode::Index => {
-                    let b = self.pop_unchecked();
-                    let a = self.pop_unchecked();
+                    let (b, b_span) = self.pop_unchecked_with_origin();
+                    let (a, a_span) = self.pop_unchecked_with_origin();
 
                     // Fast path for the hottest case in numeric code: list[int]
                     if let (Value::List(list_key), Value::Int(idx)) = (a, b) {
@@ -1558,6 +1636,7 @@ impl<'a> VM<'a> {
                             return Err(WalrusError::IndexOutOfBounds {
                                 index: original,
                                 len: list.len(),
+                                index_span: Some(b_span),
                                 context: self.source_ref.error_context(span),
                             });
                         }
@@ -1577,6 +1656,7 @@ impl<'a> VM<'a> {
                                 return Err(WalrusError::IndexOutOfBounds {
                                     index: original,
                                     len: char_len,
+                                    index_span: Some(b_span),
                                     context: self.source_ref.error_context(span),
                                 });
                             };
@@ -1588,6 +1668,7 @@ impl<'a> VM<'a> {
                                 .ok_or_else(|| WalrusError::IndexOutOfBounds {
                                     index: original,
                                     len: char_len,
+                                    index_span: Some(b_span),
                                     context: self.source_ref.error_context(span),
                                 })?;
                             let value = self.get_heap_mut().push(HeapValue::String(&res));
@@ -1650,6 +1731,7 @@ impl<'a> VM<'a> {
                                 return Err(WalrusError::IndexOutOfBounds {
                                     index: range.start,
                                     len: a_len,
+                                    index_span: Some(range.start_span()),
                                     context: self.source_ref.error_context(span),
                                 });
                             }
@@ -1658,6 +1740,8 @@ impl<'a> VM<'a> {
                                 return Err(WalrusError::InvalidRange {
                                     start: range.start,
                                     end: range.end,
+                                    start_span: Some(range.start_span()),
+                                    end_span: Some(range.end_span()),
                                     context: self.source_ref.error_context(span),
                                 });
                             }
@@ -1670,6 +1754,7 @@ impl<'a> VM<'a> {
                                     WalrusError::IndexOutOfBounds {
                                         index: range.start,
                                         len: a_len,
+                                        index_span: Some(range.start_span()),
                                         context: self.source_ref.error_context(span),
                                     }
                                 })?;
@@ -1677,6 +1762,7 @@ impl<'a> VM<'a> {
                                 WalrusError::IndexOutOfBounds {
                                     index: range.end,
                                     len: a_len,
+                                    index_span: Some(range.end_span()),
                                     context: self.source_ref.error_context(span),
                                 }
                             })?;
@@ -1710,6 +1796,7 @@ impl<'a> VM<'a> {
                                 return Err(WalrusError::IndexOutOfBounds {
                                     index: range.start,
                                     len: a.len(),
+                                    index_span: Some(range.start_span()),
                                     context: self.source_ref.error_context(span),
                                 });
                             }
@@ -1718,6 +1805,8 @@ impl<'a> VM<'a> {
                                 return Err(WalrusError::InvalidRange {
                                     start: range.start,
                                     end: range.end,
+                                    start_span: Some(range.start_span()),
+                                    end_span: Some(range.end_span()),
                                     context: self.source_ref.error_context(span),
                                 });
                             }
@@ -1728,14 +1817,22 @@ impl<'a> VM<'a> {
                             self.push(value);
                         }
                         // maybe add dict range indexing later
-                        _ => return Err(self.construct_err(opcode, a, Some(b), span)),
+                        _ => {
+                            return Err(self.construct_err(
+                                opcode,
+                                a,
+                                a_span,
+                                Some((b, b_span)),
+                                span,
+                            ));
+                        }
                     }
                 }
                 Opcode::StoreIndex => {
                     // Stack: [object, index, value]
-                    let value = self.pop_unchecked();
-                    let index = self.pop_unchecked();
-                    let object = self.pop_unchecked();
+                    let (value, _) = self.pop_unchecked_with_origin();
+                    let (index, index_span) = self.pop_unchecked_with_origin();
+                    let (object, object_span) = self.pop_unchecked_with_origin();
 
                     // Fast path for hottest assignment case: list[int] = value
                     if let (Value::List(list_key), Value::Int(idx)) = (object, index) {
@@ -1762,6 +1859,7 @@ impl<'a> VM<'a> {
                             return Err(WalrusError::IndexOutOfBounds {
                                 index: original,
                                 len: list.len(),
+                                index_span: Some(index_span),
                                 context: self.source_ref.error_context(span),
                             });
                         }
@@ -1788,6 +1886,8 @@ impl<'a> VM<'a> {
                             return Err(WalrusError::InvalidIndexType {
                                 non_indexable: object.get_type().to_string(),
                                 index_type: index.get_type().to_string(),
+                                target_span: Some(object_span),
+                                index_span: Some(index_span),
                                 context: self.source_ref.error_context(span),
                             });
                         }
@@ -1903,6 +2003,7 @@ impl<'a> VM<'a> {
                     // Truncate operand stack back to where it was at call time
                     // This cleans up any leftover values (e.g., iterators from loops)
                     self.stack.truncate(frame.stack_pointer);
+                    self.stack_origins.truncate(frame.stack_pointer);
 
                     // Restore the instruction pointer to where we should continue
                     self.ip = frame.return_ip;
@@ -1912,15 +2013,15 @@ impl<'a> VM<'a> {
                 }
                 // Stack manipulation opcodes
                 Opcode::Dup => {
-                    let a = self.pop(opcode, span)?;
-                    self.push(a);
-                    self.push(a);
+                    let (a, a_span) = self.pop_with_origin(opcode, span)?;
+                    self.push_with_origin(a, a_span);
+                    self.push_with_origin(a, a_span);
                 }
                 Opcode::Swap => {
-                    let b = self.pop(opcode, span)?;
-                    let a = self.pop(opcode, span)?;
-                    self.push(b);
-                    self.push(a);
+                    let (b, b_span) = self.pop_with_origin(opcode, span)?;
+                    let (a, a_span) = self.pop_with_origin(opcode, span)?;
+                    self.push_with_origin(b, b_span);
+                    self.push_with_origin(a, a_span);
                 }
                 Opcode::Pop2 => {
                     self.pop(opcode, span)?;
@@ -2128,8 +2229,10 @@ impl<'a> VM<'a> {
                                 self.call_stack.push(new_frame);
 
                                 let args_start = object_idx + 1;
+                                self.stack_origins.drain(args_start..);
                                 self.locals.extend(self.stack.drain(args_start..));
                                 self.stack.truncate(object_idx);
+                                self.stack_origins.truncate(object_idx);
 
                                 self.ip = 0;
                                 continue; // Function frame takes control
@@ -2213,8 +2316,10 @@ impl<'a> VM<'a> {
 
                                 self.locals.push(Value::StructInst(inst_key));
                                 let args_start = object_idx + 1;
+                                self.stack_origins.drain(args_start..);
                                 self.locals.extend(self.stack.drain(args_start..));
                                 self.stack.truncate(object_idx);
+                                self.stack_origins.truncate(object_idx);
 
                                 self.ip = 0;
                                 continue; // Function frame takes control
@@ -2464,18 +2569,28 @@ impl<'a> VM<'a> {
         // (either from Return opcode, errors, or end of main frame)
     }
 
-    fn construct_err(&self, op: Opcode, a: Value, b: Option<Value>, span: Span) -> WalrusError {
-        if let Some(b) = b {
+    fn construct_err(
+        &self,
+        op: Opcode,
+        a: Value,
+        a_span: Span,
+        b: Option<(Value, Span)>,
+        span: Span,
+    ) -> WalrusError {
+        if let Some((b, b_span)) = b {
             WalrusError::InvalidOperation {
                 op,
                 left: a.get_type().to_string(),
                 right: b.get_type().to_string(),
+                left_span: Some(a_span),
+                right_span: Some(b_span),
                 context: self.source_ref.error_context(span),
             }
         } else {
             WalrusError::InvalidUnaryOperation {
                 op,
                 operand: a.get_type().to_string(),
+                operand_span: Some(a_span),
                 context: self.source_ref.error_context(span),
             }
         }

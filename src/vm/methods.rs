@@ -109,6 +109,7 @@ pub fn dispatch_list_method(
                 return Err(WalrusError::IndexOutOfBounds {
                     index,
                     len: len as usize,
+                    index_span: None,
                     context: source_ref.error_context(span),
                 });
             }
@@ -134,6 +135,7 @@ pub fn dispatch_list_method(
                 return Err(WalrusError::IndexOutOfBounds {
                     index,
                     len: len as usize,
+                    index_span: None,
                     context: source_ref.error_context(span),
                 });
             }

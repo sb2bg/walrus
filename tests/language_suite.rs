@@ -66,6 +66,30 @@ fn language_suite() {
     }
 }
 
+#[test]
+fn invalid_operation_reports_operand_labels() {
+    let program = fixtures_root().join("fail/basics/invalid_operation_type_mismatch.walrus");
+    let output = Command::new(env!("CARGO_BIN_EXE_walrus"))
+        .current_dir(repo_root())
+        .arg(&program)
+        .output()
+        .unwrap_or_else(|err| {
+            panic!(
+                "failed to execute '{}' for operand diagnostic test: {err}",
+                program.display()
+            )
+        });
+
+    let stderr = normalize(&String::from_utf8_lossy(&output.stderr));
+    assert!(
+        !stderr.is_empty(),
+        "expected an operand diagnostic on stderr"
+    );
+    assert!(stderr.contains("Invalid operation '+' on operands 'int' and 'string'"));
+    assert!(stderr.contains("left operand is int"));
+    assert!(stderr.contains("right operand is string"));
+}
+
 fn discover_cases() -> Vec<Case> {
     let fixtures_root = fixtures_root();
     let mut cases = Vec::new();
