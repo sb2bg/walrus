@@ -1,0 +1,8 @@
+fn count_loop : {
+    let count = 0;
+    for i in 0..1005 {
+        count += 1;
+    }
+    return count;
+}
+println(count_loop());

@@ -20,3 +20,13 @@ cargo test --test language_suite
 ```
 
 This runs the fixture suite in VM mode (`walrus <file>`).
+
+```bash
+cargo test --test language_suite --features jit
+```
+
+With the `jit` Cargo feature enabled, pass fixtures also run in JIT mode
+(`walrus --jit <file>`) against the same stdout, stderr, stdin, environment, and
+exit-code expectations. The harness does not enable `--jit-stats`. Fixtures that
+intentionally observe interpreter CLI arguments are kept VM-only because the
+`--jit` flag changes `sys.args()`.

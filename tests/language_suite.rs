@@ -20,6 +20,31 @@ struct Case {
     stdin_bytes: Option<Vec<u8>>,
 }
 
+#[derive(Debug, Clone, Copy)]
+enum RunMode {
+    Vm,
+    #[cfg(feature = "jit")]
+    Jit,
+}
+
+impl RunMode {
+    fn args(self) -> &'static [&'static str] {
+        match self {
+            Self::Vm => &[],
+            #[cfg(feature = "jit")]
+            Self::Jit => &["--jit"],
+        }
+    }
+
+    fn failure_name(self, case: &Case) -> String {
+        match self {
+            Self::Vm => case.name.clone(),
+            #[cfg(feature = "jit")]
+            Self::Jit => format!("{} [jit]", case.name),
+        }
+    }
+}
+
 #[test]
 fn language_suite() {
     let mut failures = Vec::new();
@@ -213,8 +238,36 @@ fn read_stdin(program: &Path) -> Option<Vec<u8>> {
 }
 
 fn run_case(case: &Case) -> Result<(), String> {
-    let output = run_program(case).map_err(|err| format!("{}: {err}", case.name))?;
+    let mut failures = Vec::new();
 
+    if let Err(message) = check_case_output(case, RunMode::Vm) {
+        failures.push(message);
+    }
+
+    #[cfg(feature = "jit")]
+    if matches!(case.expectation, Expectation::Stdout(_)) && supports_jit_differential(case) {
+        if let Err(message) = check_case_output(case, RunMode::Jit) {
+            failures.push(message);
+        }
+    }
+
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(failures.join("\n\n"))
+    }
+}
+
+#[cfg(feature = "jit")]
+fn supports_jit_differential(case: &Case) -> bool {
+    // This fixture intentionally observes interpreter CLI arguments, so adding
+    // --jit changes its expected stdout even when program semantics match.
+    case.name != "pass/stdlib/stdlib_sys_vm.walrus"
+}
+
+fn check_case_output(case: &Case, mode: RunMode) -> Result<(), String> {
+    let name = mode.failure_name(case);
+    let output = run_program(case, mode).map_err(|err| format!("{name}: {err}"))?;
     let stdout = normalize(&String::from_utf8_lossy(&output.stdout));
     let stderr = normalize(&String::from_utf8_lossy(&output.stderr));
     let actual_exit = output.status.code();
@@ -223,7 +276,7 @@ fn run_case(case: &Case) -> Result<(), String> {
         if actual_exit != Some(expected_exit) {
             return Err(format!(
                 "{}: exit code mismatch\nexpected: {}\nactual: {}\n\nstderr:\n{}",
-                case.name,
+                name,
                 expected_exit,
                 format_exit_code(actual_exit),
                 stderr
@@ -232,7 +285,7 @@ fn run_case(case: &Case) -> Result<(), String> {
     } else if matches!(case.expectation, Expectation::Stdout(_)) && !output.status.success() {
         return Err(format!(
             "{}: expected successful exit, got {}\n\nstderr:\n{}",
-            case.name,
+            name,
             format_exit_code(actual_exit),
             stderr
         ));
@@ -245,14 +298,14 @@ fn run_case(case: &Case) -> Result<(), String> {
             if !stderr.is_empty() {
                 return Err(format!(
                     "{}: expected no stderr, but got:\n{}",
-                    case.name, stderr
+                    name, stderr
                 ));
             }
 
             if stdout != expected {
                 return Err(format!(
                     "{}: stdout mismatch\nexpected:\n{}\n\nactual:\n{}",
-                    case.name, expected, stdout
+                    name, expected, stdout
                 ));
             }
         }
@@ -261,7 +314,7 @@ fn run_case(case: &Case) -> Result<(), String> {
             if !stderr.contains(expected) {
                 return Err(format!(
                     "{}: stderr did not contain expected snippet\nexpected snippet:\n{}\n\nactual stderr:\n{}\n\nstdout:\n{}",
-                    case.name, expected, stderr, stdout
+                    name, expected, stderr, stdout
                 ));
             }
         }
@@ -270,9 +323,10 @@ fn run_case(case: &Case) -> Result<(), String> {
     Ok(())
 }
 
-fn run_program(case: &Case) -> Result<Output, String> {
+fn run_program(case: &Case, mode: RunMode) -> Result<Output, String> {
     let mut command = Command::new(env!("CARGO_BIN_EXE_walrus"));
     command.current_dir(repo_root());
+    command.args(mode.args());
     command.arg(&case.program);
 
     for (key, value) in &case.env_vars {
