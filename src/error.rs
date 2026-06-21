@@ -3,7 +3,7 @@ use std::ops::Range;
 use std::rc::Rc;
 use std::str::FromStr;
 
-use ariadne::{ColorGenerator, Config, IndexType, Label, Report, ReportKind, sources};
+use ariadne::{Color, Config, IndexType, Label, Report, ReportKind, sources};
 use float_ord::FloatOrd;
 use git_version::git_version;
 use lalrpop_util::ParseError;
@@ -17,6 +17,14 @@ use crate::span::{Span, Spanned};
 use crate::vm::opcode::Opcode;
 
 const FSTRING_INTERP_QUOTE_SENTINEL: char = '\u{001F}';
+const DIAGNOSTIC_LABEL_COLORS: [Color; 6] = [
+    Color::Fixed(38),  // muted cyan
+    Color::Fixed(108), // soft green
+    Color::Fixed(172), // warm orange
+    Color::Fixed(75),  // blue
+    Color::Fixed(179), // tan
+    Color::Fixed(167), // soft red
+];
 
 #[derive(Clone, Copy)]
 enum FStringInterpStringMode {
@@ -661,8 +669,7 @@ impl WalrusDiagnostic {
         )
         .with_message(&self.message);
 
-        let mut colors = ColorGenerator::new();
-        for label in &self.labels {
+        for (index, label) in self.labels.iter().enumerate() {
             let Some(label_file) = source.source_file(label.span) else {
                 continue;
             };
@@ -670,7 +677,7 @@ impl WalrusDiagnostic {
                 label_file.filename.to_string(),
                 diagnostic_range(&label_file.source, label.span),
             ))
-            .with_color(colors.next());
+            .with_color(diagnostic_label_color(index));
             if let Some(message) = &label.message {
                 ariadne_label = ariadne_label.with_message(message);
             }
@@ -704,6 +711,10 @@ fn diagnostic_range(src: &str, span: Span) -> Range<usize> {
     let start = span.0.min(len);
     let end = span.1.min(len).max(start);
     start..end
+}
+
+fn diagnostic_label_color(index: usize) -> Color {
+    DIAGNOSTIC_LABEL_COLORS[index % DIAGNOSTIC_LABEL_COLORS.len()]
 }
 
 fn label_span_for_context(span: Span, context: &ErrorContext) -> Option<Span> {
